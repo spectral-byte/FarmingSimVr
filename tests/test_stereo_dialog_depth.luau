@@ -1,12 +1,4 @@
 
--- ====================================================================
--- Test Suite for Stereo Dialog depth (spec #142, ticket #146, ADR-0032)
--- A Stereo Dialog (the fish catch dialog) is drawn at HUD depth: while it shows in the stereoscopic view, its root is shifted by
--- the HUD Convergence Offset on alternating AFR eye frames, and moved back by the same amount after each draw.
--- Seen from outside: the Companion Mod's update tick runs against a stubbed g_gui and VRBridge, and the test draws the GUI the
--- way the engine does (Gui:draw, once per rendered frame) and reads where the dialog is when it is drawn, and where it is left.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -36,11 +28,8 @@ _G.VRBridge = {
 }
 VRBridge = _G.VRBridge
 
--- The game's GUI, as Gui.lua keeps it and the headset probe of ticket #143 measured the fish dialog: the dialog is a full-screen
--- root element (position 0,0, size 1x1) in g_gui.dialogs, whose target is the controller with the visible box
--- (target.dialogElement). GuiElement:setAbsolutePosition moves an element and all its children by the same amount.
 local DRAW_DIALOG_X = 0.414
-local drawn = {}      -- per Gui:draw: where the root and the visible box were when they were drawn
+local drawn = {}
 local failNextDraw = false
 
 local function newElement(x, y)
@@ -90,7 +79,6 @@ local function closeDialog()
 end
 
 loadCompanionMod()
--- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
 VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
@@ -113,17 +101,14 @@ end
 
 print("Running Stereo Dialog Depth Tests...")
 
--- The game in the headset: the stereoscopic view, head tracking on
 VRCompanion.handshakeComplete = true
 VRCompanion.passThroughMode = false
 VRCompanion.headTrackingEnabled = true
 
--- Ticks the update until the HUD convergence has settled on its disparity
 local function settle()
     for _ = 1, 40 do VRCompanion:update(16.6) end
 end
 
--- One rendered frame of the eye with the given parity: the engine draws the GUI. Returns where the dialog was drawn.
 local function renderFrame(eye)
     parity = eye
     drawn = {}
@@ -148,7 +133,6 @@ test("AStereoDialogIsDrawnShiftedAlternatingWithFrameParityToItsOwnDepthBehindTh
     local right = renderFrame(1)
     assert(near(right.root, -want), string.format("right eye frame: root at -%f, got %f", want, right.root))
     assert(near(right.box, DRAW_DIALOG_X - want), string.format("the visible box moves with the root, got %f", right.box))
-    -- Less disparity than the HUD Groups get: the dialog reads further away than the HUD
     parity = 0
     VRCompanion:update(16.6)
     assert(math.abs(left.root) < math.abs(VRCompanion.currentConvergenceOffset), "further back than the HUD")
@@ -213,7 +197,6 @@ test("NothingIsShiftedWhileNoDialogIsOpen", function()
         g_gui:draw()
         assert(#drawn == 0, "nothing to draw, nothing moved")
     end
-    -- And the dialog that opens afterwards starts from where the game placed it
     local root = showDialog("FishDialog")
     closeDialog()
     local after = renderFrame(0)

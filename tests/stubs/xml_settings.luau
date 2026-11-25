@@ -1,7 +1,3 @@
--- XML settings
--- Stubs of the engine's XML settings API that remember what was saved (in savedXml), so a "session" can be replayed into a
--- fresh Lua state (the same as test_motion_controllers.cpp and test_wheel_grab.cpp). Pass them as StartOptions::extraStubs.
-
     _G.savedXml = _G.savedXml or {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
     _G.createFolder = function() return true end

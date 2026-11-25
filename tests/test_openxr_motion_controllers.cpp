@@ -1,7 +1,3 @@
-// Motion Controller input in the Injector's OpenXR layer (ADR-0025): the action set lifecycle, the
-// suggested bindings, graceful refusal, and hand state located like the head pose. Runs the real
-// OpenXrManager against FakeOpenXrRuntime's controllers.
-
 #include <gtest/gtest.h>
 #include "fake_openxr_runtime.h"
 #include <algorithm>
@@ -30,7 +26,7 @@ HeadPose PoseAt(float x, float y, float z) {
     return pose;
 }
 
-} // namespace
+}
 
 TEST(OpenXrManagerTest, MotionControllerActionSetIsDeclaredAndAttachedExactlyOncePerSession) {
     FakeTrackedHeadset headset;
@@ -41,8 +37,6 @@ TEST(OpenXrManagerTest, MotionControllerActionSetIsDeclaredAndAttachedExactlyOnc
     EXPECT_EQ(controllers.attachCalls, 1u);
     EXPECT_EQ(controllers.actionSetsAttached, 1u);
 
-    // Asking for the session again, running many frames and a STOPPING -> READY cycle all reuse the
-    // one attached set: OpenXR allows a single attach per session.
     EXPECT_TRUE(headset.manager->CreateSession());
     for (int i = 0; i < 5; ++i) headset.NextFrame();
     headset.runtime->events.PushSessionState(XR_SESSION_STATE_STOPPING);
@@ -84,7 +78,6 @@ TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleCont
                                  "/interaction_profiles/htc/vive_controller",
                                  "/interaction_profiles/khr/simple_controller" }) {
         EXPECT_EQ(controllers.suggestedBindings.count(profile), 1u) << profile;
-        // Every profile aims with its hands, shows them (grip pose) and vibrates them.
         EXPECT_EQ(controllers.BindingsFor(profile, "aim_pose"),
                   (std::vector<std::string>{ "/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose" })) << profile;
         EXPECT_EQ(controllers.BindingsFor(profile, "grip_pose"),
@@ -122,7 +115,6 @@ TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleCont
     EXPECT_EQ(controllers.BindingsFor(vive, "thumbstick"),
               (std::vector<std::string>{ "/user/hand/left/input/trackpad", "/user/hand/right/input/trackpad" }));
 
-    // The Khronos simple controller only has select and menu: select acts as the trigger.
     const auto simple = "/interaction_profiles/khr/simple_controller";
     EXPECT_EQ(controllers.BindingsFor(simple, "trigger"),
               (std::vector<std::string>{ "/user/hand/left/input/select/click", "/user/hand/right/input/select/click" }));
@@ -130,12 +122,8 @@ TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleCont
               (std::vector<std::string>{ "/user/hand/left/input/menu/click", "/user/hand/right/input/menu/click" }));
 }
 
-// ---- A runtime that refuses the action set must cost nothing else ----
-
 namespace {
 
-// Runs the session with one action-set step refused and checks the promises of ADR-0025: the
-// session still starts, head tracking works, and both hands report untracked.
 void ExpectRefusalLeavesHeadTrackingAlone(const std::function<void(Controllers&)>& refuse, const char* what) {
     SCOPED_TRACE(what);
     auto runtime = std::make_shared<FakeOpenXrRuntime>();
@@ -170,7 +158,7 @@ void ExpectRefusalLeavesHeadTrackingAlone(const std::function<void(Controllers&)
     manager->Shutdown();
 }
 
-} // namespace
+}
 
 TEST(OpenXrManagerTest, RefusedActionSetStepLeavesSessionAndHeadTrackingUnchanged) {
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.stringToPathResult = XR_ERROR_RUNTIME_FAILURE; }, "xrStringToPath");
@@ -181,8 +169,6 @@ TEST(OpenXrManagerTest, RefusedActionSetStepLeavesSessionAndHeadTrackingUnchange
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.createActionSpaceResult = XR_ERROR_RUNTIME_FAILURE; }, "xrCreateActionSpace");
 }
 
-// A runtime that refuses only the grip pose must leave the aim pose, the inputs, head tracking and
-// presentation alone: the grip pose just reports untracked.
 void ExpectGripRefusalLeavesTheRestAlone(const std::function<void(Controllers&)>& refuse, const char* what) {
     SCOPED_TRACE(what);
     auto runtime = std::make_shared<FakeOpenXrRuntime>();
@@ -272,8 +258,6 @@ TEST(OpenXrManagerTest, ANewSessionAfterShutdownDeclaresAndAttachesTheActionSetA
     EXPECT_EQ(runtime->controllers.attachCalls, 2u) << "once per session, and this is a second session";
 }
 
-// ---- Reading a hand ----
-
 TEST(OpenXrManagerTest, HandStateReportsTheRawInputsSyncedAtFrameBegin) {
     FakeTrackedHeadset headset;
     Controllers::Inputs right;
@@ -301,7 +285,6 @@ TEST(OpenXrManagerTest, HandStateReportsTheRawInputsSyncedAtFrameBegin) {
     EXPECT_FALSE(hand.buttonUpper);
     EXPECT_TRUE(hand.menu);
 
-    // The other hand has its own inputs.
     const HandState left = headset.manager->GetHandState(0);
     EXPECT_FLOAT_EQ(left.trigger, 0.0f);
     EXPECT_FALSE(left.menu);
@@ -340,8 +323,6 @@ TEST(OpenXrManagerTest, InputsChangedInsideAFrameShowAtTheNextFrame) {
 }
 
 TEST(OpenXrManagerTest, HandStateIsFreshEvenWhenNoFrameHasBegun) {
-    // Before the first frame (or between frames) there is no frame snapshot: a read syncs itself,
-    // the way PollHeadPose falls back to "now".
     FakeTrackedHeadset headset;
     ASSERT_FALSE(headset.manager->IsFrameBegun());
     Controllers::Inputs pulled;
@@ -380,7 +361,7 @@ TEST(OpenXrManagerTest, HandAimPoseUsesTheHeadPoseReferenceSpaceAndPredictedDisp
 TEST(OpenXrManagerTest, HandAimPoseUsesTheSameOrientationConventionAsTheHeadPose) {
     FakeTrackedHeadset headset;
     HeadPose aimed = PoseAt(0.0f, 1.0f, 0.0f);
-    aimed.rotation = EulerAngles(0.0f, 0.5f, 0.0f);  // pitch, yaw, roll as for SetHeadPose
+    aimed.rotation = EulerAngles(0.0f, 0.5f, 0.0f);
     headset.SetHeadPose(aimed);
     headset.SetHandPose(1, aimed);
     headset.NextFrame();
@@ -403,21 +384,18 @@ TEST(OpenXrManagerTest, HandAimPoseFollowsTheRecenterActionAtOnce) {
     HeadPose head = PoseAt(1.0f, 1.6f, 0.5f);
     head.rotation = EulerAngles(0.0f, 1.5707964f, 0.0f);
     headset.SetHeadPose(head);
-    headset.SetHandPose(1, PoseAt(0.0f, 1.6f, 0.5f));  // ahead of that head: head + (-1, 0, 0)
+    headset.SetHandPose(1, PoseAt(0.0f, 1.6f, 0.5f));
     headset.NextFrame();
     EXPECT_NEAR(headset.manager->GetHandState(1).aim.position.x, 0.0f, 1e-4f) << "before Recenter: in the original origin";
     EXPECT_NEAR(headset.manager->GetHandState(1).aim.position.z, 0.5f, 1e-4f);
 
     headset.manager->Recenter();
 
-    // Recenter makes the head the origin facing -Z, so the hand is now straight ahead of it.
     const HandState hand = headset.manager->GetHandState(1);
     EXPECT_NEAR(hand.aim.position.x, 0.0f, 1e-4f);
     EXPECT_NEAR(hand.aim.position.y, 0.0f, 1e-4f);
     EXPECT_NEAR(hand.aim.position.z, -1.0f, 1e-4f);
 }
-
-// ---- The grip pose: located exactly like the aim pose, but its own pose with its own tracked flag ----
 
 TEST(OpenXrManagerTest, HandGripPoseUsesTheHeadPoseReferenceSpaceAndPredictedDisplayTime) {
     FakeTrackedHeadset headset;
@@ -444,7 +422,6 @@ TEST(OpenXrManagerTest, HandGripPoseUsesTheHeadPoseReferenceSpaceAndPredictedDis
     EXPECT_TRUE(hand.gripPose.isValid);
     EXPECT_TRUE(hand.gripPose.positionTracked);
     EXPECT_TRUE(hand.gripPose.orientationTracked);
-    // The aim pose is its own pose.
     EXPECT_FLOAT_EQ(hand.aim.position.x, -0.3f);
     EXPECT_FLOAT_EQ(hand.aim.position.y, 1.1f);
 }
@@ -452,7 +429,7 @@ TEST(OpenXrManagerTest, HandGripPoseUsesTheHeadPoseReferenceSpaceAndPredictedDis
 TEST(OpenXrManagerTest, HandGripPoseUsesTheSameOrientationConventionAsTheHeadPose) {
     FakeTrackedHeadset headset;
     HeadPose gripped = PoseAt(0.0f, 1.0f, 0.0f);
-    gripped.rotation = EulerAngles(0.0f, 0.5f, 0.0f);  // pitch, yaw, roll as for SetHeadPose
+    gripped.rotation = EulerAngles(0.0f, 0.5f, 0.0f);
     headset.SetHeadPose(gripped);
     headset.SetHandGripPose(1, gripped);
     headset.NextFrame();
@@ -470,8 +447,6 @@ TEST(OpenXrManagerTest, HandGripPoseUsesTheSameOrientationConventionAsTheHeadPos
 
 TEST(OpenXrManagerTest, HandGripPoseFollowsTheRecenterActionAtOnce) {
     FakeTrackedHeadset headset;
-    // Same set-up as the aim pose: the head looks 90 degrees to the left and the grip is one metre
-    // straight ahead of it, while the aim pose sits elsewhere.
     HeadPose head = PoseAt(1.0f, 1.6f, 0.5f);
     head.rotation = EulerAngles(0.0f, 1.5707964f, 0.0f);
     headset.SetHeadPose(head);
@@ -495,7 +470,7 @@ TEST(OpenXrManagerTest, AnUntrackedControllerReportsUntrackedWithZeroedInputs) {
     held.trigger = 1.0f;
     held.menu = true;
     headset.SetHandInputs(0, held);
-    headset.SetHandPose(0, PoseAt(0.0f, 1.0f, 0.0f), /*tracked=*/false);
+    headset.SetHandPose(0, PoseAt(0.0f, 1.0f, 0.0f), false);
 
     headset.NextFrame();
 
@@ -510,7 +485,7 @@ TEST(OpenXrManagerTest, AnUntrackedControllerReportsUntrackedWithZeroedInputs) {
 TEST(OpenXrManagerTest, AGripPoseThatIsAloneUntrackedLeavesTheControllerTracked) {
     FakeTrackedHeadset headset;
     headset.SetHandPose(1, PoseAt(0.3f, 1.2f, -0.4f));
-    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), /*tracked=*/false);
+    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), false);
     Controllers::Inputs held;
     held.trigger = 0.5f;
     headset.SetHandInputs(1, held);
@@ -524,10 +499,9 @@ TEST(OpenXrManagerTest, AGripPoseThatIsAloneUntrackedLeavesTheControllerTracked)
     EXPECT_FALSE(hand.gripTracked);
     EXPECT_FALSE(hand.gripPose.isValid);
     EXPECT_FLOAT_EQ(hand.gripPose.position.y, 0.0f) << "an untracked grip pose is the default pose";
-    // The other hand keeps its own grip pose.
     EXPECT_TRUE(headset.manager->GetHandState(0).gripTracked);
 
-    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), /*tracked=*/true);
+    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), true);
     headset.NextFrame();
     EXPECT_TRUE(headset.manager->GetHandState(1).gripTracked);
 }
@@ -595,8 +569,6 @@ TEST(OpenXrManagerTest, PassThroughReportsBothHandsUntracked) {
     EXPECT_FALSE(manager.GetHandState(1).tracked);
 }
 
-// ---- Haptics through the dispatch (OpenXrManager::PulseHaptic is covered in test_haptics.cpp) ----
-
 TEST(OpenXrManagerTest, HapticFeedbackAppliedThroughTheDispatchReachesTheNamedHandOnly) {
     FakeTrackedHeadset headset;
     auto& controllers = headset.runtime->controllers;
@@ -623,8 +595,6 @@ TEST(OpenXrManagerTest, HapticFeedbackAppliedThroughTheDispatchReachesTheNamedHa
     EXPECT_EQ(controllers.stopHapticCalls, 1u);
 }
 
-// ---- The frame-begin observers (the Virtual Gamepad publishes its snapshot and plays rumble from here) -------------
-
 TEST(OpenXrManagerTest, FrameBeginObserversRunOncePerFrameAfterTheHandStateIsSyncedAndMayEditTheListFromInsideTheCall) {
     FakeTrackedHeadset headset;
     FakeOpenXrControllers::Inputs squeezed;
@@ -637,8 +607,8 @@ TEST(OpenXrManagerTest, FrameBeginObserversRunOncePerFrameAfterTheHandStateIsSyn
     headset.manager->SetFrameBeginObserver(&ownerA, [&] {
         ++first;
         triggerSeen = headset.manager->GetHandState(1).trigger;
-        headset.manager->ClearFrameBeginObserver(&ownerB);                         // removes another observer mid-call
-        headset.manager->SetFrameBeginObserver(&ownerC, [&] { ++late; });  // adds one mid-call
+        headset.manager->ClearFrameBeginObserver(&ownerB);
+        headset.manager->SetFrameBeginObserver(&ownerC, [&] { ++late; });
     });
     headset.manager->SetFrameBeginObserver(&ownerB, [&] { ++second; });
 
@@ -678,4 +648,4 @@ TEST(OpenXrManagerTest, FrameBeginObserversCanBeEditedFromAnotherThreadWhileFram
 }
 
 
-} // namespace fs25vr
+}

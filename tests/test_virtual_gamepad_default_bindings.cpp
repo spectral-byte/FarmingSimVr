@@ -1,14 +1,3 @@
-// The Virtual Gamepad's VR-comfort default bindings (ADR-0028, spec #98, ticket #104), seen from outside: the real Companion
-// Mod runs against the real VRBridge over FakeTrackedHeadset, with a stand-in for the game's g_inputBinding shaped after the
-// finding of spike #99 (companion_mod_stubs.h). The test turns the Virtual Gamepad on, lets frames run and reads what the
-// game's bindings look like and whether the game was told to save them. Covered: the one-time rewrite of the Virtual
-// Gamepad's device only, a real pad left alone, the saved flag that stops a second rewrite for good (also after the player
-// changed a binding), and the fallback (no API, an API that raises) that leaves the bindings and the flag as they were.
-//
-// The Virtual Gamepad takes XInput slot 3 here (no real pads in the test process), so its device is 3_XINPUT_GAMEPAD; the
-// stand-in also has a real pad in slot 0. The button numbers are the game's own for an Xbox pad (the default gamepad binding
-// template): BUTTON_5 / BUTTON_6 are LB / RB, BUTTON_10 Start, BUTTON_11 / BUTTON_12 the left / right stick click.
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 #include "input/virtual_gamepad.h"
@@ -19,7 +8,6 @@ namespace {
 
 using fs25vr::FakeTrackedHeadset;
 
-// Console commands as the engine registers them, so tests can run the handlers.
 constexpr const char* kConsoleStubs = R"luau(
     _G.registeredCommands = {}
     _G.addConsoleCommand = function(name, desc, method, target)
@@ -33,7 +21,6 @@ constexpr const char* kConsoleStubs = R"luau(
     end
 )luau";
 
-// The engine's XML settings API, remembering what was saved so a session can be replayed.
 constexpr const char* kXmlStubs = R"luau(
     _G.savedXml = _G.savedXml or {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -50,7 +37,7 @@ constexpr const char* kXmlStubs = R"luau(
     _G.getXMLString = function(file, key) local v = _G.savedXml[key]; return type(v) == "string" and v or nil end
 )luau";
 
-const std::string kPad = "3_XINPUT_GAMEPAD";   // the Virtual Gamepad's device
+const std::string kPad = "3_XINPUT_GAMEPAD";
 const std::string kRealPad = "0_XINPUT_GAMEPAD";
 
 class VirtualGamepadDefaultBindingsTest : public CompanionModTest {
@@ -58,10 +45,6 @@ protected:
     FakeTrackedHeadset headset;
     std::unique_ptr<fs25vr::VRBridge> bridgeOwner = std::make_unique<fs25vr::VRBridge>(headset.manager, nullptr);
 
-    // Starts the Companion Mod over the headset with the game's bindings as `bindings` (Lua options for StubInput.install)
-    // and the settings file as `settingsFile` (Lua that fills savedXml: what an earlier game session left), and lets a few
-    // frames run. The Virtual Gamepad is on out of the box; with `turnOn` false the settings file has the player's `off`
-    // saved, for a test that turns it on itself.
     void StartGame(const std::string& bindings = "{}", const std::string& settingsFile = "", bool turnOn = true) {
         ASSERT_TRUE(bridgeOwner->Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -81,10 +64,6 @@ protected:
         for (int i = 0; i < count; ++i) NextFrame(&headset);
     }
 
-    // A new game session over the same headset: a fresh Lua state and a fresh Injector bridge. The game loads the bindings
-    // the last session saved (what the stand-in holds now, as the saved file would), and the Companion Mod's settings file\n    // is what the last session left. `stubOptions` adds StubInput.install options (Lua, e.g. "variant = 'saveRaises'").
-    // `settingsOfAnEarlierBuild` leaves the Recenter migration flag out of the settings file, as a build from before the Recenter
-    // fix did (its rewrite had run and saved the first flag only).
     void RestartGameSession(const std::string& stubOptions = "", bool settingsOfAnEarlierBuild = false) {
         const std::string saved = EvalLua(L, "StubInput.serialize()");
         const std::string flag = EvalLua(L, "savedXml['vrSettings.virtualGamepadDefaultsWritten']");
@@ -110,7 +89,6 @@ protected:
         Frames(5);
     }
 
-    // A long stretch of play: well past the Companion Mod's look at the bindings every second.
     void PlayFor(int seconds) { Frames(seconds * 60); }
 
     std::string Lua(const std::string& expression) { return EvalLua(L, expression); }
@@ -128,7 +106,7 @@ protected:
     }
 };
 
-} // namespace
+}
 
 TEST_F(VirtualGamepadDefaultBindingsTest, TheFirstSessionRewritesTheVirtualGamepadToTheComfortLayoutAndSavesIt) {
     ASSERT_NO_FATAL_FAILURE(StartGame());
@@ -138,8 +116,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, TheFirstSessionRewritesTheVirtualGamep
     EXPECT_EQ(List("VR_SNAP_TURN_RIGHT", kPad), "AXIS_3+/+@4") << "Snap Turn right on the right stick's right half, off RB";
     EXPECT_EQ(List("AXIS_LOOK_LEFTRIGHT_PLAYER", kPad), "") << "smooth look is off the right stick X on foot";
     EXPECT_EQ(List("AXIS_LOOK_LEFTRIGHT_VEHICLE", kPad), "") << "and in vehicles";
-    // The engine drops VR_RECENTER_VIEW altogether (keyboard numpad 5 too) while it carries an XInput BUTTON_12 binding, measured
-    // in the game: the rewrite leaves Recenter on the Companion Mod's own GAMEPAD_DEFAULT (the left stick click).
     EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4") << "the Recenter Action keeps the game's default for the pad";
     EXPECT_EQ(Lua("StubInput.get('VR_RECENTER_VIEW', 'KB_MOUSE_DEFAULT').inputString"), "KEY_numPad5") << "and the keyboard's";
     EXPECT_EQ(List("VR_TOGGLE_VIEW", kPad), "BUTTON_11 BUTTON_10/+@4") << "the VR View Toggle Action on left stick click + Start";
@@ -161,7 +137,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, AFreshProfileNeverRunsTheRecenterMigra
     ASSERT_NO_FATAL_FAILURE(StartGame());
     ASSERT_EQ(Lua("StubInput.saves"), "1");
 
-    // The player puts Recenter on RS in the Controls screen themselves: it is theirs, in this session and in the next.
     ASSERT_EQ(RunLuauChunk(L, "StubInput.change('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD', 'BUTTON_11', 'BUTTON_12')", "=playerChange"), 0);
     ASSERT_NO_FATAL_FAILURE(RestartGameSession());
     PlayFor(3);
@@ -170,12 +145,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, AFreshProfileNeverRunsTheRecenterMigra
     EXPECT_EQ(LogLinesContaining("Recenter binding"), 0);
 }
 
-// ---- The Recenter migration: profiles whose rewrite ran in a build that put Recenter on RS (BUTTON_12) -------------------------
-//
-// The engine drops VR_RECENTER_VIEW while it carries an XInput BUTTON_12 binding, so such a profile's saved inputBinding.xml
-// has to be put right. The tests build that profile from a normal first session (LeaveProfileOfAnEarlierBuild): the saved
-// bindings are edited as the earlier build left them (Recenter on BUTTON_12 on the device(s) named) and the settings file has
-// the first flag only. The next session (StartNextSession) is the one in which the migration may run.
 class VirtualGamepadRecenterMigrationTest : public VirtualGamepadDefaultBindingsTest {
 protected:
     void LeaveProfileOfAnEarlierBuild(const std::string& edits, const std::string& firstSession = "{}") {
@@ -183,7 +152,6 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, edits, "=profileEdits"), 0);
     }
 
-    // `stubOptions`: more StubInput.install options for the game's bindings of this session.
     void StartNextSession(const std::string& stubOptions = "") {
         ASSERT_NO_FATAL_FAILURE(RestartGameSession(stubOptions, true));
     }
@@ -322,7 +290,6 @@ TEST_F(VirtualGamepadRecenterMigrationTest, ItWaitsUntilTheGameHasTheVirtualGame
 class VirtualGamepadRecenterMigrationFallbackTest : public VirtualGamepadRecenterMigrationTest,
                                                     public ::testing::WithParamInterface<const char*> {};
 
-// The binding API missing or raising: one warning, no flag, and the bindings (and the saved file) as the game had them.
 TEST_P(VirtualGamepadRecenterMigrationFallbackTest, GivesOneWarningNoFlagAndUnchangedBindings) {
     ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(RecenterOnRs(kPad)));
     const std::string before = Lua("StubInput.dump(nil)");
@@ -346,8 +313,6 @@ INSTANTIATE_TEST_SUITE_P(BindingApi, VirtualGamepadRecenterMigrationFallbackTest
     ::testing::Values("missing", "reshaped", "saveRaises", "noReset", "resetRaises"));
 
 TEST_F(VirtualGamepadDefaultBindingsTest, SnapTurnLeftAndRightLandOnTheTwoDifferentHalvesOfTheRightStick) {
-    // The game's Binding.new takes the sign of an axis input from its fourth argument alone (a "-" in the name is dropped), so
-    // Snap Turn left must be asked for as a negative AXIS_3 with the axisComponent "+" the game saves for a half-axis action.
     ASSERT_NO_FATAL_FAILURE(StartGame());
     EXPECT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "AXIS_3-/+@4") << "the left half, not the right one";
     EXPECT_EQ(List("VR_SNAP_TURN_RIGHT", kPad), "AXIS_3+/+@4");
@@ -356,7 +321,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, SnapTurnLeftAndRightLandOnTheTwoDiffer
 }
 
 TEST_F(VirtualGamepadDefaultBindingsTest, ABindingTakenOffTheVirtualGamepadStopsActingInTheGameAndARealPadsKeepsActing) {
-    // The Controls screen shows action.bindings, the game acts on action.activeBindings: both must lose the smooth look.
     ASSERT_NO_FATAL_FAILURE(StartGame("{ devices = { '0_XINPUT_GAMEPAD', '3_XINPUT_GAMEPAD' } }", "", false));
     ASSERT_EQ(Lua("StubInput.listActive('AXIS_LOOK_LEFTRIGHT_PLAYER', '3_XINPUT_GAMEPAD')"), "AXIS_3+/+@4 ; AXIS_3-/-@4");
     TurnOn();
@@ -392,7 +356,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, ALaterSessionDoesNotRewriteAgain) {
     const std::string rewritten = Dump(kPad);
     ASSERT_EQ(Lua("StubInput.saves"), "1");
 
-    // The game comes back with the bindings it saved, and a player who changed nothing.
     ASSERT_NO_FATAL_FAILURE(RestartGameSession());
     PlayFor(3);
 
@@ -405,7 +368,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, AChangeThePlayerMadeToARewrittenBindin
     ASSERT_NO_FATAL_FAILURE(StartGame());
     ASSERT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "AXIS_3-/+@4");
 
-    // In the Controls screen the player moves Snap Turn left to the right hand's upper face button and puts smooth look back.
     ASSERT_EQ(RunLuauChunk(L, "StubInput.change('VR_SNAP_TURN_LEFT', '3_XINPUT_GAMEPAD', 'AXIS_3-', 'BUTTON_4')", "=playerChange"), 0);
     PlayFor(3);
     EXPECT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "BUTTON_4/+@4") << "not rewritten later in the same session";
@@ -417,7 +379,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, AChangeThePlayerMadeToARewrittenBindin
     EXPECT_EQ(List("VR_SNAP_TURN_RIGHT", kPad), "AXIS_3+/+@4");
     EXPECT_EQ(Lua("StubInput.saves"), "0");
 
-    // Not even when the pad is taken off and put back on.
     EvalLua(L, "runCommand('vrVirtualGamepad', 'off')");
     Frames(5);
     TurnOn();
@@ -453,8 +414,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, ItWaitsQuietlyUntilTheGameListsTheDevi
 }
 
 TEST_F(VirtualGamepadDefaultBindingsTest, BindingsOfAnOldPadThatUsedTheSameSlotAreNotRewrittenUntilTheGameHasThePadAttached) {
-    // An unplugged pad once sat in slot 3: the game still lists its saved bindings (and the Companion Mod's defaults on them),
-    // but there is no connected device behind them yet.
     ASSERT_NO_FATAL_FAILURE(StartGame("{ devices = { '0_XINPUT_GAMEPAD', '3_XINPUT_GAMEPAD' }, unplugged = { '3_XINPUT_GAMEPAD' } }"));
     ASSERT_EQ(Lua("select(2, VRBridge.getVirtualGamepad())"), "3");
     const std::string oldPad = Dump(kPad);
@@ -464,7 +423,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, BindingsOfAnOldPadThatUsedTheSameSlotA
     EXPECT_EQ(Lua("StubInput.saves"), "0");
     EXPECT_NE(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "true") << "and no flag is set for a device the game has not attached";
 
-    // The game attaches the Virtual Gamepad as that device.
     ASSERT_EQ(RunLuauChunk(L, "StubInput.plug('3_XINPUT_GAMEPAD')", "=plug"), 0);
     PlayFor(2);
     EXPECT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "AXIS_3-/+@4");
@@ -473,7 +431,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, BindingsOfAnOldPadThatUsedTheSameSlotA
 }
 
 TEST_F(VirtualGamepadDefaultBindingsTest, ANewBindingTakesAFreeIndexSlotWhenThereIsNoBindingToReplace) {
-    // The pad has no VR View Toggle binding of the game's defaults left, and an alternative of the player's in slot 1.
     ASSERT_NO_FATAL_FAILURE(StartGame(
         "{ omit = { 'VR_TOGGLE_VIEW@3_XINPUT_GAMEPAD' }, extra = { { action = 'VR_TOGGLE_VIEW', device = '3_XINPUT_GAMEPAD', input = 'BUTTON_2', index = 1 } } }"));
     EXPECT_EQ(List("VR_TOGGLE_VIEW", kPad), "BUTTON_11 BUTTON_10/+@2 ; BUTTON_2/+@1") << "the first slot the device has free on the action";
@@ -494,7 +451,6 @@ TEST_F(VirtualGamepadDefaultBindingsTest, TheStatusCommandSaysWhetherTheDefaultB
 class VirtualGamepadDefaultBindingsFallbackTest : public VirtualGamepadDefaultBindingsTest,
                                                   public ::testing::WithParamInterface<const char*> {};
 
-// The binding API missing or raising: one warning, no flag, and the bindings (and the saved file) as the game had them.
 TEST_P(VirtualGamepadDefaultBindingsFallbackTest, GivesOneWarningNoFlagAndUnchangedBindings) {
     ASSERT_NO_FATAL_FAILURE(StartGame(std::string("{ variant = '") + GetParam() + "' }", "", false));
     const bool hasBindings = Lua("g_inputBinding ~= nil") == "true";

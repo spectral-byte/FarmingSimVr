@@ -27,3 +27,5 @@ Accepted
 - In-engine swapchain descriptor override (rejected: risks rasterizer viewport and scissor rect mismatch if GIANTS Engine sizes viewports from internal display settings rather than querying the backbuffer description).
 - Dedicated offscreen VR render target (rejected: significant VRAM duplication, extra GPU copy passes, and unnecessary engine pipeline interference).
 - Fixed 1080p Desktop Mirror Window (rejected: does not adapt to diverse display configurations or ultrawide aspect ratios).
+
+More decisions about this area, from the code comments: [ADR-0057](0057-present-and-desktop-decisions.md).

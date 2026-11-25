@@ -9,10 +9,8 @@ namespace fs25vr {
 
 namespace {
 
-// The installed instance. Published before the first hook goes live, so a hook always finds its trampolines.
 std::atomic<DxgiExportHooks*> s_installed{nullptr};
 
-// Entries running on this thread. Calls made while one runs go straight to the system.
 thread_local int t_entryDepth = 0;
 
 struct EntryScope {
@@ -22,12 +20,11 @@ struct EntryScope {
     EntryScope& operator=(const EntryScope&) = delete;
 };
 
-} // namespace
+}
 
 DxgiExportHooks::DxgiExportHooks(IDxgiFactoryEntry& entry) : m_entry(entry) {}
 
 DxgiExportHooks::~DxgiExportHooks() {
-    // At termination the patches stay, like every other hook's (see FunctionDetour).
     if (IsProcessTerminating()) return;
     Uninstall();
 }
@@ -51,7 +48,6 @@ void* DxgiExportHooks::FindExport(HMODULE module, const char* name) {
         const WORD index = nameOrdinals[i];
         if (index >= exports->NumberOfFunctions) return nullptr;
         const DWORD rva = functions[index];
-        // An address inside the export directory names a forwarder ("DLL.Function"), not code.
         if (rva >= directory.VirtualAddress && rva < directory.VirtualAddress + directory.Size) return nullptr;
         return const_cast<BYTE*>(base + rva);
     }
@@ -128,4 +124,4 @@ HRESULT WINAPI DxgiExportHooks::Hook_CreateDXGIFactory2(UINT flags, REFIID riid,
     return hooks->m_entry.CreateDXGIFactory2(flags, riid, ppFactory);
 }
 
-} // namespace fs25vr
+}

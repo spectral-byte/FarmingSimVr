@@ -1,9 +1,3 @@
-// Object Grab, what the Pointer Hand's aim shows and feels (ADR-0033, spec #156), seen from outside: the real Companion Mod runs against
-// the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (the game's empty hands and loose objects in
-// object_grab_test_support.h). A test asserts what the player sees and feels: whether and where the Pointer Ray is drawn, which haptic
-// pulses reached which fake Motion Controller, and what the hands tool drew at the centre of the view. Prior art:
-// test_hand_tools_haptics.cpp (pulses on the fake controllers), test_hand_tools_draw.cpp (the centre overlays) and test_pointer_ray.cpp.
-
 #include "object_grab_test_support.h"
 #include <string>
 
@@ -12,8 +6,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace object_grab_test;
 
-// A hand pointing at tracking (0.4, -0.2, -0.3) has its fingertip at world (-0.4, -0.2, 0.3) and the Pointer Ray runs along +Z (see
-// test_object_grab_aim.cpp). Objects are made straight ahead of it, 1.2 m from the fingertip: their near surface is at z = 1.35.
 constexpr float kHandX = 0.4f, kHandY = -0.2f, kHandZ = -0.3f;
 constexpr const char* kObjectAhead = "StubHandTool.looseObject(-0.4, -0.2, 1.5, %s, { name = 'object' })";
 
@@ -23,7 +15,6 @@ std::string ObjectAhead(const char* mass) {
     return std::string("_G.object = ") + buffer;
 }
 
-// How many pulses reached a hand (the fake controllers keep them all), and the strongest of them.
 int PulsesTo(const FakeTrackedHeadset& headset, int hand) {
     int count = 0;
     for (const auto& pulse : headset.HapticPulses()) {
@@ -40,7 +31,7 @@ float StrongestTo(const FakeTrackedHeadset& headset, int hand) {
     return strongest;
 }
 
-}  // namespace
+}
 
 #define OBJECT_GRAB_START() \
     FakeTrackedHeadset headset; \
@@ -48,8 +39,6 @@ float StrongestTo(const FakeTrackedHeadset& headset, int hand) {
     fs25vr::VRBridge bridge(headset.manager, nullptr); \
     ASSERT_NO_FATAL_FAILURE(StartObjectGrabMod(L, bridge, StartOptions())); \
     SetGameTime(10000)
-
-// ---- The Pointer Ray shows on an object the game can pick up ---------------------------------------------------------------
 
 TEST_F(CompanionModTest, ThePointerRayShowsOnAnObjectTheGameCanPickUpWhereTheTargeterHitIt) {
     OBJECT_GRAB_START();
@@ -64,14 +53,13 @@ TEST_F(CompanionModTest, ThePointerRayShowsOnAnObjectTheGameCanPickUpWhereTheTar
 
 TEST_F(CompanionModTest, ThePointerRayDoesNotShowOnAnObjectThatIsTooHeavy) {
     OBJECT_GRAB_START();
-    ASSERT_EQ(RunLuauChunk(L, ObjectAhead("0.5").c_str(), "=object"), 0);  // the hands' limit is 0.1
+    ASSERT_EQ(RunLuauChunk(L, ObjectAhead("0.5").c_str(), "=object"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(EvalLua(L, "tostring(drawnRayEnd())"), "nil");
 }
 
 TEST_F(CompanionModTest, ThePointerRayShowsOnAHeavyObjectWithSuperStrengthAndItsLongerReach) {
     OBJECT_GRAB_START();
-    // 6 m from the fingertip: past the pickup distance, and 0.5 t: past the limit.
     ASSERT_EQ(RunLuauChunk(L, "_G.pallet = StubHandTool.looseObject(-0.4, -0.2, 6.3, 0.5, { name = 'pallet' })", "=pallet"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(EvalLua(L, "tostring(drawnRayEnd())"), "nil") << "out of reach and too heavy";
@@ -100,7 +88,7 @@ TEST_F(CompanionModTest, ThePointerRayDoesNotShowOnAnObjectThatRefusesThePickUpU
 TEST_F(CompanionModTest, ThePointerRayIsNotDrawnForAnObjectTheHeadLooksAtWhileTheHandPointsElsewhere) {
     OBJECT_GRAB_START();
     ASSERT_EQ(RunLuauChunk(L, ObjectAhead("0.05").c_str(), "=object"), 0);
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // pointing well beside the object
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     EXPECT_EQ(EvalLua(L, "tostring(drawnRayEnd())"), "nil");
 }
 
@@ -114,15 +102,13 @@ TEST_F(CompanionModTest, ThePointerRayIsNotDrawnOnAnObjectWithObjectGrabOff) {
     EXPECT_EQ(EvalLua(L, "tostring(drawnRayEnd())"), "nil");
 }
 
-// ---- One light pulse as the ray lands -----------------------------------------------------------------------------------
-
 TEST_F(CompanionModTest, OneLightPulseOnThePointerHandAsTheRayLandsOnAGrabbableObjectAndNoneWhileItStaysThere) {
     OBJECT_GRAB_START();
     ASSERT_EQ(RunLuauChunk(L, ObjectAhead("0.05").c_str(), "=object"), 0);
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // beside the object
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     ASSERT_EQ(PulsesTo(headset, kRight), 0) << "nothing under the ray: nothing felt";
 
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // lands on it
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(headset, kRight), 1) << "one pulse as it lands";
     EXPECT_GT(StrongestTo(headset, kRight), 0.0f);
     EXPECT_LE(StrongestTo(headset, kRight), 0.3f) << "a light one";
@@ -131,9 +117,9 @@ TEST_F(CompanionModTest, OneLightPulseOnThePointerHandAsTheRayLandsOnAGrabbableO
     FRAMES(30);
     EXPECT_EQ(PulsesTo(headset, kRight), 1) << "and none while it stays";
 
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // leaves
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(headset, kRight), 1) << "none as it leaves";
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // lands again
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(headset, kRight), 2) << "one more as it lands again";
 }
 
@@ -144,8 +130,6 @@ TEST_F(CompanionModTest, NoPulseAsTheRayLandsOnAnObjectTheGameWillNotPickUp) {
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(headset, kRight), 0);
 }
-
-// ---- The hands tool draws no crosshair while the hand aims --------------------------------------------------------------
 
 TEST_F(CompanionModTest, TheHandsToolDrawsNoCrosshairOrGrabIconWhileTheHandAimsAndDrawsThemAsInTheGameOtherwise) {
     OBJECT_GRAB_START();
@@ -172,7 +156,7 @@ TEST_F(CompanionModTest, TheHandsToolDrawsNoCrosshairOrGrabIconWhileTheHandAimsA
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
     EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(hands)"), "") << "on again: nothing";
 
-    AdvanceGameTime(3100);  // the hand is set down
+    AdvanceGameTime(3100);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
     EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(hands)"), "pickUpCrosshair") << "set down: the head aims, and the game draws its own";

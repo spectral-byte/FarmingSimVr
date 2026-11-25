@@ -21,3 +21,5 @@ Accepted.
 - **Keep the setting savegame-only, like FOV Overscan** (rejected: the main menu, the one menu every session starts in, would stay at 1.5 m).
 - **Give the Injector a settings file of its own and have VRBridge write it** (rejected: two copies of one setting that can drift apart, and one more file for the Installer to remove).
 - **Have the Injector read the Companion Mod's settings.xml at launch (selected).** One source of truth, read-only on the Injector side, and it falls back to the default when the file is not where the game keeps it by default.
+
+More decisions about this area, from the code comments: [ADR-0053](0053-injector-core-decisions.md).

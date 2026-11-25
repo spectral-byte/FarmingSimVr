@@ -1,38 +1,3 @@
-<#
-.SYNOPSIS
-    Offline check of the Virtual Hand models' skeletons: composes the bone transforms of both .i3d files the way the
-    engine does and compares them with the armature of the source Blender file, scaled to metres and, for the right
-    hand, mirrored.
-
-.DESCRIPTION
-    The engine takes the bind pose of a skinned shape from the world transforms of its bone nodes as loaded
-    (the .shapes file holds no bind matrices), so the skeleton the .i3d composes to must be the skeleton the mesh
-    was modelled around. The first export of the Gloved Hand was not: the GIANTS Blender exporter wrote every
-    bone with 90 degrees too little about X, the 90 degree turns piled up down each finger, and the composed
-    wrist-to-fingertip chain was 0.46 model units long instead of 2.25 (0.040 m instead of 0.197 m in the game).
-
-    The engine also ignores a scale (or a mirror) on a node above a skinned mesh, so the models carry their size
-    and handedness themselves: VirtualHandLeft.i3d is the glove scaled to metres (0.0875 m per model unit) and
-    VirtualHandRight.i3d is that mirrored across the model's X = 0 plane, with the same bone names.
-
-    This script reads each model, composes every bone's world matrix (Euler angles in degrees, R = Rz * Ry * Rx, the
-    convention the exporter writes; the check also composes R = Ry * Rx * Rz and reports how far the two disagree),
-    and checks:
-      * every bone is within -Tolerance metres of where the Blender armature has it at rest (the numbers are the
-        bone heads of "Gloved Hand LP.blend" in the exporter's Y-up axes: x, z, -y, times 0.0875, with x negated
-        for the right hand),
-      * the wrist to the first joint of the index and middle fingertip segments ("Top.001", "Top.002") is about
-        0.197 and 0.204 m,
-      * no finger spirals: its chain runs nearly straight from the Hand bone to its Top joint,
-      * every bone's local rotation is a proper rotation with small bends: the right file's rotations are the left
-        file's with the Euler Y and Z angles negated (a mirrored rig), and no rotation is a 90 degree pile-up.
-    It exits with 1 when a check fails. With -Curl it also folds the fingers by VRCompanion.FINGER_CURL_DEGREES
-    (read from VRCompanionVirtualHands.lua) and prints where the fingertips end up relative to the palm for each
-    hand; a curl that does not move the fingertips toward the palm (-Y) fails.
-
-    Run it from the repository root:  powershell -File scripts\check_virtual_hand_rig.ps1 [-Curl] [-Quiet]
-    The same expectations are asserted by CompanionModTest (test_virtual_hands.cpp), which runs in CI.
-#>
 param(
     [string]$ModelsDirectory = "mods/FS25_VRCompanion/models",
     [string]$Source = "mods/FS25_VRCompanion/src/VRCompanionVirtualHands.lua",
@@ -65,7 +30,6 @@ $Fingers = [ordered]@{
     "little" = @("Pinky", "Lower.004", "Middle.004", "Top.004")
 }
 
-# --- small 3x3 matrix helpers (row-major, 9 doubles) ---------------------------------------------------------
 function Mul([double[]]$a, [double[]]$b) {
     $r = New-Object double[] 9
     for ($i = 0; $i -lt 3; $i++) { for ($j = 0; $j -lt 3; $j++) {
@@ -92,7 +56,6 @@ function Numbers([string]$text, [string]$fallback) {
     return , @($text.Trim() -split "\s+" | ForEach-Object { [double]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) })
 }
 
-# --- read a model ------------------------------------------------------------------------------------------------
 function ReadBones([string]$path) {
     if (-not (Test-Path $path)) { throw "model not found: $path" }
     [xml]$doc = Get-Content -Raw $path
@@ -135,7 +98,6 @@ foreach ($hand in $models.Keys) {
     $bones = ReadBones $models[$hand]
     $allBones[$hand] = $bones
 
-    # --- 1. every bone where the armature has it (metres, mirrored for the right hand) -----------------------
     $worst = 0.0; $worstOther = 0.0
     foreach ($name in $Expected.Keys) {
         if (-not $bones.Contains($name)) { $failures.Add("the $hand model has no bone '$name'"); continue }
@@ -154,7 +116,6 @@ foreach ($hand in $models.Keys) {
     Write-Host ("worst bone position error: {0:N6} m (R = Rz*Ry*Rx); {1:N6} m if the engine composes R = Ry*Rx*Rz instead" -f $worst, $worstOther)
     Check ($worstOther -le 5 * $Tolerance) "the two Euler conventions disagree by $worstOther m in the ${hand}: the model is not convention independent"
 
-    # --- 2. wrist to fingertip chain ---------------------------------------------------------------------------
     $wrist = $bones["Wrist"].world["ZYX"][1]
     foreach ($tip in @(@("Top.001", 0.197), @("Top.002", 0.204))) {
         $length = Distance $wrist $bones[$tip[0]].world["ZYX"][1]
@@ -164,7 +125,6 @@ foreach ($hand in $models.Keys) {
     $knuckles = Distance $bones["Lower.001"].world["ZYX"][1] $bones["Lower.004"].world["ZYX"][1]
     Write-Host ("Index to little finger base joints: {0:N4} m apart" -f $knuckles)
 
-    # --- 3. no finger spirals ----------------------------------------------------------------------------------
     foreach ($finger in $Fingers.Keys) {
         $names = $Fingers[$finger]
         $path = 0.0
@@ -174,16 +134,14 @@ foreach ($hand in $models.Keys) {
         Check (($straight / $path) -ge 0.85) "the $hand $finger finger spirals: its chain is $path long but its ends are only $straight apart"
     }
 
-    # --- 4. the rotations are small bends, no 90 degree pile-ups ---------------------------------------------
     foreach ($name in $bones.Keys) {
         $deg = $bones[$name].deg
         $largest = ($deg | ForEach-Object { [Math]::Abs($_) } | Measure-Object -Maximum).Maximum
-        $limit = if ($name -eq "Thumb") { 120 } else { 60 }   # the thumb base is turned about 106 degrees about Y by the glove's modelling
+        $limit = if ($name -eq "Thumb") { 120 } else { 60 }
         Check ($largest -le $limit) "$hand bone '$name' has a local rotation of $largest degrees (limit $limit)"
     }
 }
 
-# --- 5. the right file is the left file mirrored ---------------------------------------------------------------
 $left = $allBones["left"]; $right = $allBones["right"]
 foreach ($name in $left.Keys) {
     if (-not $right.Contains($name)) { $failures.Add("the right model has no bone '$name'"); continue }
@@ -191,7 +149,6 @@ foreach ($name in $left.Keys) {
     Check ($l.parent -eq $r.parent) "bone '$name' has parent '$($r.parent)' in the right model and '$($l.parent)' in the left one"
     $mirroredPosition = @(-$l.world["ZYX"][1][0], $l.world["ZYX"][1][1], $l.world["ZYX"][1][2])
     Check ((Distance $mirroredPosition $r.world["ZYX"][1]) -le $Tolerance) "bone '$name' of the right model is not the left one mirrored in X"
-    # the mirror D R D: Euler X stays, Y and Z change sign
     $expectedDeg = @($l.deg[0], - $l.deg[1], - $l.deg[2])
     for ($axis = 0; $axis -lt 3; $axis++) {
         Check ([Math]::Abs($expectedDeg[$axis] - $r.deg[$axis]) -le 0.01) ("bone '$name' rotation of the right model is ({0:N3} {1:N3} {2:N3}), the mirror of the left one is ({3:N3} {4:N3} {5:N3})" -f $r.deg[0], $r.deg[1], $r.deg[2], $expectedDeg[0], $expectedDeg[1], $expectedDeg[2])
@@ -199,7 +156,6 @@ foreach ($name in $left.Keys) {
 }
 Write-Host "`nThe right model's bones are the left model's, mirrored in X, with the same names and parents."
 
-# --- 6. optional: where a full curl puts the fingertips ----------------------------------------------------------
 if ($Curl) {
     $lua = Get-Content -Raw $Source
     $degrees = [regex]::Match($lua, "FINGER_CURL_DEGREES\s*=\s*\{\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\}")
@@ -230,13 +186,12 @@ if ($Curl) {
                     $position = @(($position[0] + $offset[0]), ($position[1] + $offset[1]), ($position[2] + $offset[2]))
                     $rotation = Mul (Mul $rotation (Euler $bone.deg "ZYX")) (RotX ($sign * $amount * $curlDegrees[$i - 1] * [Math]::PI / 180))
                 }
-                $end = Apply $rotation @(0, 0, (-0.25 * $MetresPerUnit))   # the finger's end, 0.25 units along the last segment
+                $end = Apply $rotation @(0, 0, (-0.25 * $MetresPerUnit))
                 $tips[$amount] = @(($position[0] + $end[0]), ($position[1] + $end[1]), ($position[2] + $end[2]))
             }
             $full = $tips[1.0]
             Write-Host ("{0,-6} tip end at rest {1:N4} m in front of the knuckle line; at full curl {2:N4} in front and {3:N4} behind it toward the wrist (palm plane: {4:N4} in front)" -f `
                 $finger, (- ($tips[0.0][1] - $knuckle[1])), (- ($full[1] - $knuckle[1])), ($full[2] - $knuckle[2]), $palmPlane)
-            # a fifth of a curl is a small bend: the tip must move toward the palm (-Y) and toward the wrist (+Z)
             Check (($tips[0.2][1] - $tips[0.0][1]) -lt -0.0005 -and ($tips[0.2][2] - $tips[0.0][2]) -gt 0.0) "a curl does not fold the $hand $finger finger toward the palm (-Y): flip the curl direction of that hand"        }
     }
 }

@@ -9,7 +9,6 @@
 
 namespace fs25vr {
 
-// Magic identifier to safely identify virtual NGX handles: 'VNGX'
 inline constexpr uint32_t VIRTUAL_NGX_HANDLE_MAGIC = 0x564E4758;
 
 struct TransparentStringHash {
@@ -381,7 +380,6 @@ private:
     std::unordered_map<std::string, NgxParamValue, TransparentStringHash, TransparentStringEqual> m_params;
 };
 
-// Opaque Virtual NGX Handle wrapping left and right runtime feature handles
 struct VirtualNgxHandle : public NVSDK_NGX_Handle {
     uint32_t magic = VIRTUAL_NGX_HANDLE_MAGIC;
     NVSDK_NGX_Handle* hLeft = nullptr;
@@ -389,7 +387,6 @@ struct VirtualNgxHandle : public NVSDK_NGX_Handle {
     NVSDK_NGX_Feature featureId = NVSDK_NGX_Feature_Reserved;
     std::shared_ptr<NgxParameterImpl> clonedParameters;
 
-    // Headset-native target and internal render dimensions
     uint32_t targetWidth = 0;
     uint32_t targetHeight = 0;
     uint32_t renderWidth = 0;
@@ -401,4 +398,4 @@ struct VirtualNgxHandle : public NVSDK_NGX_Handle {
     }
 };
 
-} // namespace fs25vr
+}

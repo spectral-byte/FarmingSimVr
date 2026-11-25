@@ -9,20 +9,10 @@
 
 namespace fs25vr {
 
-// The Direct3D 12 half of the eye copy (spec #247): copies the game's back buffer into a destination
-// texture and clears the back buffer to black, on the game's own queue. It knows nothing about OpenXR:
-// the OpenXR manager acquires, waits on and releases the swapchain image and hands this module the
-// image's texture in between.
-//
-// It owns the copy ring (command allocators and lists, one pair per slot), the fence and its event, the
-// GPU timestamps for `vrPerfTrace` and the clear-to-black resources. Single-threaded, like the Present
-// path that calls it (ADR-0018).
 class D3D12EyeCopy {
 public:
-    // How many copies can be in flight before the CPU waits for the GPU.
     static constexpr uint32_t kRingSize = 2;
 
-    // The game's device and queue; null while there are none (a copy or a clear then does nothing).
     void SetDeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
 
     // Told, on every copy whose back buffer is not the size the destination was made for, the back buffer's and
@@ -42,8 +32,6 @@ public:
     // game expects. Returns false, and does nothing, without a back buffer, device or queue.
     bool ClearToBlack(ID3D12Resource* backBuffer);
 
-    // Waits for the GPU to finish what was submitted, then drops every resource; the next copy starts
-    // over. The device and queue stay.
     void Release();
 
 private:
@@ -60,14 +48,11 @@ private:
     ScopedEventHandle m_fenceEvent;
     void EnsureFence();
 
-    // ClearToBlack's own recording objects; it signals m_fence with m_clearFenceValue.
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_clearAllocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_clearRtvHeap;
     uint64_t m_clearFenceValue = 0;
 
-    // `vrPerfTrace`: GPU timestamps before and after each eye copy, two per ring slot, read back when the
-    // slot is reused (its fence has passed by then). Created on the first copy a trace times.
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_timestampHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_timestampReadback;
     bool m_timestampsFailed = false;
@@ -81,4 +66,4 @@ private:
     void ReportTimestamps(uint32_t ringSlot);
 };
 
-} // namespace fs25vr
+}

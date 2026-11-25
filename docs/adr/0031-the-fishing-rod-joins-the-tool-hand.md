@@ -37,3 +37,5 @@ Proposed.
 - The rod is the one supported Hand Tool that still draws at the centre of the view.
 - A Tool Hand holding the rod with its line out is never set down for being still, so it never becomes the Pointer Hand then (ADR-0029).
 - Not yet confirmed in game: the handle offset, the rod's axis, whether the cast follows the rod, what the secondary action does, whether the bite and reeling states can be told apart reliably from `spec.state`'s keys for the haptics, and whether the line still leaves from the tip with the rod in the hand.
+
+More decisions about this area, from the code comments: [ADR-0050](0050-hand-tool-decisions.md).

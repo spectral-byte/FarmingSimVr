@@ -88,7 +88,6 @@ show("fingertip (centre of last 3 mm)", tip)
 show("fingertip (single extreme vertex)", extreme)
 show("finger direction (unit)", direction)
 print("finger length knuckle to tip: %.4f m; tip cap vertices: %d" % ((tip - knuckle).length, len(cap)))
-# How stable is the direction against the definition used?
 for label, other in (("knuckle to Top.001 joint", top_joint), ("knuckle to Top.001 tail", top_tail),
                      ("knuckle to extreme vertex", extreme)):
     print("direction %-26s differs by %.2f deg" % (label, math.degrees(direction.angle((other - knuckle).normalized()))))
@@ -103,6 +102,5 @@ print("angle between finger direction and grip -Z (the tube axis): %.2f deg"
       % math.degrees(grip_dir.angle(mathutils.Vector((0, 0, -1)))))
 print("angle between finger direction and grip -Y (toward the fingertips): %.2f deg"
       % math.degrees(grip_dir.angle(mathutils.Vector((0, -1, 0)))))
-# Spread of the finger mesh about its axis: how far the tip point is from the finger's own centre line.
 axis_offset = [((v - knuckle) - direction * (v - knuckle).dot(direction)).length for v in cap]
 print("tip cap radius about the axis: max %.4f m" % max(axis_offset))

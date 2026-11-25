@@ -1,13 +1,3 @@
-// Stereo Dialogs (spec #142, ticket #145, ADR-0032): the fish catch dialog (Highlands Fishing DLC) stays in the stereoscopic view
-// instead of getting the menu quad. Seen from outside: the real Companion Mod runs against the real VRBridge over
-// FakeTrackedHeadset, with the game stood in by Lua stubs (the GUI as the engine's Gui.lua keeps it and as the headset probe of
-// ticket #143 measured it, a cab with a Steering Wheel, the Virtual Hand model), the test opens and closes dialogs and menus,
-// drives frames the way the game would, and asserts what the player sees (what the Injector is told, which Virtual Hands are
-// shown) and what the player can do (Snap Turn, Wheel Grab, what the Virtual Gamepad reads and what the menu gets).
-// Never the mod's own state.
-// Prior art: test_wheel_grab_ending.cpp (a situation begun mid-grab), test_virtual_gamepad_menu_use.cpp (the pad in a menu),
-// test_virtual_hands.cpp (hands in a menu), test_dialog_diagnostics.cpp (the dialog stub).
-
 #include "wheel_grab_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <string>
@@ -16,12 +6,6 @@ namespace {
 
 using namespace wheel_grab_test;
 
-// The game's GUI, as the headset probe measured it for the fish catch dialog (spec #142, the first comment): the dialog is the
-// root element in g_gui.dialogs, g_gui.currentDialogName is its name ("FishDialog", loaded from pdlc/highlandsFishingPack/gui/
-// FishDialog.xml), g_gui.currentGuiName stays empty (it names the open SCREEN, a dialog does not set it), and it is a generic
-// yes/no dialog whose yesButton is SELL (MENU_ACCEPT) and noButton is RELEASE (MENU_BACK). A screen (the pause menu) sets
-// currentGuiName and has no dialog. getIsGuiVisible is true for either. The menu input the Companion Mod sends to a menu (a back
-// press, the mouse) is recorded.
 constexpr const char* kGuiStubs = R"luau(
     _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1, isMouseButtonPressed = function() return false end }
     _G.InputAction = { MENU_BACK = "MENU_BACK" }
@@ -67,8 +51,6 @@ constexpr const char* kGuiStubs = R"luau(
     end
 )luau";
 
-// The mod started on a map with the cab, the Virtual Hand model and the GUI above, the Virtual Gamepad on, and both Motion
-// Controllers brought into use (a hand counts as in use once it has moved).
 #define START_STEREO_DIALOG_SCENE() \
     do { \
         headset.SetHeadPose(HandAt(0.0f, 1.6f, 0.0f)); \
@@ -104,7 +86,6 @@ bool HandIsShown(lua_State* L, const char* which) {
 
 int SteeringCalls(lua_State* L) { return static_cast<int>(Number(L, "#StubSteer.calls")); }
 
-// Every control of a hand at once.
 FakeOpenXrControllers::Inputs Everything() {
     FakeOpenXrControllers::Inputs inputs;
     inputs.trigger = 1.0f;
@@ -131,9 +112,7 @@ bool IsNeutral(const XINPUT_GAMEPAD& pad) {
 
 int Backs(lua_State* L) { return std::stoi(EvalLua(L, "#backs")); }
 
-}  // namespace
-
-// ---- What the player sees: the stereoscopic view holds ----
+}
 
 TEST_F(CompanionModTest, TheFishDialogOpeningAndClosingNeverTellsVRBridgeAMenuIsVisibleNorFlushesTheUpscaler) {
     FakeTrackedHeadset headset;
@@ -201,8 +180,6 @@ TEST_F(CompanionModTest, TheFishDialogInTwoDFloatingWindowModeGetsTheMenuQuadLik
     EXPECT_EQ(EvalLua(L, "VRCompanion:getIs2DViewActive()"), "true") << "and 2D Floating Window Mode carries on";
 }
 
-// ---- Head placement and the Virtual Hands keep running ----
-
 TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualHandsStayOnTheMotionControllersAndFollowThem) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -215,7 +192,6 @@ TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualHandsStayOnTheMotionCo
     EXPECT_TRUE(HandIsShown(L, "left"));
     EXPECT_TRUE(HandIsShown(L, "right"));
 
-    // The head is still placed in the world: a hand moved 20 cm is 20 cm from where it was in the world.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.before = { StubScene.worldPosition(StubModel.hands().right) }
     )luau", "=handBefore"), 0);
@@ -231,8 +207,6 @@ TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualHandsStayOnTheMotionCo
     FRAMES(3);
     EXPECT_TRUE(HandIsShown(L, "left") && HandIsShown(L, "right")) << "and they are still there when it closes";
 }
-
-// ---- Input stays a menu ----
 
 TEST_F(CompanionModTest, WhileTheFishDialogShowsSnapTurnAndWheelGrabAreRefusedAndWorkAgainOnceItCloses) {
     FakeTrackedHeadset headset;
@@ -256,9 +230,6 @@ TEST_F(CompanionModTest, WhileTheFishDialogShowsSnapTurnAndWheelGrabAreRefusedAn
     EXPECT_EQ(SnapTurnRight(L, 40000), "turned") << "and so does Snap Turn";
 }
 
-// The dialog is answered with its own gamepad buttons (MENU_ACCEPT, MENU_BACK) through the Virtual Gamepad: whatever the Motion
-// Controllers' bindings are, the game reads them from the pad as it does outside menus. The Companion Mod's own menu inputs,
-// which would answer the dialog a second time (the grip as back), are not engaged.
 TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualGamepadSendsTheMotionControllersToTheDialogAndTheModsOwnMenuBackStaysOut) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -278,9 +249,6 @@ TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualGamepadSendsTheMotionC
     EXPECT_EQ(EvalLua(L, "_G.clicks"), "0");
 }
 
-// The held-input rule of any menu, for a dialog the pad answers: an input already held when the dialog opens (the lower face
-// button that cast the rod is still down) is not the dialog's, so letting it go cannot answer it (the answer buttons act on
-// release). It reads released on the pad until it is let go; a button pressed afterwards is the dialog's.
 TEST_F(CompanionModTest, AButtonHeldWhenTheFishDialogOpensDoesNotAnswerItButAFreshPressDoes) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -297,7 +265,6 @@ TEST_F(CompanionModTest, AButtonHeldWhenTheFishDialogOpensDoesNotAnswerItButAFre
     FRAMES(3);
     EXPECT_EQ(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "held across the open, it is not the dialog's";
 
-    // Something else pressed while the held one is still down is a fresh press and reaches the dialog.
     FakeOpenXrControllers::Inputs both = held;
     both.buttonUpper = true;
     headset.SetHandInputs(kRight, both);
@@ -313,8 +280,6 @@ TEST_F(CompanionModTest, AButtonHeldWhenTheFishDialogOpensDoesNotAnswerItButAFre
     FRAMES(2);
     EXPECT_NE(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "pressed again in the dialog, it is the dialog's";
 }
-// The game log says what happened: the dialog stays in the stereoscopic view with the menu taking the input; only a menu that
-// gets the quad is "switched to the 6DOF Quad layer".
 TEST_F(CompanionModTest, TheLogSaysTheFishDialogKeptTheStereoscopicViewAndOnlyAMenuThatGetsTheQuadSwitchedToIt) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

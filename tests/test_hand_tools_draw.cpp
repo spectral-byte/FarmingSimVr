@@ -1,12 +1,3 @@
-// Hand Tools, no screen-centre overlays while a Hand Tool is in the Tool Hand (ADR-0030), seen from outside: the real Companion
-// Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
-// StubHandTool: a player on foot, the game's HandToolSprayCan and HandToolChainsaw with the onDraw each has, and the game's draw,
-// StubHandTool.draw, which calls the class's onDraw for every held tool). A test moves the fake Motion Controllers, runs game
-// frames and draws, and asserts what the game rendered for each tool (StubHandTool.rendering), the warning lines in the log and
-// the diagnostics line. Never the mod's own state.
-// Prior art: test_hand_tools_chainsaw.cpp (class-level wraps with install variants and the one warning) and
-// test_hand_tools_spray_can.cpp (the can in the Tool Hand, another mod's tool, another player's tool).
-
 #include "hand_tools_test_support.h"
 #include <string>
 
@@ -14,9 +5,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// The two tools whose onDraw is wrapped. `holdLua` takes the tool in hand (as global `global`); `inTheGame` is what the game
-// renders for it with the head's view free of the Tool Hand (the can with a tree found by the head's ray, the saw idle);
-// `remoteMaker` makes the tool of another player; `function` is the name the warning gives.
 struct DrawnTool {
     const char* holdLua;
     const char* global;
@@ -29,19 +17,15 @@ struct DrawnTool {
 const DrawnTool kSprayCan{ kHoldSprayCan, "can", "markerTypeIcon+treeIcon", "sprayCan", "markerTypeIcon", "HandToolSprayCan.onDraw" };
 const DrawnTool kChainsaw{ kHoldChainsaw, "saw", "crosshair", "chainsaw", "crosshair", "HandToolChainsaw.onDraw" };
 
-// The hand held so that the tool points level and well away from the way the head looks (down -Z).
 constexpr float kAimPitch = 1.4f;
 constexpr float kAimYaw = 1.2f;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsDrawTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string stubs;
 
-    // The mod started in a game whose spray can and chainsaw draw are as the variants say ("ok", "missing", "reshaped" for the
-    // can; "ok", "drawMissing", "drawReshaped" for the saw), the player on foot and the game clock set (the in-use timeout is on it).
     void Start(const char* canVariant = "ok", const char* sawVariant = "ok") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         stubs = SprayCanStubs(canVariant) + ChainsawStubs(sawVariant);
@@ -56,9 +40,6 @@ protected:
         headset.SetHandGripPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
     }
 
-    // The tool taken in hand with the right Motion Controller picked up. Trees are planted where the head looks (found by the
-    // game's own targeter when the tool is not in the hand) and, for the can, at its nozzle, so that the can has a tree found
-    // wherever it is held and would draw its tree icon.
     void TakeToolInTheRightHand(const DrawnTool& tool) {
         ASSERT_EQ(RunLuauChunk(L, tool.holdLua, "=holdTool"), 0);
         PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
@@ -74,7 +55,6 @@ protected:
 
     bool InTheHand() { return EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)") == "true"; }
 
-    // What the game renders for the tool in one frame's draw.
     std::string Draws(const DrawnTool& tool) {
         EXPECT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
         return EvalLua(L, std::string("StubHandTool.rendering(") + tool.global + ")");
@@ -83,7 +63,7 @@ protected:
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
 
     void SetTheToolHandDown() {
-        AdvanceGameTime(3100);  // the Motion Controller lies still for longer than the in-use timeout
+        AdvanceGameTime(3100);
         FRAMES(2);
     }
 
@@ -122,15 +102,13 @@ protected:
         FRAMES(2);
         EXPECT_EQ(Draws(tool), tool.inTheGame) << "Motion Controllers off: as the game draws it";
         ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'on')", "=mcOn"), 0);
-        PICK_UP(kRight, 0.25f, -0.10f, -0.30f);  // the Motion Controllers start again with the hands set down
+        PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
         AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
         FRAMES(2);
         ASSERT_TRUE(InTheHand());
         EXPECT_EQ(Draws(tool), "") << "Motion Controllers on: nothing again";
     }
 
-    // Another player's tool of the same kind, held in a multiplayer session: the game draws it, whatever the local player's tool
-    // is doing.
     void ExpectAnotherPlayersToolIsDrawnAsInTheGame(const DrawnTool& tool) {
         ASSERT_NO_FATAL_FAILURE(TakeToolInTheRightHand(tool));
         ASSERT_TRUE(InTheHand());
@@ -149,7 +127,6 @@ protected:
         EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(remoteTool)"), tool.remoteInTheGame) << "the other player's tool: as the game draws it";
     }
 
-    // A game update that renames or reshapes the tool's draw: one warning, and the tool is drawn as in the game.
     void ExpectOneWarningAndTheGamesOverlay(const DrawnTool& tool, const char* canVariant, const char* sawVariant) {
         ASSERT_NO_FATAL_FAILURE(Start(canVariant, sawVariant));
         ASSERT_NO_FATAL_FAILURE(TakeToolInTheRightHand(tool));
@@ -164,9 +141,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Nothing is drawn at the centre of the view while the tool is in the tracked Tool Hand -------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsDrawTest, TheSprayCanDrawsNothingInTheTrackedToolHandAndAsInTheGameWhenUntrackedSetDownOrHandToolsOrMotionControllersAreOff) {
     ASSERT_NO_FATAL_FAILURE(Start());
@@ -177,8 +152,6 @@ TEST_F(VirtualGamepadHandToolsDrawTest, TheChainsawDrawsNothingInTheTrackedToolH
     ASSERT_NO_FATAL_FAILURE(Start());
     ExpectNothingIsDrawnInTheHandAndTheGamesOverlaysOtherwise(kChainsaw);
 }
-
-// ---- Tools the Companion Mod does not move are drawn as in the game -----------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsDrawTest, AnotherModsToolIsDrawnAsInTheGameWhileTheSprayCanAndChainsawDrawsAreWrapped) {
     ASSERT_NO_FATAL_FAILURE(Start());
@@ -202,8 +175,6 @@ TEST_F(VirtualGamepadHandToolsDrawTest, AnotherPlayersChainsawIsDrawnAsInTheGame
     ASSERT_NO_FATAL_FAILURE(Start());
     ExpectAnotherPlayersToolIsDrawnAsInTheGame(kChainsaw);
 }
-
-// ---- A game update that renames or reshapes onDraw ------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsDrawTest, WithTheSprayCansDrawMissingTheCanIsDrawnAsInTheGameAndTheLogHasOneWarning) {
     ExpectOneWarningAndTheGamesOverlay(kSprayCan, "missing", "ok");
@@ -230,8 +201,6 @@ TEST_F(VirtualGamepadHandToolsDrawTest, AGameUpdateThatReshapesTheDrawLiftsEvery
     EXPECT_EQ(EvalLua(L, "tostring(Player.getLookRay == StubHandTool.originalGetLookRay)"), "true") << "and the look ray wrap";
     EXPECT_EQ(Draws(kChainsaw), kChainsaw.inTheGame);
 }
-
-// ---- Diagnostics ------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsDrawTest, TheDiagnosticsShowTheDrawWrapsAndWhetherDrawingIsHeldBackNow) {
     ASSERT_NO_FATAL_FAILURE(Start());

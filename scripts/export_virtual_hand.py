@@ -49,7 +49,7 @@ import sys
 import bpy
 import mathutils
 
-METRES_PER_UNIT = 0.0875  # the model's units to metres: 0.188 m Hand bone to middle fingertip, 0.086 m across the knuckles
+METRES_PER_UNIT = 0.0875
 
 output_dir = os.path.abspath(sys.argv[sys.argv.index("--") + 1])
 os.makedirs(output_dir, exist_ok=True)
@@ -61,9 +61,8 @@ dcc = exporter.dcc
 
 settings = bpy.context.scene.I3D_UIexportSettings
 settings.i3D_exportUseSoftwareFileName = False
-settings.i3D_binaryFiles = False  # the converter is run below, after the text is adjusted
+settings.i3D_binaryFiles = False
 
-# Headless Blender has no 3D viewport for the exporter's visibility query.
 dcc.isNodeVisible = lambda name: not bpy.data.objects[name].hide_get() and not bpy.data.objects[name].hide_viewport
 
 ARMATURE = "Hand.002"
@@ -101,15 +100,12 @@ def transform_model(matrix):
     bpy.context.view_layer.objects.active = armature
     bpy.ops.object.mode_set(mode="EDIT")
     edit_bones = armature.data.edit_bones
-    # Everything is read before any bone moves (moving a bone moves the heads of its connected children, so reading
-    # a head afterwards would transform it twice). z_axis is the bone's roll axis in armature space.
     linear = matrix.to_3x3()
     planned = {bone.name: (matrix @ bone.head, matrix @ bone.tail, (linear @ bone.z_axis).normalized())
                for bone in edit_bones}
     for bone in edit_bones:
         bone.head, bone.tail = planned[bone.name][0], planned[bone.name][1]
     for bone in edit_bones:
-        # the mirror maps Y (along the bone) and Z; the bone's X is then fixed by Y x Z = -S x, a proper rotation
         bone.align_roll(planned[bone.name][2])
     bpy.ops.object.mode_set(mode="OBJECT")
     bpy.context.view_layer.update()
@@ -123,7 +119,7 @@ def export(name):
 
     with open(i3d_path, "r", encoding="iso-8859-1") as handle:
         text = handle.read()
-    text = text.replace('castsShadows="true"', 'castsShadows="false"')  # the hands cast no shadows
+    text = text.replace('castsShadows="true"', 'castsShadows="false"')
     with open(i3d_path, "w", encoding="iso-8859-1", newline="") as handle:
         handle.write(text)
     report_winding(name, text)
@@ -133,7 +129,7 @@ def export(name):
 
     with open(i3d_path, "r", encoding="iso-8859-1") as handle:
         text = handle.read()
-    text = text.replace('<i3D name="%s"' % name, '<i3D name="Gloved Hand LP"')  # keep the model's title
+    text = text.replace('<i3D name="%s"' % name, '<i3D name="Gloved Hand LP"')
     with open(i3d_path, "w", encoding="iso-8859-1", newline="") as handle:
         handle.write(text)
 
@@ -161,7 +157,6 @@ def report_winding(name, text):
 def report_size(name):
     armature = bpy.data.objects[ARMATURE]
     bones = {bone.name: bone.head_local for bone in armature.data.bones}
-    # Blender Z-up: fingers along +Y; the metric of the file is the same (rotations only)
     length = (bones["Top.002"] - bones["Wrist"]).length
     hand_length = (bones["Top.002"] - bones["Hand"]).length
     knuckle = (bones["Lower.001"] - bones["Lower.004"]).length
@@ -174,12 +169,10 @@ def report_size(name):
           % (name, low[0], high[0], low[1], high[1], low[2], high[2], "+" if bones["Lower"].x > 0 else "-"))
 
 
-# The left hand: the glove as modelled, in metres.
 transform_model(mathutils.Matrix.Scale(METRES_PER_UNIT, 4))
 export("VirtualHandLeft")
 report_size("VirtualHandLeft")
 
-# The right hand: the left one mirrored across X = 0 (the model's own X plane).
 mirror = mathutils.Matrix.Diagonal((-1.0, 1.0, 1.0, 1.0))
 transform_model(mirror)
 export("VirtualHandRight")

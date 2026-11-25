@@ -1,12 +1,3 @@
--- Object Grab: Lua helpers
--- Lua helpers: the rays a test compares, each { x, y, z, dirX, dirY, dirZ } in the world, and what was drawn.
---   targeterRay()      what the targeter cast in the last game frame
---   headRay()          what the game's own getLookRay answers for the player: the first person camera
---   pointerRay()       the Pointer Ray the Companion Mod placed (VRCompanion:getPointerRay), nil without one
---   pulledBack(r, m)   the ray r with its origin moved back along it by m metres
---   sameRay(a, b), apart(a, b), rayText(r)
---   drawnRayEnd()      runs the camera path (which draws the Pointer Ray for a frame) and answers the end point (x, y, z) of the line it drew for the Pointer Ray, or nil
-
     function _G.targeterRay() return { StubHandTool.lastRay() } end
     function _G.headRay() return { StubHandTool.originalGetLookRay(foot.player) } end
     function _G.pointerRay()

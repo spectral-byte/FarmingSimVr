@@ -1,10 +1,3 @@
-// Pointer Hand switching (spec #71), seen from outside: the real Companion Mod runs against
-// the real VRBridge over FakeTrackedHeadset, with the Interactive Control stand-in from
-// companion_mod_stubs.h (which Click Point executed) and a stub GUI (which clicks reached a menu).
-// With both Motion Controllers in use, a trigger pull on the hand that is not the Pointer Hand moves
-// the Pointer Hand to it and is consumed; the test pulls triggers on the fake hands and watches what
-// the mod does with them.
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 
@@ -46,7 +39,6 @@ constexpr const char* kConsoleStubs = R"luau(
     end
 )luau";
 
-// The game's GUI as the mod sees it: it records every mouse event the mod delivers.
 constexpr const char* kGuiStubs = R"luau(
     _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1 }
     _G.guiEvents = {}
@@ -76,14 +68,12 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok')", "=installIc"), 0);
         ASSERT_EQ(RunLuauChunk(L, "StubScene.cab({})", "=scene"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-        // Each hand's own Click Point, straight ahead of it.
         ASSERT_EQ(RunLuauChunk(L, R"luau(
             StubIC.addPoint('rightPoint', -0.3, 1.5, 2.3)
             StubIC.addPoint('leftPoint', 0.3, 1.5, 2.3)
         )luau", "=addPoints"), 0);
     }
 
-    // A frame the way the game runs it: camera update, Interactive Control's update, the mod's update.
     void Frames(int count) {
         for (int i = 0; i < count; ++i) {
             ASSERT_EQ(RunLuauChunk(L, "StubScene.updateCamera(); StubIC.tick()", "=preFrame"), 0);
@@ -93,7 +83,6 @@ protected:
 
     static float SideOf(uint32_t hand) { return hand == kRight ? 0.3f : -0.3f; }
 
-    // Lifts the hand off the desk and holds it still where it points: it is now in use.
     void PickUp(uint32_t hand) {
         headset.SetHandPointing(hand, HandAt(SideOf(hand) - 0.1f, 0.0f, -0.3f));
         Frames(1);
@@ -101,7 +90,6 @@ protected:
         Frames(1);
     }
 
-    // The right hand has been the Pointer Hand since it was picked up; the left joins it.
     void BothHandsInUseRightIsPointerHand() {
         SetGameTime(10000);
         PickUp(kRight);
@@ -115,7 +103,7 @@ protected:
     std::string PointerHand() { return EvalLua(L, "VRCompanion:getPointerHand()"); }
 };
 
-} // namespace
+}
 
 TEST_F(PointerHandSwitchTest, ATriggerPullOnTheOtherHandMakesItThePointerHandAndClicksNothing) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
@@ -186,7 +174,6 @@ TEST_F(PointerHandSwitchTest, OnlyThePointerHandCastsAPointerRay) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     ASSERT_NO_FATAL_FAILURE(BothHandsInUseRightIsPointerHand());
 
-    // Both hands point at their own Click Point, but only the right hand's ray exists.
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "rightPoint");
     EXPECT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', VRCompanion:getPointerRay().ox, VRCompanion:getPointerRay().oy, VRCompanion:getPointerRay().oz)"),
               "-0.30 1.50 0.30") << "the ray starts at the right fingertip";
@@ -201,7 +188,7 @@ TEST_F(PointerHandSwitchTest, OnlyThePointerHandCastsAPointerRay) {
 TEST_F(PointerHandSwitchTest, ATriggerPullOnAHandThatIsNotInUseDoesNotSwitch) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     SetGameTime(1000);
-    headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));  // lying on the desk: tracked, placed long ago
+    headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));
     Frames(2);
     SetGameTime(10000);
     PickUp(kRight);
@@ -219,7 +206,6 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
     ASSERT_NO_FATAL_FAILURE(BothHandsInUseRightIsPointerHand());
     ASSERT_EQ(PointerHand(), "1");
 
-    // The right hand is put down; the left keeps moving for longer than a hand stays in use.
     for (int step = 0; step < 8; ++step) {
         AdvanceGameTime(500);
         headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft) + (step % 2 == 0 ? 0.05f : 0.0f), 0.0f, -0.3f));
@@ -229,7 +215,6 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0)"), "true");
     EXPECT_EQ(PointerHand(), "0");
 
-    // And it is picked up again: the left hand stays the Pointer Hand until a pull on the right switches.
     headset.SetHandPointing(kRight, HandAt(SideOf(kRight) + 0.1f, 0.0f, -0.3f));
     Frames(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
@@ -239,7 +224,6 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
 TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksThatHandAndIsConsumed) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     SetGameTime(10000);
-    // Both Motion Controllers are picked up in the same frame: neither was the Pointer Hand first.
     headset.SetHandPointing(kRight, HandAt(SideOf(kRight) - 0.1f, 0.0f, -0.3f));
     headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft) - 0.1f, 0.0f, -0.3f));
     Frames(1);
@@ -256,7 +240,6 @@ TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksTha
     EXPECT_EQ(Executed(), "") << "the picking pull is consumed too";
 
     Release(kRight);
-    // Aiming at the Click Point moves the hand, which gives the Pointer Ray control.
     headset.SetHandPointing(kRight, HandAt(SideOf(kRight) + 0.05f, 0.0f, -0.3f));
     Frames(1);
     Pull(kRight);
@@ -274,12 +257,8 @@ TEST_F(PointerHandSwitchTest, TheStatusCommandReportsTheCurrentPointerHand) {
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("Pointer Hand: left"), std::string::npos);
 }
 
-// ---- In a menu ----
-
 namespace {
 
-// The point on the menu panel a hand at the head's height aims at when its ray runs parallel to the
-// panel's normal: u across (left to right), v down (top to bottom).
 HeadPose AimAtPanel(float u, float v) {
     return HandAt((u - 0.5f) * 1.6f, 1.6f + (0.5f - v) * 0.9f, 0.0f);
 }
@@ -289,8 +268,6 @@ protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // A menu is showing and both hands are in use; the right hand is the Pointer Hand, aimed at the
-    // middle of the panel.
     void StartWithMenuOpenAndBothHandsInUse() {
         headset.SetHeadPose(HandAt(0.0f, 1.6f, 0.0f));
         headset.manager->PollHeadPose();
@@ -313,7 +290,7 @@ protected:
     int Count(const char* expression) { return std::stoi(EvalLua(L, expression)); }
 };
 
-} // namespace
+}
 
 TEST_F(PointerHandSwitchMenuTest, ASwitchingPullDoesNotClickInAMenuAndTheNextPullOnTheNewPointerHandDoes) {
     StartWithMenuOpenAndBothHandsInUse();

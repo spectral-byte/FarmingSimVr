@@ -110,11 +110,7 @@ public:
     XrResult EndFrame(XrSession, const XrFrameEndInfo*) override { return XR_SUCCESS; }
 };
 
-} // anonymous namespace
-
-// ---------------------------------------------------------------------------
-// ScopedEventHandle Tests
-// ---------------------------------------------------------------------------
+}
 
 TEST(ScopedEventHandleTest, ManagesHandleLifecycleAndClosesAutomatically) {
     HANDLE rawHandle = nullptr;
@@ -124,12 +120,9 @@ TEST(ScopedEventHandleTest, ManagesHandleLifecycleAndClosesAutomatically) {
         EXPECT_NE(eventHandle.Get(), nullptr);
         rawHandle = eventHandle.Get();
 
-        // Verify handle is a valid waitable object
         DWORD waitRes = WaitForSingleObject(rawHandle, 0);
         EXPECT_EQ(waitRes, WAIT_TIMEOUT);
     }
-    // After destruction, rawHandle must be closed.
-    // Calling WaitForSingleObject on closed handle returns WAIT_FAILED.
     DWORD waitAfter = WaitForSingleObject(rawHandle, 0);
     EXPECT_EQ(waitAfter, WAIT_FAILED);
 }
@@ -159,7 +152,6 @@ TEST(ScopedEventHandleTest, ResetAndCloseBehaveSafely) {
     EXPECT_FALSE(handle.IsValid());
     EXPECT_EQ(handle.Get(), nullptr);
 
-    // Double close should be a no-op
     handle.Close();
     EXPECT_FALSE(handle.IsValid());
 
@@ -169,28 +161,20 @@ TEST(ScopedEventHandleTest, ResetAndCloseBehaveSafely) {
     EXPECT_EQ(handle.Get(), newRaw);
 }
 
-// ---------------------------------------------------------------------------
-// OpenXrCursorOverlay Pixel Generation Tests
-// ---------------------------------------------------------------------------
-
 TEST(OpenXrCursorOverlayTest, GenerateCursorPixelsCreatesCorrectArrowPattern) {
     uint32_t width = 32;
     uint32_t height = 32;
     auto pixels = OpenXrCursorOverlay::GenerateCursorPixels(width, height);
     ASSERT_EQ(pixels.size(), width * height);
 
-    // Top-left pixel (0, 0) is the tip 'X' -> Black outline (0xFF000000)
     EXPECT_EQ(pixels[0], 0xFF000000);
 
-    // (1, 0) in row 0 is space ' ' -> Transparent (0x00000000)
     EXPECT_EQ(pixels[1], 0x00000000);
 
-    // Row 2 is "X.X" -> (0, 2) is 'X', (1, 2) is '.', (2, 2) is 'X'
     EXPECT_EQ(pixels[2 * width + 0], 0xFF000000);
-    EXPECT_EQ(pixels[2 * width + 1], 0xFFFFFFFF); // White interior
+    EXPECT_EQ(pixels[2 * width + 1], 0xFFFFFFFF);
     EXPECT_EQ(pixels[2 * width + 2], 0xFF000000);
 
-    // Bottom area is empty space
     EXPECT_EQ(pixels[31 * width + 31], 0x00000000);
 }
 
@@ -200,10 +184,8 @@ TEST(OpenXrCursorOverlayTest, GenerateCursorPixelsScalesToArbitraryResolution) {
     auto pixels = OpenXrCursorOverlay::GenerateCursorPixels(width, height);
     ASSERT_EQ(pixels.size(), width * height);
 
-    // (0, 0) must still be black outline
     EXPECT_EQ(pixels[0], 0xFF000000);
 
-    // White interior region should be present
     bool hasWhite = false;
     for (uint32_t p : pixels) {
         if (p == 0xFFFFFFFF) {
@@ -214,10 +196,6 @@ TEST(OpenXrCursorOverlayTest, GenerateCursorPixelsScalesToArbitraryResolution) {
     EXPECT_TRUE(hasWhite);
 }
 
-// ---------------------------------------------------------------------------
-// Cursor Quad Pose Calculation Tests
-// ---------------------------------------------------------------------------
-
 TEST(OpenXrCursorOverlayTest, ComputeCursorQuadPoseCalculatesCorrectOffset) {
     XrPosef menuPose{};
     menuPose.position = { 0.0f, 1.5f, -1.5f };
@@ -226,20 +204,17 @@ TEST(OpenXrCursorOverlayTest, ComputeCursorQuadPoseCalculatesCorrectOffset) {
     XrExtent2Df menuSize{ 1.6f, 0.9f };
     float cursorSize = 0.035f;
 
-    // Center cursor (0.5, 0.5)
     XrPosef center = OpenXrCursorOverlay::ComputeCursorQuadPose(menuPose, menuSize, 0.5f, 0.5f, cursorSize, cursorSize);
     EXPECT_NEAR(center.position.x, 0.0f + 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(center.position.y, 1.5f - 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(center.position.z, -1.5f + 0.002f, 0.001f);
     EXPECT_FLOAT_EQ(center.orientation.w, 1.0f);
 
-    // Top-left cursor (0.0, 0.0) -> tip at (-0.8, 1.95)
     XrPosef tl = OpenXrCursorOverlay::ComputeCursorQuadPose(menuPose, menuSize, 0.0f, 0.0f, cursorSize, cursorSize);
     EXPECT_NEAR(tl.position.x, -0.8f + 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(tl.position.y, 1.95f - 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(tl.position.z, -1.5f + 0.002f, 0.001f);
 
-    // Bottom-right cursor (1.0, 1.0) -> tip at (0.8, 1.05)
     XrPosef br = OpenXrCursorOverlay::ComputeCursorQuadPose(menuPose, menuSize, 1.0f, 1.0f, cursorSize, cursorSize);
     EXPECT_NEAR(br.position.x, 0.8f + 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(br.position.y, 1.05f - 0.5f * cursorSize, 0.001f);
@@ -260,10 +235,6 @@ TEST(OpenXrCursorOverlayTest, ComputeCursorQuadPoseRotatesWithMenuOrientation) {
     EXPECT_NEAR(cursorPose.orientation.w, menuPose.orientation.w, 0.001f);
     EXPECT_GT(cursorPose.position.x, menuPose.position.x);
 }
-
-// ---------------------------------------------------------------------------
-// Swapchain Lifecycle and Composition Layer Tests
-// ---------------------------------------------------------------------------
 
 TEST(OpenXrCursorOverlayTest, SwapchainCreationAndDestructionLifecycle) {
     auto mockDispatch = std::make_shared<MockCursorDispatch>();
@@ -330,12 +301,10 @@ TEST(OpenXrCursorOverlayTest, PrepareCompositionLayerReturnsFalseWhenHiddenOrNoS
     XrSpace mockLocalSpace = reinterpret_cast<XrSpace>(static_cast<uintptr_t>(0x1234));
     XrCompositionLayerQuad outCursorQuad{};
 
-    // Without swapchain created
     MenuCursorState visibleState{ true, 0.5f, 0.5f, MenuCursorState::kDefaultCursorSize };
     EXPECT_FALSE(overlay.PrepareCompositionLayer(menuQuad, visibleState, mockLocalSpace, outCursorQuad,
                                                  nullptr, nullptr, mockDispatch));
 
-    // With swapchain, but visible = false
     XrSession mockSession = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xBEEF));
     ASSERT_TRUE(overlay.CreateSwapchain(mockSession, mockDispatch, 64, 64));
 
@@ -345,4 +314,4 @@ TEST(OpenXrCursorOverlayTest, PrepareCompositionLayerReturnsFalseWhenHiddenOrNoS
     EXPECT_FALSE(overlay.HasLastSubmittedCursorQuadLayer());
 }
 
-} // namespace fs25vr
+}

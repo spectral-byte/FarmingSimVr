@@ -31,9 +31,6 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
     return pfn(std::forward<Args>(args)...);
 }
 
-// The proxy whose VR initialization is running on this thread. A runtime that creates a DXGI factory during setup
-// (VDXR's xrGetSystem does) does it on this thread. In the game, DxgiExportHooks passes such a call straight to
-// the system; a caller that reaches the proxy itself (tests do) calls back into EnsureVrInitialized.
 thread_local const DxgiProxy* t_initializingProxy = nullptr;
 
 std::string ModuleNameAt(const void* address) {
@@ -51,7 +48,6 @@ std::string ModuleNameAt(const void* address) {
     return narrow;
 }
 
-// "module+0xoffset" for each caller on this thread's stack, innermost first, skipping `skip` frames.
 std::string DescribeCallers(unsigned long skip, unsigned long maxFrames = 32) {
     void* frames[32] = {};
     const USHORT count = RtlCaptureStackBackTrace(
@@ -71,7 +67,6 @@ std::string DescribeCallers(unsigned long skip, unsigned long maxFrames = 32) {
     return ss.str();
 }
 
-// The proxy whose D3D11On12CreateDevice hook is installed.
 DxgiProxy* g_d3d11On12Owner = nullptr;
 using PFN_D3D11On12CreateDevice = HRESULT(WINAPI*)(IUnknown*, UINT, const D3D_FEATURE_LEVEL*, UINT, IUnknown* const*,
                                                    UINT, UINT, void**, void**, D3D_FEATURE_LEVEL*);
@@ -83,7 +78,6 @@ HMODULE ModuleOf(const void* address) {
     return module;
 }
 
-// The module that implements a COM object, from its vtable.
 HMODULE ImplementingModule(const void* object) {
     return object ? ModuleOf(*reinterpret_cast<void* const*>(object)) : nullptr;
 }
@@ -97,7 +91,6 @@ std::string DescribeObject(const void* object) {
 
 bool SameLuid(const LUID& a, const LUID& b) { return a.LowPart == b.LowPart && a.HighPart == b.HighPart; }
 
-// The adapter's description as DXGI gives it (asked through the system's own factory export), else its LUID.
 std::string DescribeAdapter(PFN_CreateDXGIFactory1 createFactory, const LUID& luid) {
     Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
     Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
@@ -123,9 +116,6 @@ bool SameAdapter(ID3D12Device* a, ID3D12Device* b) {
     return SameLuid(la, lb);
 }
 
-// The system's factory behind `factory` when `factory` is a wrapper whose methods are not the system's, as a
-// dxgi.dll in the game folder (ReShade's) hands out; null when `factory` is the system's own or none is found.
-// An adapter is the system's even when the factory is wrapped, and its parent is the system's factory.
 Microsoft::WRL::ComPtr<IDXGIFactory> SystemFactoryBehind(IDXGIFactory* factory) {
     void** vtable = *reinterpret_cast<void***>(factory);
     if (!vtable || IsInSystemDxgi(vtable[kCreateSwapChainVTableSlot])) return nullptr;
@@ -147,9 +137,6 @@ struct VrInitScope {
     VrInitScope& operator=(const VrInitScope&) = delete;
 };
 
-// The swapchain fields shared by both descriptor structs, in one log-friendly string. Flags are hex with
-// the bits worth reading off (tearing, frame-latency waitable object) named, so a log shows at a glance
-// whether the game's swapchain can present without vsync or paces itself on a waitable handle.
 std::string FormatSwapChainFields(UINT width, UINT height, DXGI_FORMAT format, UINT bufferCount,
                                   DXGI_SWAP_EFFECT swapEffect, UINT flags, UINT sampleCount) {
     const char* effect = "UNKNOWN";
@@ -196,7 +183,6 @@ std::string FormatSwapChainDesc1(const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_S
         case DXGI_SCALING_ASPECT_RATIO_STRETCH: scaling = "ASPECT_RATIO_STRETCH"; break;
         default: break;
     }
-    // No fullscreen descriptor means the swapchain is windowed.
     const bool windowed = !fullscreenDesc || fullscreenDesc->Windowed;
     return FormatSwapChainFields(desc->Width, desc->Height, desc->Format, desc->BufferCount, desc->SwapEffect,
                                  desc->Flags, desc->SampleDesc.Count) +
@@ -205,16 +191,16 @@ std::string FormatSwapChainDesc1(const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_S
         " windowed=" + (windowed ? "1" : "0");
 }
 
-} // anonymous namespace
+}
 
 bool IsHdrColorSpace(DXGI_COLOR_SPACE_TYPE colorSpace) {
     switch (colorSpace) {
-    case DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:          // scRGB
-    case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:       // HDR10
+    case DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:
+    case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
     case DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020:
     case DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020:
     case DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020:
-    case DXGI_COLOR_SPACE_YCBCR_STUDIO_GHLG_TOPLEFT_P2020: // HLG
+    case DXGI_COLOR_SPACE_YCBCR_STUDIO_GHLG_TOPLEFT_P2020:
     case DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020:
         return true;
     default:
@@ -250,15 +236,8 @@ DxgiProxy::~DxgiProxy() {
 }
 
 void DxgiProxy::EnsureVrInitialized() {
-    // Deferred from DllMain (loader lock). Runs before the game creates its D3D12 device.
-    // Installed on every factory call (idempotent and locked), not only the first, so a concurrent
-    // caller blocks until the LoadLibrary hooks exist instead of loading nvngx unhooked.
     if (m_ngxInterceptor) m_ngxInterceptor->InstallModuleLoadHooks();
-    // A runtime calling back in from inside our own initialization would wait on call_once forever;
-    // it gets its factory from the system dxgi.dll with the OpenXR state as initialization left it.
     if (t_initializingProxy == this) return;
-    // call_once, not a flag: a concurrent caller waits until initialization finishes, because it
-    // decides from the OpenXR state whether to hook the factory it is about to return.
     std::call_once(m_vrInitOnce, [this] {
         VrInitScope scope(this);
         if (m_ngxInterceptor) m_ngxInterceptor->CheckAndAttachLoadedModule();
@@ -270,8 +249,6 @@ void DxgiProxy::EnsureVrInitialized() {
             if (m_openXrManager->IsPassThrough()) {
                 LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
             } else if (m_openXrManager->IsActive()) {
-                // No session yet: the game has no D3D12 device to bind one to until it creates its
-                // swap chain, and SetD3D12DeviceAndQueue creates the session then.
                 LogInfo("Injector operating in Active VR Mode.");
             }
         }
@@ -287,15 +264,11 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
     m_d3d12Device = device;
     m_d3d12Queue = queue;
     if (device && queue) {
-        // A device or queue whose vtable is outside D3D12Core.dll is a wrapper (ReShade's are in its dxgi.dll).
         std::ostringstream ss;
         ss << "DxgiProxy: D3D12 device " << static_cast<const void*>(device) << " (vtable in "
            << ModuleNameAt(*reinterpret_cast<void* const*>(device)) << "), queue " << static_cast<const void*>(queue)
            << " (vtable in " << ModuleNameAt(*reinterpret_cast<void* const*>(queue)) << ").";
         LogInfo(ss.str());
-        // SteamVR draws quad layers through a D3D11On12 device it creates during Present. With ReShade it passes
-        // ReShade's wrapped device and queue, which ReShade passes on unwrapped while inside Present, and D3D11On12 on
-        // wrapped D3D12 objects gets the device removed (DXGI_ERROR_INVALID_CALL). The hook hands it the real ones.
         if (m_ownedByRuntime && !m_detourD3D11On12CreateDevice.IsInstalled()) {
             HMODULE d3d11 = LoadLibraryExW(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
             void* target = d3d11 ? reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11On12CreateDevice")) : nullptr;
@@ -311,8 +284,6 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
     }
     if (m_openXrManager && device && queue) {
         if (m_openXrManager->IsActive() && !m_openXrManager->HasSession()) {
-            // The session is attempted next. A runtime bound to another GPU refuses the game's device; the attempt is
-            // still made, as the runtime decides, but the log says why VR may not start.
             const LUID required = m_openXrManager->GetRuntimeInfo().adapterLuid;
             const LUID game = device->GetAdapterLuid();
             if (!SameLuid(required, game)) {
@@ -330,13 +301,11 @@ std::string DxgiProxy::UnwrapForD3D11On12(IUnknown*& device, IUnknown** queues, 
     std::ostringstream ss;
     ss << "device " << DescribeObject(device);
     ID3D12Device* realDevice = m_d3d12Device.Get();
-    // A wrapper's methods live in another module than the real object's (ReShade's in its dxgi.dll).
     const HMODULE realModule = ImplementingModule(realDevice);
     Microsoft::WRL::ComPtr<ID3D12Device> passedDevice;
     if (realDevice && device && SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&passedDevice))) &&
         passedDevice.Get() != realDevice && ImplementingModule(passedDevice.Get()) != realModule &&
         SameAdapter(passedDevice.Get(), realDevice)) {
-        // D3D12 keeps one device per adapter, so a device wrapper on the game's adapter wraps the game's device.
         device = realDevice;
         ss << " -> real " << DescribeObject(realDevice);
     }
@@ -349,7 +318,6 @@ std::string DxgiProxy::UnwrapForD3D11On12(IUnknown*& device, IUnknown** queues, 
             passedQueue.Get() != realQueue && ImplementingModule(passedQueue.Get()) != ImplementingModule(realQueue) &&
             passedQueue->GetDesc().Type == realQueue->GetDesc().Type &&
             SUCCEEDED(passedQueue->GetDevice(IID_PPV_ARGS(&queueDevice))) && SameAdapter(queueDevice.Get(), realDevice)) {
-            // The game makes one queue of each type, so a wrapper of the swap chain queue's type wraps that queue.
             queues[i] = realQueue;
             ss << " -> real " << DescribeObject(realQueue);
         }
@@ -387,12 +355,10 @@ bool DxgiProxy::ExtractD3D12DeviceAndQueue(
         return false;
     }
 
-    // 1. Check if source is directly an ID3D12CommandQueue
     if (!outQueue) {
         source->QueryInterface(IID_PPV_ARGS(&outQueue));
     }
 
-    // 2. Check if source is an IDXGISwapChain
     if (!outQueue || !outDevice) {
         Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain;
         if (SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(&swapChain)))) {
@@ -405,12 +371,10 @@ bool DxgiProxy::ExtractD3D12DeviceAndQueue(
         }
     }
 
-    // 3. Check if source is directly an ID3D12Device
     if (!outDevice) {
         source->QueryInterface(IID_PPV_ARGS(&outDevice));
     }
 
-    // 4. If queue is present but device is still null, query device from queue
     if (outQueue && !outDevice) {
         outQueue->GetDevice(IID_PPV_ARGS(&outDevice));
     }
@@ -433,8 +397,6 @@ bool DxgiProxy::ResolveD3D12DeviceAndQueue(IUnknown* source) {
 }
 
 bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
-    // The game may have installed a crash filter of its own since the first factory call (a no-op unless the Injector
-    // installed its crash reporter).
     ReinstallCrashReporter();
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         return false;
@@ -452,12 +414,6 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
     } else if (gameHwnd && !m_windowController->IsWindowSubclassed() && m_openXrManager && m_openXrManager->IsActive()) {
         m_windowController->AttachWindowSubclass(gameHwnd);
     }
-    // Recorded after the inactive check on purpose: Pass-Through is final. Initialize runs once, before the game has a
-    // swap chain, and an Active session that is lost only ever falls back to Pass-Through; nothing makes the manager
-    // Active again. So a swap chain created while inactive can never become the one to act on, and leaving it
-    // unrecorded keeps every hook passing straight through, which is what Pass-Through means. (A replaced swap chain
-    // stays recorded until the next attach, and a new one at a recycled address would be taken for it: both narrow
-    // and harmless, as the old chain was the game's.)
     m_gameSwapChain = swapChain;
     if (m_swapChainAttached) return true;
     if (!m_ownedByRuntime) {
@@ -548,9 +504,6 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
         return false;
     }
 
-    // Hooking a wrapper's methods would put the swap chain hooks outside it: the eye copy would run before what the
-    // wrapper draws on Present (ReShade's effects), and the swap chain and queue seen would be its wrappers.
-    // The system's factory inside it is hooked instead, so whatever wraps DXGI runs first.
     Microsoft::WRL::ComPtr<IDXGIFactory> systemFactory = SystemFactoryBehind(factory);
     if (systemFactory) {
         LogInfo("DxgiProxy: The DXGI factory is a wrapper from " +
@@ -585,7 +538,6 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
     } else {
         LogInfo("DxgiProxy: Successfully attached factory swap chain creation detours.");
     }
-    // The game asks the display whether it is HDR before it creates its swap chain.
     AttachFirstOutput(factory);
     return m_factoryAttached;
 }
@@ -594,7 +546,6 @@ void DxgiProxy::AttachFirstOutput(IDXGIFactory* factory) {
     if (m_outputAttached || !m_ownedByRuntime) return;
     Microsoft::WRL::ComPtr<IDXGIFactory1> factory1;
     if (FAILED(factory->QueryInterface(IID_PPV_ARGS(&factory1)))) return;
-    // An adapter with no display (a render-only GPU) has no outputs, so look past it.
     for (UINT a = 0; a < 16 && !m_outputAttached; ++a) {
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
         if (FAILED(factory1->EnumAdapters1(a, &adapter)) || !adapter) break;
@@ -658,10 +609,6 @@ void DxgiProxy::ReleaseCachedBackBuffers() {
 }
 
 bool DxgiProxy::IsForGameWindow(HWND window) const {
-    // The game's window is first learnt from the first swap chain created through the hooked factory (the creation
-    // hooks, AttachSwapChain and the per-frame mouse update, which sees only the game's Present, are the only places
-    // that set it), so until then the first creation is taken as the game's, as before #264. An overlay creating its
-    // swap chain ahead of the game's would be taken for it: there is no earlier, sound source to tell them apart.
     const HWND gameWindow = m_windowController->GetGameHwnd();
     if (!window || !gameWindow) return true;
     const HWND root = GetAncestor(window, GA_ROOT);
@@ -670,11 +617,9 @@ bool DxgiProxy::IsForGameWindow(HWND window) const {
 
 bool DxgiProxy::PrepareGameSwapChainCreation(const char* hookName, HWND window) {
     if (!IsForGameWindow(window)) {
-        // Not the game's window: its swap chain is never the game's, so it gets none of the game's treatment.
         LogInfo(std::string("DxgiProxy: ") + hookName + " for a window other than the game's; passed on as requested.");
         return false;
     }
-    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
     ReleaseCachedBackBuffers();
     return true;
 }
@@ -696,10 +641,6 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT fla
     }
     PerfTrace::Instance().MarkFrame(m_presentWasStereo,
                                     m_vrBridge && m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
-    // The rendered-frame counter stamps the Companion Mod's camera records and resolves them for DLSS
-    // evaluations. It advances per stereo Present only; a Present outside stereo presentation (menu,
-    // 2D Floating Window Mode, Pass-Through) renders no eye camera, so its records are dropped
-    // rather than left to read as the current frame's.
     if (m_vrBridge) {
         if (m_presentWasStereo) {
             m_vrBridge->GetCameraRecords().AdvanceFrame();
@@ -710,11 +651,9 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT fla
     return shouldPresent;
 }
 
-bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
+bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT, UINT) {
     FS25VR_TRACE_THREAD("DxgiProxy.Present");
 
-    // Decide first, then act: the facts of this Present, the plan they give, and the plan carried out. The back buffer
-    // is held here until the Present is done, whether or not the cache holds it too.
     Microsoft::WRL::ComPtr<ID3D12Resource> backBufferHolder;
     ID3D12Resource* pBackBuffer = nullptr;
     PresentFacts facts = GatherPresentFacts(swapChain, backBufferHolder, pBackBuffer);
@@ -730,15 +669,11 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
     facts.mirrorWasShowing = m_desktopMirrorWasShowing;
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
-        // Not Active: no eye pair can be in flight, so a queued mode change must not be lost.
         return facts;
     }
 
-    // Poll runtime events before deciding how to present; this may begin/end the session or
-    // drop the Injector into Pass-Through Mode (EXITING, LOSS_PENDING, instance loss).
     m_openXrManager->PollEvents();
     if (!m_openXrManager->IsActive()) {
-        // Dropped to Pass-Through after a mode was queued; the released eye pair is abandoned.
         return facts;
     }
     facts.active = true;
@@ -754,12 +689,10 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
     }
 
     if (swapChain) {
-        // Ensure D3D12 device and command queue via consolidated helper
         if (!m_d3d12Queue || !m_d3d12Device) {
             ResolveD3D12DeviceAndQueue(swapChain);
         }
 
-        // Ensure OpenXR eye swapchains exist matching the game backbuffer dimensions
         if (!m_openXrManager->HasEyeSwapchains()) {
             DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
             uint32_t bufferWidth = 0;
@@ -773,7 +706,6 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
                 bufferHeight = desc.BufferDesc.Height;
             }
 
-            // Always verify against actual backbuffer resource description if available
             Microsoft::WRL::ComPtr<ID3D12Resource> testBuffer;
             if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&testBuffer))) && testBuffer) {
                 D3D12_RESOURCE_DESC resDesc = testBuffer->GetDesc();
@@ -786,8 +718,6 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
                 }
             }
 
-            // Create eye swapchains matching the backbuffer resolution for direct zero-overhead D3D12 copy.
-            // If dimensions are unavailable (0), CreateEyeSwapchains will query runtime recommended views as fallback.
             m_openXrManager->CreateEyeSwapchains(bufferWidth, bufferHeight, format);
         }
 
@@ -831,7 +761,6 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
 bool DxgiProxy::CarryOutPresentPlan(IDXGISwapChain* swapChain, ID3D12Resource* backBuffer, PresentFacts facts,
                                     PresentPlan plan) {
     if (plan.resetPacing && m_vrBridge) {
-        // A fresh eye pair: back to the left eye / Sub-Pass 0.
         m_vrBridge->SetFrameParity(0);
         m_vrBridge->ResetSubPass();
     }
@@ -854,16 +783,9 @@ bool DxgiProxy::CarryOutPresentPlan(IDXGISwapChain* swapChain, ID3D12Resource* b
         if (!m_openXrManager->HasCursorSwapchain()) {
             m_openXrManager->CreateCursorSwapchain();
         }
-        // Mouse Confinement first: when it starts holding it brings the Desk Mouse to the middle of
-        // the picture, and this frame's drawn cursor reads where the Desk Mouse is.
         UpdateMouseConfinement();
         m_windowController->UpdateMenuCursorState(swapChain, m_openXrManager.get());
 
-        // Floating quad layer mode:
-        // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
-        // rather than warping across an immersive projection layer.
-        // Active during pre-game / Main Menu, in-game GUI menus (ESC pause menu, shop, etc.),
-        // or in 2D Floating Window Mode.
         m_openXrManager->SubmitMenuQuad();
     } else if (plan.submit == EyeSubmission::FramePair) {
         m_openXrManager->SubmitFramePair();
@@ -881,21 +803,16 @@ bool DxgiProxy::CarryOutPresentPlan(IDXGISwapChain* swapChain, ID3D12Resource* b
         LatchPendingRenderingMode();
     }
 
-    // Whether the Desktop Mirror Window is off is the one fact a step above can change (a submission that finds the
-    // session lost drops the Injector to Pass-Through Mode), so it is asked again, and only the tail of the plan follows.
     const bool mirrorOffNow = IsDesktopMirrorOffNow();
     if (mirrorOffNow != facts.desktopMirrorOff) {
         facts.desktopMirrorOff = mirrorOffNow;
         plan = PlanPresent(facts);
     }
 
-    // Called after this frame's eye copy, so the headset has the game's frame; only the Desktop Mirror Window gets the
-    // black one. A null back buffer (unit tests) leaves nothing to clear.
     if (plan.clearBackBufferToBlack && m_openXrManager) {
         m_openXrManager->ClearBackBufferToBlack(backBuffer);
     }
 
-    // The bookkeeping every Present ends with, whichever case it was.
     m_presentWasStereo = plan.presentWasStereo;
     if (plan.inQuadModeAfter) {
         m_wasInQuadMode = *plan.inQuadModeAfter;
@@ -936,8 +853,6 @@ bool DxgiProxy::IsDesktopMirrorOffNow() const {
 void DxgiProxy::UpdateDesktopMirrorTitle() {
     const bool off = IsDesktopMirrorOffNow();
     if (off) {
-        // The transition is logged once. The title is applied whenever it is not shown, because it can be
-        // missing while the mirror stays off: the game window may be unknown yet, or may have changed.
         if (!m_desktopMirrorOffAnnounced) {
             m_desktopMirrorOffAnnounced = true;
             LogInfo("DxgiProxy: Desktop mirror off; window title says so until it shows again.");
@@ -950,7 +865,6 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
     if (!m_desktopMirrorOffAnnounced) return;
     m_desktopMirrorOffAnnounced = false;
 
-    // The handshake and Pass-Through checks come first: a savegame unload also resets the flag to on.
     const char* reason = "by command (vrDesktopMirror on)";
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         reason = "by itself (Pass-Through Mode)";
@@ -968,11 +882,6 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
 void DxgiProxy::UpdateMouseConfinement() {
     if (!m_windowController) return;
     using State = MirrorWindowController::MouseConfinementState;
-    // The Injector is inert in Pass-Through Mode; "session running" is the one that decides whether the
-    // Desktop Mirror Window shows by itself (a running session that is not focused still counts).
-    // The vrMouseConfinement setting only counts once a savegame has loaded (the Companion Mod's handshake):
-    // before that, in the main menu, it always holds. It is tested before the focus so that a setting turned
-    // off while the game window is not in front is the reason that is logged when it is turned on again.
     State state = State::Holding;
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         state = State::PassThroughMode;
@@ -988,25 +897,20 @@ void DxgiProxy::UpdateMouseConfinement() {
 }
 
 void DxgiProxy::OnPresentReturned(HRESULT presentResult) {
-    // A failed Present (device removed or reset) leaves the next frame to the lazy begin in
-    // CopyBackBufferToEye rather than blocking in xrWaitFrame ahead of device-lost handling.
     if (FAILED(presentResult)) return;
     if (m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
         m_openXrManager->HasEyeSwapchains()) {
-        m_openXrManager->BeginFrame();  // returns at once when a frame is already begun
+        m_openXrManager->BeginFrame();
     }
 }
 
 UINT DxgiProxy::EffectiveSyncInterval(UINT gameSyncInterval) const {
-    // xrWaitFrame paces frames only while the session runs and eye swapchains exist (OnPresent calls it
-    // only then). While it is paused (headset asleep, not yet READY) or swapchain creation failed, keep
-    // the game's own vsync so the Desktop Mirror Window does not run uncapped.
     bool xrPacing = m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
                     m_openXrManager->HasEyeSwapchains();
     return xrPacing ? 0 : gameSyncInterval;
 }
 
-bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* /*params*/) {
+bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS*) {
     return OnPresent(swapChain, syncInterval, flags);
 }
 
@@ -1014,7 +918,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent);
     if (!proxy) return S_OK;
     if (!proxy->IsGameSwapChain(self)) {
-        // Another swap chain in the process (an overlay, a capture tool): DXGI sees the call as its caller made it.
         auto passThrough = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
             proxy->m_detourPresent.GetOriginal());
         return passThrough ? passThrough(self, syncInterval, flags) : S_OK;
@@ -1081,7 +984,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers);
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    // Another swap chain keeps the size it asked for and leaves the game's cached back buffers alone.
     if (proxy && proxy->IsGameSwapChain(self)) {
         PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight);
     }
@@ -1188,7 +1090,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
         LogInfo("DxgiProxy: CreateSwapChain requested: " + FormatSwapChainDesc(*pDesc));
     }
     if (pDesc && proxy->IsActive()) {
-        // Before any override below: an unusable format must leave the swap chain untouched.
         proxy->m_openXrManager->EnsureBackBufferFormatSupported(pDesc->BufferDesc.Format);
     }
     if (pDesc && proxy->IsActive()) {
@@ -1231,11 +1132,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
     if (pDesc) {
-        // Before the overrides below, which also write through to the caller's descriptors.
         LogInfo("DxgiProxy: CreateSwapChainForHwnd requested: " + FormatSwapChainDesc1(pDesc, pFullscreenDesc));
     }
     if (pDesc && proxy->IsActive()) {
-        // Before any override below: an unusable format must leave the swap chain untouched.
         proxy->m_openXrManager->EnsureBackBufferFormatSupported(pDesc->Format);
     }
     if (pDesc && proxy->IsActive()) {
@@ -1312,4 +1211,4 @@ HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory)
     return hr;
 }
 
-} // namespace fs25vr
+}

@@ -1,8 +1,3 @@
-// The map-load HUD alert (ticket #283, spec #280): with the alert on, a map load shows a blinking warning that names the HUD state
-// the HUD applied (Hidden, Streamlined or Full) and no key, in the game's language (English or German), English where the game
-// has no text for the key. Seen from outside: the shipped Companion Mod is loaded in modDesc order, the settings file is a table
-// of saved values, the game's texts are a stub g_i18n, and the test asserts what the game was asked to show.
-
 #include "companion_mod_fixture.h"
 #include <string>
 #include <tuple>
@@ -10,7 +5,6 @@
 
 namespace {
 
-// The settings file as a table of saved values (`saved`), the mission recording the blinking warnings it is asked to show.
 const char* kEngineStubs = R"luau(
     _G.saved = {}
     _G.createFolder = function() return true end
@@ -31,7 +25,6 @@ const char* kEngineStubs = R"luau(
     }
 )luau";
 
-// The game's texts in one language, as the game's I18N has them: hasText, and getText reading "Missing ..." for a missing key.
 std::string I18nStub(const std::string& texts) {
     return "local texts = { " + texts + R"luau( }
         _G.g_i18n = {
@@ -66,7 +59,6 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, I18nStub(texts).c_str(), "=i18n"), 0);
     }
 
-    // A map load with this HUD state saved and the alert switched on in the settings file.
     void LoadMapWithSavedHudState(const std::string& state) {
         const std::string chunk = "saved['vrSettings.showHudLoadNotification'] = true\n"
                                   "saved['vrSettings.hudState'] = '" + state + "'\n"
@@ -98,7 +90,7 @@ protected:
     fs25vr::VRBridge bridge_{nullptr, nullptr};
 };
 
-}  // namespace
+}
 
 TEST_F(HudLoadAlertTest, TheAlertNamesTheSavedHudStateTheHudApplied) {
     ASSERT_NO_FATAL_FAILURE(UseGameTexts(kEnglishTexts));

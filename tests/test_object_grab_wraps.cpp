@@ -1,9 +1,3 @@
-// Object Grab, the wrapped game functions and the saved setting (ADR-0033, spec #156), seen from outside: the real Companion Mod runs
-// against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (the game's empty hands in
-// object_grab_test_support.h, in the "game versions" the stub can be in). A function the wraps expect that is missing or has another
-// shape turns Object Grab off with ONE warning and leaves Hand Tools alone, and Hand Tools giving up leaves Object Grab aiming. Prior
-// art: test_hand_tools_look_ray.cpp (give-up and unload of the look ray wrap) and test_wheel_grab_steering_wrap.cpp.
-
 #include "object_grab_test_support.h"
 #include <string>
 
@@ -14,7 +8,7 @@ using namespace object_grab_test;
 
 constexpr float kHandX = 0.4f, kHandY = -0.2f, kHandZ = -0.3f;
 
-}  // namespace
+}
 
 #define OBJECT_GRAB_START_WITH(startOptions, handsVariant) \
     FakeTrackedHeadset headset; \
@@ -22,8 +16,6 @@ constexpr float kHandX = 0.4f, kHandY = -0.2f, kHandZ = -0.3f;
     fs25vr::VRBridge bridge(headset.manager, nullptr); \
     ASSERT_NO_FATAL_FAILURE(StartObjectGrabMod(L, bridge, (startOptions), (handsVariant))); \
     SetGameTime(10000)
-
-// ---- Giving up ----------------------------------------------------------------------------------------------------------------
 
 TEST_F(CompanionModTest, AHandsToolFunctionThatIsMissingOrReshapedTurnsObjectGrabOffWithOneWarningAndTheGamesDrawComesBack) {
     for (const char* variant : { "drawMissing", "drawReshaped", "canPickUpReshaped" }) {
@@ -80,7 +72,6 @@ TEST_F(CompanionModTest, ObjectGrabGivingUpLeavesHandToolsWrappedAndInTheToolHan
 }
 
 TEST_F(CompanionModTest, HandToolsGivingUpLeavesTheHandAimingTheEmptyHands) {
-    // A spray can whose draw is reshaped: Hand Tools give up at map load, with their own warning.
     const std::string sprayCan = SprayCanStubs("reshaped");
     StartOptions options;
     options.extraStubs = sprayCan.c_str();
@@ -95,8 +86,6 @@ TEST_F(CompanionModTest, HandToolsGivingUpLeavesTheHandAimingTheEmptyHands) {
         << "Hand Tools say they gave the wrap up";
 }
 
-// ---- Unloading the map -----------------------------------------------------------------------------------------------------
-
 TEST_F(CompanionModTest, UnloadingTheMapGivesTheLookRayAndTheHandsDrawBackToTheGame) {
     OBJECT_GRAB_START_WITH(StartOptions(), "ok");
     ASSERT_EQ(EvalLua(L, "tostring(Player.getLookRay == StubHandTool.originalGetLookRay)"), "false") << "wrapped while the map is loaded";
@@ -106,8 +95,6 @@ TEST_F(CompanionModTest, UnloadingTheMapGivesTheLookRayAndTheHandsDrawBackToTheG
     EXPECT_EQ(EvalLua(L, "tostring(Player.getLookRay == StubHandTool.originalGetLookRay)"), "true");
     EXPECT_EQ(EvalLua(L, "tostring(HandToolHands.onDraw == StubHandTool.originalHandsOnDraw)"), "true");
 }
-
-// ---- The setting and its status phrase -------------------------------------------------------------------------------------
 
 TEST_F(CompanionModTest, VrObjectGrabReportsItsStatusAndTakesOnOrOffAndNothingElse) {
     OBJECT_GRAB_START_WITH(StartOptions(), "ok");
@@ -132,7 +119,6 @@ TEST_F(CompanionModTest, VrObjectGrabIsSavedAcrossSessions) {
     }
     ASSERT_EQ(saved, "false") << "the setting is written to the settings file";
 
-    // A fresh game session reads it back.
     lua_close(L);
     L = luaL_newstate();
     luaL_openlibs(L);

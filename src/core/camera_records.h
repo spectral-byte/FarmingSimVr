@@ -8,9 +8,6 @@
 
 namespace fs25vr {
 
-// The camera the engine rendered one stereo sub-pass with, as the Companion Mod reports it after
-// binding the eye camera. World transform in double precision (map coordinates reach millions of
-// metres), orientation as a unit quaternion (x, y, z, w).
 struct CameraRecord {
     uint32_t eye = 0;
     uint64_t frame = 0; // rendered-frame stamp, assigned by CameraRecordStore::Report
@@ -23,9 +20,6 @@ struct CameraRecord {
     float projOffsetY = 0.0f;
 };
 
-// Another camera's transform relative to a reference ("current") camera, computed in double
-// precision: translation is the other camera's position expressed in the reference camera's axes,
-// rotation is conj(reference) * other.
 struct RelativeCamera {
     double translation[3] = {0.0, 0.0, 0.0};
     double rotation[4] = {0.0, 0.0, 0.0, 1.0};
@@ -35,8 +29,6 @@ struct RelativeCamera {
 
 RelativeCamera ComputeRelativeCamera(const CameraRecord& reference, const CameraRecord& other);
 
-// The cameras a DLSS evaluation needs. A record that was not reported for the right frame is absent;
-// relative transforms exist only when the current camera and the other record both do.
 struct ResolvedCameras {
     uint32_t eye = 0;
     uint64_t frame = 0;
@@ -47,30 +39,18 @@ struct ResolvedCameras {
     std::optional<RelativeCamera> sameEyeRelative;
 };
 
-// One-line text for the vrDlssDiag trace: which records resolved, and the relative translation and
-// rotation, or which are missing.
 std::string DescribeResolvedCameras(const ResolvedCameras& resolved);
 
-// A short ring of camera records stamped with a rendered-frame counter. The Companion Mod reports
-// (Luau thread), the DXGI proxy advances the counter once per Present in stereo presentation, and
-// the NGX hook resolves (render thread), so access is serialised.
 class CameraRecordStore {
 public:
     static constexpr uint32_t kEyeCount = 2;
     static constexpr size_t kCapacity = 8;
-    // The oldest frame distance at which a record still counts as the same eye's previous camera: the
-    // eyes alternate every frame, so an eye renders two frames after its previous render.
     static constexpr uint64_t kMaxSameEyeFrameGap = 2;
 
-    // Stamps the record with the current rendered frame and keeps it. Returns false (and keeps
-    // nothing) for an unknown eye or a non-finite or zero-length orientation. The same eye reported
-    // twice in one frame keeps the latest.
     bool Report(CameraRecord record);
 
     uint64_t GetFrame() const;
     uint64_t AdvanceFrame();
-    // Drops every record: frames outside stereo presentation report none, and the counter does not
-    // advance there, so without this their records would read as the current frame's.
     void Clear();
 
     ResolvedCameras Resolve(uint32_t eye) const;
@@ -83,4 +63,4 @@ private:
     size_t m_next = 0;
 };
 
-} // namespace fs25vr
+}

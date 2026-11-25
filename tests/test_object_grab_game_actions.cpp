@@ -1,11 +1,3 @@
-// Object Grab, the game's own actions while a Held Object is carried (ADR-0033, spec #156, ticket #162), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (the game's empty hands and
-// loose objects in object_grab_test_support.h; the rotate and level actions, and the joint that makes the object follow the rotation node,
-// are stubbed here after the game's source, HandToolHands:rotateHeldItem and :levelHeldItem). The game's rotate and level actions turn the
-// rotation node; a test fires them and asserts where the rotation node is, in the world and relative to the Virtual Hand (the hand the
-// player sees), after the next game frames and hand moves. The game's own pick-up button keeps the game's carry, and the game's own
-// throw and drop end it. Prior art: test_object_grab_carry.cpp.
-
 #include "object_grab_test_support.h"
 #include <string>
 
@@ -17,8 +9,6 @@ using namespace object_grab_test;
 constexpr float kHandX = 0.4f, kHandY = -0.2f, kHandZ = -0.3f;
 constexpr const char* kBaleAhead = "_G.bale = StubHandTool.looseObject(-0.4, -0.2, 1.5, 0.05, { name = 'bale' })";
 
-// Lua helpers: the poses of the nodes in the frame of the right Virtual Hand (as test_object_grab_carry.cpp), and the game's rotate and
-// level actions as the game's source has them.
 constexpr const char* kActionHelpers = R"luau(
     local function qmul(ax, ay, az, aw, bx, by, bz, bw)
         return aw * bx + ax * bw + ay * bz - az * by,
@@ -95,7 +85,6 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, kBaleAhead, "=bale"), 0);
         POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     }
-    // The right hand pointing at the bale and squeezing: the bale is its Held Object. restOffset is the bale's pose in the hand's frame.
     void StartCarrying() {
         ASSERT_NO_FATAL_FAILURE(StartWithHelpers());
         ASSERT_EQ(RunLuauChunk(L, "_G.restOffset = relativePose(bale.node)", "=restOffset"), 0);
@@ -112,9 +101,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Rotate -------------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadObjectGrabGameActionsTest, ARotateActionTurnsTheHeldObjectOnTopOfTheWristAndTheTurnSurvivesLaterHandMoves) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
@@ -122,7 +109,6 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, ARotateActionTurnsTheHeldObjectO
     FRAMES(3);
     ASSERT_TRUE(Same("rotationNode()", "restOffset")) << "carried as before";
 
-    // The game's yaw action turns the rotation node 0.8 rad about the vertical, from where the wrist holds it.
     ASSERT_EQ(RunLuauChunk(L, R"(
         local qx, qy, qz, qw = getWorldQuaternion(rotationNode())
         local s, c = math.sin(0.4), math.cos(0.4)  -- 0.8 rad about the vertical, applied on the left: world yaw
@@ -134,7 +120,6 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, ARotateActionTurnsTheHeldObjectO
     EXPECT_FALSE(Same("rotationNode()", "restOffset")) << "it is turned relative to the hand";
     ASSERT_EQ(RunLuauChunk(L, "_G.turned = relativePose(rotationNode())", "=turned"), 0);
 
-    // The hand moves and turns: the object keeps the turn it has been given in the hand.
     headset.SetHandPointing(kRight, HandAt(-0.2f, -0.3f, -0.1f, -0.9f, -1.2f));
     FRAMES(3);
     EXPECT_TRUE(Same("rotationNode()", "turned")) << Pose("rotationNode()") << " vs " << EvalLua(L, "poseText(turned)");
@@ -142,7 +127,6 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, ARotateActionTurnsTheHeldObjectO
     FRAMES(3);
     EXPECT_TRUE(Same("rotationNode()", "turned")) << Pose("rotationNode()") << " vs " << EvalLua(L, "poseText(turned)");
 
-    // The pitch action turns it further, again on top of the first turn.
     ASSERT_EQ(RunLuauChunk(L, "gameRotates(0.5, 1, 0, 0)", "=pitchAction"), 0);
     FRAMES(1);
     EXPECT_FALSE(Same("rotationNode()", "turned"));
@@ -183,16 +167,14 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, ATurnMadeWhileTheHandIsNotTracke
     EXPECT_TRUE(SameWorldRotation("rotationNode()", "expectedTurn")) << "the nodes stay as they are, turned";
     EXPECT_EQ(Drops(), 0);
 
-    headset.SetHandPointing(kRight, HandAt(0.1f, 0.2f, -0.5f, 0.6f, 0.7f));  // tracked again, where it was
+    headset.SetHandPointing(kRight, HandAt(0.1f, 0.2f, -0.5f, 0.6f, 0.7f));
     FRAMES(3);
     EXPECT_TRUE(SameWorldRotation("rotationNode()", "expectedTurn")) << "and the turn is not lost when the hand is back";
 }
 
-// ---- Level --------------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadObjectGrabGameActionsTest, TheLevelActionSquaresTheObjectKeepsItsHeadingAndTheSquaringSurvivesHandMoves) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
-    headset.SetHandPointing(kRight, HandAt(0.1f, 0.2f, -0.5f, 0.9f, 0.4f));  // the wrist pitched well up: the object tilts with it
+    headset.SetHandPointing(kRight, HandAt(0.1f, 0.2f, -0.5f, 0.9f, 0.4f));
     FRAMES(3);
     ASSERT_LT(Number(L, "up(rotationNode())[2]"), 0.9) << "tilted";
     ASSERT_EQ(RunLuauChunk(L, "_G.headingBefore = heading(rotationNode()); gameLevels()", "=levelAction"), 0);
@@ -202,14 +184,11 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, TheLevelActionSquaresTheObjectKe
         << "its heading is what it was: " << EvalLua(L, "tostring(heading(rotationNode()))") << " vs " << EvalLua(L, "tostring(headingBefore)");
     EXPECT_GT(Number(L, "up(kinematicNode())[2]"), 0.9999);
 
-    // The squaring is kept in the hand, as any turn is: the heading follows the wrist.
     ASSERT_EQ(RunLuauChunk(L, "_G.leveled = relativePose(rotationNode())", "=leveled"), 0);
     headset.SetHandPointing(kRight, HandAt(-0.2f, -0.3f, -0.1f, -0.9f, -1.2f));
     FRAMES(3);
     EXPECT_TRUE(Same("rotationNode()", "leveled")) << Pose("rotationNode()") << " vs " << EvalLua(L, "poseText(leveled)");
 }
-
-// ---- The game's own pick-up button ----------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabGameActionsTest, APickUpWithTheGamesButtonStaysLevelAtItsDistanceAlongTheHandsRayAndIsNotMovedByTheGripPlacement) {
     ASSERT_NO_FATAL_FAILURE(StartWithHelpers());
@@ -218,7 +197,7 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, APickUpWithTheGamesButtonStaysLe
     FRAMES(3);
     ASSERT_EQ(RunLuauChunk(L, "_G.kinematicBefore = worldPosition(kinematicNode())", "=remember"), 0);
 
-    headset.SetHandPointing(kRight, HandAt(0.1f, 0.2f, -0.5f, 0.6f, 0.7f));  // pitched up and yawed
+    headset.SetHandPointing(kRight, HandAt(0.1f, 0.2f, -0.5f, 0.6f, 0.7f));
     FRAMES(3);
     EXPECT_GT(Number(L, "dist(worldPosition(kinematicNode()), kinematicBefore)"), 0.1) << "it follows the hand";
     EXPECT_LT(Number(L, "holdError()"), 1e-3) << "at the distance it was picked up from, along the look ray, which is the hand's";
@@ -242,7 +221,6 @@ TEST_F(VirtualGamepadObjectGrabGameActionsTest, TheGamesOwnThrowAndDropButtonsEn
     EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode)"), "nil");
     EXPECT_EQ(Drops(), 0);
 
-    // Picked up again with the button, and put down with the game's drop.
     Squeeze(kRight, 0.0f);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressPickUp(hands)", "=gamesButtonAgain"), 0);

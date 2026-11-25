@@ -1,15 +1,3 @@
-// Hand Tools, the fishing rod (ADR-0031), seen from outside: the real Companion Mod runs against the real VRBridge over
-// FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot, and the Highlands
-// Fishing DLC's rod, hand_tool_fishing_rod.luau, shaped after the #125 probe dump: a specialization class with no global name, its
-// handlers on the class only, a state machine recognised by the keys of spec.state). A test moves the fake Motion Controllers and
-// the game clock, drives frames the way the game would and asserts what the player or the game would see: where the rod is, the
-// ray the targeter cast, the calls the rod's handlers received and what the rod did with them (its state, its casts), what XInput
-// answers for the Tool Hand's trigger, what the game's draw rendered, the console commands' answers and the log. Never the mod's
-// own state.
-// Prior art: test_hand_tools_horse_brush.cpp and test_hand_tools_chainsaw.cpp (handlers on the specialization class only, useOnce),
-// test_hand_tools_trigger.cpp (the held-input rule), test_hand_tools_draw.cpp (overlays), test_hand_tools_describe_unsupported.cpp
-// (the probe).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <string>
@@ -18,15 +6,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers: where the rod is and what the targeter did, as the game would know it. Each ray is { x, y, z, dirX, dirY, dirZ } in
-// the world.
-//   isWhereTheGamePutsIt(tool)   the tool is below the camera's pitch node at the game's placement
-//   isInTheHand(tool, which)     the tool hangs below the Virtual Hand
-//   rodFaceRay()                 the rod's root and the way its face points (square to the rod, the reel's side)
-//   headRay()                    the first person camera: the ray the game casts without a Hand Tool
-//   targeterRay()                what the targeter cast in the last game frame
-//   sameRay(a, b)                the two rays are the same
-//   useCalls(action)             the values the rod's handler for `action` was called with, in order, as one text ("1,0")
 constexpr const char* kFishingRodHelpers = R"luau(
     function _G.isWhereTheGamePutsIt(tool)
         if getParent(tool.rootNode) ~= foot.cam.pitchNode then return false end
@@ -54,19 +33,15 @@ constexpr const char* kFishingRodHelpers = R"luau(
     end
 )luau";
 
-// The hand held so that the rod points well away from the way the head looks (down -Z).
 constexpr float kAimPitch = 1.2f;
 constexpr float kAimYaw = 1.0f;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsFishingRodTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string stubs;
 
-    // The mod started with a player on foot in a game with the Highlands Fishing DLC (its rod's handler as the variant says), the
-    // Virtual Gamepad on and the game clock set (the in-use timeout is on it).
     void Start(const char* variant = "ok") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         stubs = StubChunk("xml_settings") + FishingRodStubs(variant);
@@ -75,11 +50,10 @@ protected:
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));
         ASSERT_EQ(RunLuauChunk(L, kFishingRodHelpers, "=fishingRodHelpers"), 0);
         ASSERT_EQ(RunLuauChunk(L, "runCommand('vrVirtualGamepad', 'on')", "=padOn"), 0);
-        ASSERT_EQ(RunLuauChunk(L, "_G.overlayRenderBeforeTheRod = Overlay.render", "=overlayRender"), 0);  // the mod's HUD may wrap it
+        ASSERT_EQ(RunLuauChunk(L, "_G.overlayRenderBeforeTheRod = Overlay.render", "=overlayRender"), 0);
         SetGameTime(10000);
     }
 
-    // The rod held on foot with the right Motion Controller picked up and a few frames run: the common start of the tests below.
     void StartWithTheRodInTheRightHand() {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
@@ -89,13 +63,11 @@ protected:
         ASSERT_EQ(InTheHand("right"), "true") << Dump();
     }
 
-    // Both the aim and the grip pose of the hand set (the Virtual Hand follows the grip pose), turned as kAimPitch and kAimYaw say.
     void AimTheHand(uint32_t hand, float x, float y, float z) {
         headset.SetHandPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
         headset.SetHandGripPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
     }
 
-    // The game clock moved on by `seconds`, one second a frame, with the right hand moved a little each second (kept in use).
     void HoldOnFor(int seconds) {
         for (int second = 0; second < seconds; ++second) {
             AdvanceGameTime(1000);
@@ -109,7 +81,6 @@ protected:
     std::string RodState() { return EvalLua(L, "StubHandTool.rodState(rod)"); }
     std::string UseCalls() { return EvalLua(L, "useCalls('ACTIVATE_HANDTOOL')"); }
 
-    // What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
     XINPUT_GAMEPAD Pad() {
         XINPUT_STATE state{};
         EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
@@ -117,9 +88,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Placement ------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodHeldOnFootHangsBelowTheRightVirtualHandWithItsHandleOffsetAndFollowsIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
@@ -144,8 +113,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodHeldOnFootHangsBelowTheRight
     EXPECT_NE(Dump().find("held Hand Tool: fishingrod (supported)"), std::string::npos) << Dump();
 }
 
-// The real rod has no state yet when the game attaches it, and gets one on its first update while held (the headset, 2026-10-18,
-// where the rod was given back for it): it goes into the hand all the same, and stays there, with no warning.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodWithNoStateYetWhenTheGameAttachesItGoesIntoTheHandAndStaysWithoutAWarning) {
     ASSERT_NO_FATAL_FAILURE(Start());
     ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
@@ -162,7 +129,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodWithNoStateYetWhenTheGameAttac
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodIsWhereTheGamePutsItSetDownUntrackedOutOfFirstPersonOrWithHandToolsOffAndBackInTheHandAfterwards) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
 
-    AdvanceGameTime(3100);  // set down: the Motion Controller lies still for longer than the in-use timeout
+    AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_EQ(WhereTheGamePutsIt(), "true") << "set down: the game's own attachToolToCamera put the rod in front of the view";
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
@@ -211,8 +178,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLeftHandChosenAsTheToolHand
     EXPECT_EQ(InTheHand("right"), "false");
 }
 
-// ---- The look ray ---------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodInTheToolHandTheTargetersRayRunsFromItsRootTheWayItsFacePointsAndIsTheHeadsOtherwise) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     FRAMES(2);
@@ -230,12 +195,10 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodInTheToolHandTheTargeter
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "untracked: the head's ray, " << EvalLua(L, "rayText(targeterRay())");
     headset.SetHandTracked(kRight, true);
     FRAMES(2);
-    AdvanceGameTime(3100);  // set down
+    AdvanceGameTime(3100);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "set down: the head's ray";
 }
-
-// ---- The trigger: hold to charge, let go to cast, the same trigger hooks and reels ---------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, APullCallsTheRodsHandlerOnceWith1HoldingCallsNothingMoreAndTheLetGoCallsItOnceWith0ThrowingTheCast) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
@@ -288,7 +251,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, ATriggerAlreadyHeldWhenTheRodComes
     ASSERT_NO_FATAL_FAILURE(Start());
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for a binding, with no Hand Tool in the player's hands
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
@@ -322,7 +285,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodLeavingTheHandMidPullSendsTh
     FRAMES(10);
     EXPECT_EQ(UseCalls(), "1,0") << "once";
 
-    // Hand Tools turned off mid-pull, and the rod put away mid-pull, end the use the same way.
     headset.SetHandTracked(kRight, true);
     headset.SetHandInputs(kRight, Trigger(0.0f));
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'idle'); StubHandTool.useCalls = {}", "=lineIn"), 0);
@@ -334,7 +296,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodLeavingTheHandMidPullSendsTh
     EXPECT_EQ(UseCalls(), "1,0") << "vrHandTools off mid-pull";
 }
 
-// The game's own binding (X on a pad, the mouse) still calls the same handler, off the class; the secondary action is the pad's.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheGamesOwnBindingsStillFishWhileTheRodIsInTheHandAndTheSecondaryActionIsNeverTheTriggers) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(rod, 1)", "=bindingDown"), 0);
@@ -352,10 +313,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheGamesOwnBindingsStillFishWhileT
     EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the game's own secondary binding still reaches the rod";
 }
 
-// ---- The rod's state ------------------------------------------------------------------------------------------------------------
-
-// What the Companion Mod reads of the rod (its state from the keys of spec.state, its line, its bend), for the haptics and the
-// diagnostics: one value per line, "state lineOut bend".
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsReadFromItsKeysIdleChargingWaitingBiteReelingAndCaughtWithItsLineAndBend) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "function _G.readRod() return table.concat({ tostring(select(1, VRCompanion:getFishingRodState())), "
@@ -385,9 +342,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsReadFromItsKeysIdleC
     EXPECT_EQ(read(), "caught false 0.00") << "landed: the line is in";
 }
 
-// The dump never named the reeling state's keys: reeling is told by the line out and the rod bent (rodBendFactor). With the line
-// out, a state with none of the known keys and the rod straight is not taken for reeling: it is unknown, silent and keeping
-// nothing in use, until the fish bends the rod.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLineOutAStateWithNoneOfTheKnownKeysIsReelingOnlyWhileTheRodBends) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     auto read = [&]() {
@@ -412,8 +366,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsNilForAnyOtherToolAn
     EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getFishingRodState())"), "nil") << "the lance held";
 }
 
-// A read of what the state comes from that fails while the rod is in the hand (a rod reshaped from the start is the game's, see
-// the end of this file): the answer is then "unknown", with the line in and no bend, never an error.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodSpecThatCannotBeReadIsUnknownWithoutAnError) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -444,10 +396,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodSpecThatCannotBeReadIsUnknownW
     }
     EXPECT_EQ(EvalLua(L, "readAfter(function() end)"), "waiting true 0") << "readable again";
 }
-
-// ---- Staying in use while the line is out ---------------------------------------------------------------------------------------
-// A Tool Hand lying still for 3 s is set down, and a bite comes 10 to 25 s after the cast while the player holds the rod still: with
-// the line out the Tool Hand stays in use however still it is held (ADR-0031).
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLineOutAStillToolHandStaysInUsePastTheTimeoutAndTheRodStaysInItsVirtualHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
@@ -487,7 +435,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLineInAStillToolHandIsSetDo
     FRAMES(1);
     ASSERT_EQ(InTheHand("right"), "true");
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'caught')", "=landed"), 0);  // the line is in
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'caught')", "=landed"), 0);
     FRAMES(1);
     AdvanceGameTime(3100);
     FRAMES(1);
@@ -524,7 +472,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, LosingTrackingWithTheLineOutSetsTh
     EXPECT_EQ(InTheHand("right"), "true") << "the line still out: kept in use again";
 }
 
-// An unknown state keeps nothing in use: a state that cannot be read must not keep a Motion Controller in use forever.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsStateUnreadableAStillToolHandIsSetDownAfterTheTimeoutEvenWithTheLineOut) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting'); StubHandTool.rodSpec(rod).rodBendFactor = 'bent'", "=unreadable"), 0);
@@ -535,7 +482,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsStateUnreadableAStillTo
     EXPECT_EQ(WhereTheGamePutsIt(), "true") << "the line out but the state unknown: set down as before";
 }
 
-// The other hand, holding no rod, is set down as ever while the Tool Hand waits for a bite.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheLineOutKeepsOnlyTheToolHandInUse) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     PICK_UP(kLeft, -0.25f, -0.10f, -0.30f);
@@ -563,9 +509,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLeftHandChosenAsTheToolHand
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false") << "the right hand lies still";
 }
 
-// ---- The rod keeps its overlays ------------------------------------------------------------------------------------------------
-
-// The rod is the one supported Hand Tool whose screen-centre overlays stay: its charge meter, waiting hint and "Hook fish" prompt.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsChargeMeterWaitingHintAndHookPromptAreStillDrawnWhileItIsInTheToolHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     auto draws = [&]() {
@@ -586,11 +529,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsChargeMeterWaitingHintAndHo
     EXPECT_NE(Dump().find("centre overlays held back: no"), std::string::npos) << Dump();
 }
 
-// In the headset the reeling minigame sat so far right, and a little high, that it was hard to see (2026-10-18). Its state lays it
-// out in plain numbers (posX, posY, width, height, the lines' x, the fish's range), from which it draws its panel and lines with the
-// game's natives (which a mod cannot wrap), and keeps its bars and icons as Overlays. For the whole of the rod's draw the layout
-// and the Overlays move by one amount, which takes the panel's middle to half its distance from the centre of the screen, and down
-// by 0.05, so it all stays in line; the charge meter and the prompts, centred, stay. Each thing as it reached the screen: "what@x,y".
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheMinigamesLayoutAndOverlaysMoveTogetherForTheRodsDrawSoItIsInViewAndInLine) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -622,7 +560,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheMinigamesLayoutAndOverlaysMoveT
         return string.format('%.3f %.3f %.3f,%.3f %.3f', s.posX, s.hookLineX, s.fishOverlay.x, s.fishOverlay.y, s.progressBarOverlay.x)
     end)())luau"), "0.650 0.760 0.690,0.550 0.655") << "the layout and the Overlays are back where the rod keeps them";
 
-    // Overlays rendered outside the rod's draw (the HUD, near the minigame or not) are as the game renders them
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         StubHandTool.screen = {}
         Overlay.new('gui.png', 0.77, 0.32, 0.003, 0.30):render()
@@ -667,7 +604,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsOverlaysAreWhereTheRodDraws
 
     EXPECT_EQ(EvalLua(L, "barAt()"), "0.550") << "on again";
 
-    // another player's rod, drawn by the same class while the local player's rod is in the hand
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
         _G.remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
@@ -684,8 +620,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsOverlaysAreWhereTheRodDraws
         return string.format("%.3f", StubHandTool.screen[1].x)
     end)())luau"), "0.650") << "another player's rod";
 }
-
-// ---- Tuning and diagnostics -------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, VrHandToolOffsetFishingRodMovesAndTurnsTheRodInTheHandAndResetPutsItBack) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
@@ -726,16 +660,13 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheDiagnosticsShowTheRodAsASupport
     EXPECT_NE(answer.find("from the tool"), std::string::npos) << answer;
     EXPECT_EQ(CountLogLines("Hand Tool probe:"), 0) << "the rod is supported: no probe dump";
 
-    AdvanceGameTime(3100);  // set down: the rod is the game's, but still a supported tool
+    AdvanceGameTime(3100);
     FRAMES(1);
     s_capturedLogs.clear();
     EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
     EXPECT_EQ(CountLogLines("Hand Tool probe:"), 0) << "not even out of the hand";
 }
 
-// ---- Multiplayer, a game without the DLC, a DLC update that reshapes the rod ---------------------------------------------------
-
-// The game attaches a Hand Tool of every player in the session through the same function. Only the local player's rod is moved.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, AnotherPlayersRodIsNeverTakenIntoTheToolHandNorUsedByTheTrigger) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -757,7 +688,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, AnotherPlayersRodIsNeverTakenIntoT
     EXPECT_EQ(EvalLua(L, "tostring(StubHandTool.useCalls[1].self == rod)"), "true") << "the trigger uses the local player's rod only";
 }
 
-// A game without the Highlands Fishing DLC has no rod class and no rod: nothing changes and nothing warns.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, AGameWithoutTheDlcLogsNoWarningAndItsHandToolsWorkAsBefore) {
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
     ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
@@ -775,7 +705,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, AGameWithoutTheDlcLogsNoWarningAnd
     EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 0) << warnings;
 }
 
-// The fixture's checks that a rod whose handler a DLC update renamed or reshaped is the game's, with one warning naming the handler.
 #define EXPECT_THE_GAMES_ROD_AND_ONE_WARNING() \
     do { \
         ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L)); \
@@ -808,11 +737,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsHandlerReshapedTheRodIs
     EXPECT_THE_GAMES_ROD_AND_ONE_WARNING();
 }
 
-// A DLC update could as well rename or reshape what the rod's state is read from (#125: the spec's state, fishingLine with its
-// isInitialized, rodBendFactor, and the rod's getBobberPosition): such a rod is the game's from the start, with one warning that
-// names the field, as for a reshaped handler. The real rod fills its fields in after the game attaches it (its state on its first
-// update), so a field is found reshaped only once it has stayed so for 5 s of holding; until then the rod is in the hand. `reshape`
-// runs on the new rod (`rod`, its spec `spec`) before it is taken in hand.
 #define EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING(reshape, named) \
     do { \
         ASSERT_NO_FATAL_FAILURE(Start()); \

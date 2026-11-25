@@ -1,19 +1,8 @@
-// A Subsystem saves and loads its own settings through the registry (spec #280, ticket #286): registerSubsystem takes a
-// saveSettings and a loadSettings hook, and saveConfiguration / loadConfiguration run them. Seen from outside: the real Companion
-// Mod is loaded in modDesc order, the engine's XML functions are a fake settings file kept in Lua, and the tests assert what the
-// file holds after a save, what a load leads to (the calls on VRBridge at map load, and the file a save after the load writes)
-// and what log.txt says.
-// The two characterization tests pin the settings file as it was before the registry took the settings over: the same keys and
-// values on save, and the same VRBridge calls in the same order when an old file is loaded at map load.
-
 #include "companion_mod_fixture.h"
 #include <string>
 
 namespace {
 
-// The engine's XML functions over a settings file kept in Lua (_G.xmlFiles[path] = { key = value }), and the few engine
-// functions a map load calls. A getter answers only for a value of its own type, as a key written by another setter would read
-// back nothing useful from the engine either; getXMLString answers for a bool too ("true"/"false"), as the engine does.
 const char* kEngineStubs = R"luau(
     _G.present = {}
     _G.addConsoleCommand = function(cmd) _G.present[cmd] = true end
@@ -103,12 +92,8 @@ protected:
     fs25vr::VRBridge bridge_{nullptr, nullptr};
 };
 
-}  // namespace
+}
 
-// Every Subsystem setting away from its default, saved: the file holds what it held before the registry saved the settings.
-// The settings are set as the player sets them, with the console commands, after a map load. The Virtual Gamepad (whose command
-// rewrites the game's bindings), its defaults-written and Recenter-migrated flags (no command) and a Seat Offset (whose command
-// needs a vehicle to sit in) are set on VRCompanion directly; loading them from a file is the other test.
 TEST_F(SubsystemSettingsTest, ASavedFileHoldsTheSameKeysAndValuesAsBeforeTheRegistry) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local commands = {}
@@ -195,9 +180,6 @@ TEST_F(SubsystemSettingsTest, ASavedFileHoldsTheSameKeysAndValuesAsBeforeTheRegi
         "vrSettings.wheelGrab=false");
 }
 
-// A file written before the change, every Subsystem setting away from its default, loaded at map load: the mod makes the same
-// calls on VRBridge, in the same order, as before the registry loaded the settings, and a save after the load writes every
-// setting of the old file back with the value it had.
 TEST_F(SubsystemSettingsTest, AnOldFileLoadsToTheSameSettingsAndTheSameVRBridgeCallsAtMapLoad) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         xmlFiles[SETTINGS_PATH] = {

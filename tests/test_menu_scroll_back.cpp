@@ -1,10 +1,3 @@
-// Scrolling and going back in menus with Motion Controllers (spec #71), seen from
-// outside: the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, the test
-// pushes the fake Motion Controllers' thumbsticks, grips and buttons, drives frames and the game clock, and
-// observes what the stub GUI receives. The stub GUI scrolls its list the way the game's list and
-// slider elements do (they poll the mouse wheel state while handling a mouse event) and records the
-// back/close input it is given.
-
 #include "companion_mod_fixture.h"
 
 namespace {
@@ -17,10 +10,6 @@ using fs25vr::Vector3;
 constexpr uint32_t kLeft = 0;
 constexpr uint32_t kRight = 1;
 
-// The game's GUI as the mod sees it. `list` covers the middle of the screen (GUI coordinates, y up
-// from the bottom) and, like the game's SmoothListElement, scrolls when it handles a mouse-down
-// inside it while the native wheel state says the wheel moved; `scrolls` records each step
-// (-1 = list moved up, +1 = down). `backs` records the menu back input.
 constexpr const char* kGuiStubs = R"luau(
     _G.addConsoleCommand = function() end
     _G.removeConsoleCommand = function() end
@@ -64,8 +53,6 @@ HeadPose PoseAt(float x, float y, float z) {
     return pose;
 }
 
-// The point on the menu panel a hand at the head's height aims at when its ray runs parallel to the
-// panel's normal: u across (left to right), v down (top to bottom).
 HeadPose AimAt(float u, float v) {
     return PoseAt((u - 0.5f) * 1.6f, 1.6f + (0.5f - v) * 0.9f, 0.0f);
 }
@@ -94,8 +81,6 @@ protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // Starts the mod over the headset with a menu showing and the right hand pointing at the middle
-    // of the panel, which is over the stub list.
     void StartWithMenuOpen() {
         headset.SetHeadPose(PoseAt(0.0f, 1.6f, 0.0f));
         headset.manager->PollHeadPose();
@@ -106,7 +91,7 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
         headset.SetHandPointing(kRight, AimAt(0.5f, 0.5f));
         NextFrame(&headset);
-        headset.SetHandPointing(kRight, AimAt(0.55f, 0.5f));  // a real move: the hand is in use and points
+        headset.SetHandPointing(kRight, AimAt(0.55f, 0.5f));
         NextFrame(&headset);
     }
 
@@ -123,7 +108,7 @@ protected:
     int Scrolls() { return std::stoi(EvalLua(L, "#scrolls")); }
 };
 
-} // namespace
+}
 
 TEST_F(MenuScrollBackTest, GripGoesBackOncePerPressInAMenu) {
     StartWithMenuOpen();
@@ -135,7 +120,7 @@ TEST_F(MenuScrollBackTest, GripGoesBackOncePerPressInAMenu) {
     EXPECT_EQ(EvalLua(L, "backs[1].action"), "MENU_BACK");
     EXPECT_EQ(EvalLua(L, "backs[1].value"), "1");
 
-    for (int i = 0; i < 5; ++i) NextFrame(&headset);  // holding the grip is not more backs
+    for (int i = 0; i < 5; ++i) NextFrame(&headset);
     EXPECT_EQ(Backs(), 1);
 
     Release(kRight);
@@ -223,7 +208,7 @@ TEST_F(MenuScrollBackTest, AMenuThatRaisesAnErrorNeverBreaksTheGameUpdate) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
     ASSERT_EQ(RunLuauChunk(L, "g_gui.onMenuInput = function() error('menu code failed') end", "=failingBack"), 0);
-    Hold(kRight, Grip(1.0f));  // NextFrame fails the test if the update raises
+    Hold(kRight, Grip(1.0f));
     Release(kRight);
     Hold(kRight, Grip(1.0f));
     int reports = 0;
@@ -232,8 +217,6 @@ TEST_F(MenuScrollBackTest, AMenuThatRaisesAnErrorNeverBreaksTheGameUpdate) {
     }
     EXPECT_EQ(reports, 1) << "reported once, not every press";
 }
-
-// ---- Scrolling ----
 
 TEST_F(MenuScrollBackTest, ThumbstickUpAndDownScrollTheListUnderTheCursor) {
     StartWithMenuOpen();
@@ -303,7 +286,7 @@ TEST_F(MenuScrollBackTest, TheCursorDecidesWhatScrolls) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
 
-    headset.SetHandPointing(kRight, AimAt(0.95f, 0.5f));  // over the panel, beside the list
+    headset.SetHandPointing(kRight, AimAt(0.95f, 0.5f));
     NextFrame(&headset);
     Hold(kRight, Stick(0.0f, 1.0f));
     EXPECT_EQ(Scrolls(), 0) << "the wheel turns where the cursor is, not over the list";
@@ -326,7 +309,7 @@ TEST_F(MenuScrollBackTest, TheGamesWheelStateIsOnlyWheelUpWhileTheEventIsHandled
 
     ASSERT_EQ(RunLuauChunk(L, "_G.guiFails = true", "=failing"), 0);
     Release(kRight);
-    Hold(kRight, Stick(0.0f, 1.0f));  // the GUI raises an error while handling the wheel
+    Hold(kRight, Stick(0.0f, 1.0f));
     EXPECT_EQ(EvalLua(L, "Input.isMouseButtonPressed == originalIsMouseButtonPressed"), "true")
         << "a failing menu must not leave the wheel state patched";
 }
@@ -371,7 +354,7 @@ TEST_F(MenuScrollBackTest, WhenTheDeskMouseHasControlTheScrollLandsWhereTheMouse
     )luau", "=inputBinding"), 0);
     NextFrame(&headset);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
-    ASSERT_EQ(RunLuauChunk(L, "g_inputBinding.x = 0.9; VRCompanion:mouseEvent(0.9, 0.5, false, false, 0)", "=deskMouse"), 0);  // beside the list
+    ASSERT_EQ(RunLuauChunk(L, "g_inputBinding.x = 0.9; VRCompanion:mouseEvent(0.9, 0.5, false, false, 0)", "=deskMouse"), 0);
     NextFrame(&headset);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
 
@@ -390,7 +373,7 @@ TEST_F(MenuScrollBackTest, AGameThatDoesNotLetTheWheelStateBeSetNeverBreaksTheUp
         local locked = setmetatable({}, { __index = Input, __newindex = function() error("Input is read-only") end })
         _G.Input = locked
     )luau", "=lockedInput"), 0);
-    Hold(kRight, Stick(0.0f, 1.0f));  // NextFrame fails the test if the update raises
+    Hold(kRight, Stick(0.0f, 1.0f));
     Release(kRight);
     Hold(kRight, Stick(0.0f, 1.0f));
     int reports = 0;
@@ -402,18 +385,15 @@ TEST_F(MenuScrollBackTest, AGameThatDoesNotLetTheWheelStateBeSetNeverBreaksTheUp
     EXPECT_GE(std::stoi(EvalLua(L, "#guiEvents")), 2) << "the wheel events were still delivered";
 }
 
-// ---- The Virtual Gamepad stays out of the way in menus (ADR-0028) ----
-
 namespace {
 
-// What the game reads from the Virtual Gamepad (XInput slot 3, the highest free slot of a machine without real pads).
 XINPUT_GAMEPAD PadState(fs25vr::VRBridge& bridge) {
     XINPUT_STATE state{};
     EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
     return state.Gamepad;
 }
 
-} // namespace
+}
 
 TEST_F(MenuScrollBackTest, TheVirtualGamepadReadsNeutralWhileAMenuIsShowingEvenAsTheStickScrolls) {
     StartWithMenuOpen();

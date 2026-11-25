@@ -1,15 +1,9 @@
--- ====================================================================
--- Test Suite for Vehicle In-Cab Mouse & Controller Yaw View Rotation
--- ====================================================================
-
--- Mock GIANTS Engine globals before loading VRCompanion
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
 
 local passed = 0
@@ -28,9 +22,7 @@ end
 
 print("Running Vehicle In-Cab Yaw View Rotation Tests...")
 
--- Slice 1: Mathematical offset calculation and angle wrapping
 test("CalculatesVehicleLookYawFromMouseAndControllerOffset", function()
-    -- Standard look to the right: rotY > origRotY
     local camRight = {
         rotY = 0.75,
         origRotY = 0.25
@@ -38,7 +30,6 @@ test("CalculatesVehicleLookYawFromMouseAndControllerOffset", function()
     local yawRight = VRCompanion:getVehicleLookYaw(camRight)
     assert(math.abs(yawRight - 0.50) < 0.0001, string.format("Expected 0.50 look yaw, got %f", yawRight))
 
-    -- Standard look to the left: rotY < origRotY
     local camLeft = {
         rotY = -0.30,
         origRotY = 0.20
@@ -46,7 +37,6 @@ test("CalculatesVehicleLookYawFromMouseAndControllerOffset", function()
     local yawLeft = VRCompanion:getVehicleLookYaw(camLeft)
     assert(math.abs(yawLeft - (-0.50)) < 0.0001, string.format("Expected -0.50 look yaw, got %f", yawLeft))
 
-    -- Neutral forward orientation
     local camNeutral = {
         rotY = 1.20,
         origRotY = 1.20
@@ -54,20 +44,17 @@ test("CalculatesVehicleLookYawFromMouseAndControllerOffset", function()
     local yawNeutral = VRCompanion:getVehicleLookYaw(camNeutral)
     assert(math.abs(yawNeutral - 0.0) < 0.0001, string.format("Neutral orientation must yield 0, got %f", yawNeutral))
 
-    -- When origRotY is nil, treat rotY as raw offset
     local camNoOrig = {
         rotY = 0.42
     }
     local yawNoOrig = VRCompanion:getVehicleLookYaw(camNoOrig)
     assert(math.abs(yawNoOrig - 0.42) < 0.0001, string.format("Expected 0.42, got %f", yawNoOrig))
 
-    -- Nil camera or nil rotY returns 0
     assert(VRCompanion:getVehicleLookYaw(nil) == 0, "Nil cam must return 0")
     assert(VRCompanion:getVehicleLookYaw({}) == 0, "Empty cam must return 0")
 end)
 
 test("NormalizesVehicleLookYawAroundPiBoundaries", function()
-    -- Look yaw wrapping beyond +pi
     local camWrapPos = {
         rotY = 3.5,
         origRotY = 0.0
@@ -76,7 +63,6 @@ test("NormalizesVehicleLookYawAroundPiBoundaries", function()
     local expectedPos = 3.5 - 2 * math.pi
     assert(math.abs(yawWrapPos - expectedPos) < 0.0001, string.format("Angles > pi must wrap to negative, got %f", yawWrapPos))
 
-    -- Look yaw wrapping beyond -pi
     local camWrapNeg = {
         rotY = -3.8,
         origRotY = 0.0
@@ -86,9 +72,7 @@ test("NormalizesVehicleLookYawAroundPiBoundaries", function()
     assert(math.abs(yawWrapNeg - expectedNeg) < 0.0001, string.format("Angles < -pi must wrap to positive, got %f", yawWrapNeg))
 end)
 
--- Slice 2: Collinear 6DOF translation rotation
 test("RotatesVectorCollinearlyWithDriverGazeAngle", function()
-    -- Zero yaw returns original vector
     local x0, y0, z0 = VRCompanion:rotateVectorByYaw(0.1, 0.2, -0.3, 0.0)
     assert(math.abs(x0 - 0.1) < 0.0001 and math.abs(y0 - 0.2) < 0.0001 and math.abs(z0 - (-0.3)) < 0.0001, "Zero yaw must not alter vector")
 
@@ -107,7 +91,6 @@ test("RotatesVectorCollinearlyWithDriverGazeAngle", function()
     assert(math.abs(zSideways - (-0.2)) < 0.0001, string.format("Expected z = -0.2, got %f", zSideways))
 end)
 
--- Slice 3 & 4: In-cab vehicle camera with head tracking node
 test("UpdatesTrackingNodeOrientationAndCompositesHeadPoseYaw", function()
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -132,7 +115,6 @@ test("UpdatesTrackingNodeOrientationAndCompositesHeadPoseYaw", function()
 
     _G.localRotationToLocal = function(fromNode, toNode, rx, ry, rz)
         local fromR = nodeRotations[fromNode] or { rx = 0, ry = 0, rz = 0 }
-        -- In GIANTS Engine, localRotationToLocal composites the local rotation of fromNode with the input rotation
         return rx + fromR.rx, ry + fromR.ry, rz + fromR.rz
     end
     _G.localToLocal = function(fromNode, toNode, x, y, z)
@@ -142,7 +124,6 @@ test("UpdatesTrackingNodeOrientationAndCompositesHeadPoseYaw", function()
         return fromT.x + rx, fromT.y + ry, fromT.z + rz
     end
 
-    -- Setup mock VRBridge with head pose: pitch = 0.15, yaw = -0.20, roll = 0.01, physical lean = (0.05, 0.02, -0.10)
     _G.VRBridge = {
         isReady = function() return true end,
         getFrameParity = function() return 0 end,
@@ -163,33 +144,28 @@ test("UpdatesTrackingNodeOrientationAndCompositesHeadPoseYaw", function()
         headTrackingNode = 201,
         cameraPositionNode = 50,
         origRotY = 0.20,
-        rotY = 0.80, -- Mouse look yaw offset = 0.80 - 0.20 = 0.60
-        rotX = 0.75, -- Mouse pitch offset (must be ignored to keep physical horizon level)
+        rotY = 0.80,
+        rotX = 0.75,
         origRotX = 0.0
     }
 
-    -- Set initial headTrackingNode translation at seat head anchor (0.0, 1.6, 0.2)
     nodeTranslations[201] = { x = 0.0, y = 1.6, z = 0.2 }
 
     VRCompanion:onVehicleCameraUpdate(mockCam, 16.6)
 
-    -- 1. Tracking node orientation must be updated with base + lookYaw (0.20 + 0.60 = 0.80), rx=0 (horizon level), rz=0
     local headNodeRot = nodeRotations[201]
     assert(headNodeRot ~= nil, "Tracking node rotation must be set")
     assert(math.abs(headNodeRot.rx - 0.0) < 0.0001, "Tracking node pitch must be strictly 0 to preserve horizon")
     assert(math.abs(headNodeRot.ry - 0.80) < 0.0001, string.format("Tracking node yaw must equal base + lookYaw (0.80), got %f", headNodeRot.ry))
     assert(math.abs(headNodeRot.rz - 0.0) < 0.0001, "Tracking node roll must be strictly 0")
 
-    -- 2. Final cameraNode rotation must composite base + lookYaw (0.80) + head tracking yaw (-0.20) = 0.60
     local camRot = nodeRotations[101]
     assert(camRot ~= nil, "Camera node rotation must be set")
     assert(math.abs(camRot.ry - 0.60) < 0.001, string.format("Expected composite yaw 0.60, got %f", camRot.ry))
 
-    -- 3. Vertical pitch must match physical head pose pitch (0.15), completely ignoring mouse rotX (0.75)
     assert(math.abs(camRot.rx - 0.15) < 0.001, string.format("Camera pitch must equal head pose pitch 0.15, got %f", camRot.rx))
     assert(math.abs(camRot.rz - 0.01) < 0.001, string.format("Camera roll must match head pose roll 0.01, got %f", camRot.rz))
 
-    -- 4. 6DOF physical head translation must be rotated by targetHeadRotY (0.80) and added to seat anchor
     local camTrans = nodeTranslations[101]
     assert(camTrans ~= nil, "Camera node translation must be set")
     local expectedRotX, expectedRotY, expectedRotZ = VRCompanion:rotateVectorByYaw(0.05, 0.02, -0.10, 0.80)
@@ -198,7 +174,6 @@ test("UpdatesTrackingNodeOrientationAndCompositesHeadPoseYaw", function()
     assert(math.abs(camTrans.z - (0.2 + expectedRotZ)) < 0.001, "Camera z translation mismatch with collinear rotation")
 end)
 
--- Slice 5: Fallback path when no pre-existing head tracking node exists
 test("HandlesFallbackPathCollinearlyWithoutTrackingNode", function()
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -209,8 +184,8 @@ test("HandlesFallbackPathCollinearlyWithoutTrackingNode", function()
     _G.setTranslation = function(node, x, y, z)
         nodeTranslations[node] = { x = x, y = y, z = z }
     end
-    _G.getParent = function(node) return 0 end -- No parent / no tracking node
-    _G.createTransformGroup = nil -- Disable auto-construction to test fallback
+    _G.getParent = function(node) return 0 end
+    _G.createTransformGroup = nil
 
     _G.VRBridge = {
         isReady = function() return true end,
@@ -234,21 +209,19 @@ test("HandlesFallbackPathCollinearlyWithoutTrackingNode", function()
         origTransY = 1.4,
         origTransZ = -0.2,
         origRotY = 0.10,
-        rotY = 0.70, -- lookYaw = 0.60
-        rotX = -0.40, -- mouse pitch (must be ignored)
+        rotY = 0.70,
+        rotX = -0.40,
         origRotX = 0.0
     }
 
     VRCompanion:onVehicleCameraUpdate(mockFallbackCam, 16.6)
 
-    -- 1. Camera rotation must composite origRotY (0.10) + lookYaw (0.60) + head yaw (0.25) = 0.95
     local camRot = nodeRotations[305]
     assert(camRot ~= nil, "Camera rotation must be set in fallback path")
     assert(math.abs(camRot.ry - 0.95) < 0.001, string.format("Expected composite fallback yaw 0.95, got %f", camRot.ry))
     assert(math.abs(camRot.rx - (-0.10)) < 0.001, string.format("Pitch must match physical head pitch -0.10, got %f", camRot.rx))
     assert(math.abs(camRot.rz - 0.03) < 0.001, "Roll must match head roll 0.03")
 
-    -- 2. Physical head translation must rotate collinearly with total gaze yaw (origRotY + lookYaw = 0.70) relative to cab space
     local camTrans = nodeTranslations[305]
     assert(camTrans ~= nil, "Camera translation must be set in fallback path")
     local totalGazeYaw = 0.10 + 0.60
@@ -258,7 +231,6 @@ test("HandlesFallbackPathCollinearlyWithoutTrackingNode", function()
     assert(math.abs(camTrans.z - (-0.2 + expRotZ)) < 0.001, "Fallback z translation mismatch")
 end)
 
--- Slice 6: Recenter resets lookYaw back to neutral dead center (cam.origRotY) and realigns reference frame
 test("RecenterActionResetsLookYawBackToOrigRotYAndRealignsReferenceFrame", function()
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -315,7 +287,7 @@ test("RecenterActionResetsLookYawBackToOrigRotYAndRealignsReferenceFrame", funct
         cameraNode = 401,
         headTrackingNode = 501,
         origRotY = 0.25,
-        rotY = 1.0, -- lookYaw = 0.75
+        rotY = 1.0,
         origRotX = 0.05,
         rotX = 0.40
     }
@@ -330,39 +302,32 @@ test("RecenterActionResetsLookYawBackToOrigRotYAndRealignsReferenceFrame", funct
         controlledVehicle = mockVehicle
     }
 
-    -- 1. Pre-update with offset
     VRCompanion:onVehicleCameraUpdate(mockCam, 16.6)
     assert(nodeTranslations[401] ~= nil, "Camera should have translation")
 
-    -- 2. Trigger recenter
     VRCompanion:onRecenterAction()
 
-    -- 3. In-engine VR Recenter action resets cam.rotY back to cam.origRotY (0.25)
     assert(math.abs(mockCam.rotY - mockCam.origRotY) < 0.0001,
         string.format("Recenter must reset rotY (%.3f) back to origRotY (%.3f)", mockCam.rotY, mockCam.origRotY))
     assert(math.abs(mockCam.rotX - mockCam.origRotX) < 0.0001,
         string.format("Recenter must reset rotX (%.3f) back to origRotX (%.3f)", mockCam.rotX, mockCam.origRotX))
 
-    -- 4. Recenter zeroes head translation (matching seat origin 0, 1.5, 0)
     local camTrans = nodeTranslations[401]
     assert(math.abs(camTrans.x - 0.0) < 0.001, "Recenter must zero x offset")
     assert(math.abs(camTrans.y - 1.5) < 0.001, "Recenter must realign to base seat height")
     assert(math.abs(camTrans.z - 0.0) < 0.001, "Recenter must zero z offset")
 
-    -- 5. Recenter resets camera node rotation back to neutral dead center (origRotY)
     local camRot = nodeRotations[401]
     assert(math.abs(camRot.ry - mockCam.origRotY) < 0.001,
         string.format("Recenter must reset camera yaw back to neutral dead center (%.3f), got %f", mockCam.origRotY, camRot.ry))
     assert(math.abs(camRot.rx - 0.0) < 0.001, "Recenter must keep pitch level at 0")
 
-    -- 6. Subsequent onVehicleCameraUpdate computes 0 lookYaw and keeps reference frame neutral
     VRCompanion:onVehicleCameraUpdate(mockCam, 16.6)
     local nextCamRot = nodeRotations[401]
     assert(math.abs(nextCamRot.ry - mockCam.origRotY) < 0.001,
         string.format("Post-recenter update must remain at neutral dead center (%.3f), got %f", mockCam.origRotY, nextCamRot.ry))
 end)
 
--- Slice 7: Recenter reset behavior on fallback vehicle camera without tracking node
 test("RecenterActionResetsLookYawOnFallbackCameraWithoutTrackingNode", function()
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -412,7 +377,7 @@ test("RecenterActionResetsLookYawOnFallbackCameraWithoutTrackingNode", function(
         origTransY = 1.3,
         origTransZ = -0.1,
         origRotY = 0.15,
-        rotY = 0.85, -- lookYaw = 0.70
+        rotY = 0.85,
         origRotX = -0.05,
         rotX = 0.20
     }
@@ -439,7 +404,6 @@ test("RecenterActionResetsLookYawOnFallbackCameraWithoutTrackingNode", function(
     assert(math.abs(camRot.rx - 0.0) < 0.001, "Fallback cam pitch must remain level at 0.0")
 end)
 
--- Slice 8: Vehicle entry cleanly initializes base rotation states
 test("EnteringVehicleCleanlyInitializesBaseRotationStatesWithoutSnappingOrDrift", function()
     local veh1Cam = {
         isInside = true,
@@ -447,7 +411,7 @@ test("EnteringVehicleCleanlyInitializesBaseRotationStatesWithoutSnappingOrDrift"
         headTrackingNode = nil,
         rotY = 0.40,
         rotX = 0.10,
-        origRotY = nil, -- Missing origRotY; must be cleanly initialized from rotY
+        origRotY = nil,
         origRotX = nil,
         transX = 0.1,
         transY = 1.5,
@@ -465,12 +429,10 @@ test("EnteringVehicleCleanlyInitializesBaseRotationStatesWithoutSnappingOrDrift"
     assert(veh1Cam.origTransX == 0.1, "origTransX must be initialized from transX")
     assert(veh1Cam.origTransY == 1.5, "origTransY must be initialized from transY")
 
-    -- Initial lookYaw must be 0 immediately upon entry, preventing any sudden snap
     local lookYaw = VRCompanion:getVehicleLookYaw(veh1Cam)
     assert(math.abs(lookYaw - 0.0) < 0.0001, "Initial lookYaw upon vehicle entry must be 0")
 end)
 
--- Slice 9: Vehicle switching lifecycle preserves independent rotation states
 test("VehicleSwitchingLifecyclePreservesIndependentRotationStates", function()
     local veh1Cam = {
         isInside = true,
@@ -498,33 +460,26 @@ test("VehicleSwitchingLifecyclePreservesIndependentRotationStates", function()
         getActiveCamera = function() return veh2Cam end
     }
 
-    -- 1. Enter Tractor A and rotate view right by 0.60 rad
     VRCompanion:onEnterVehicle(veh1, true, nil)
     veh1Cam.rotY = 0.60
     VRCompanion:saveVehicleRotationState(veh1)
 
-    -- 2. Switch to Harvester B
     VRCompanion:onVehicleTransition(veh1, veh2)
 
-    -- Harvester B must start cleanly with its own neutral orientation, not inheriting Tractor A's rotation
     assert(math.abs(veh2Cam.rotY - 0.30) < 0.0001, "Harvester B must not inherit Tractor A yaw")
     local lookYawB = VRCompanion:getVehicleLookYaw(veh2Cam)
     assert(math.abs(lookYawB - 0.0) < 0.0001, "Harvester B initial lookYaw must be 0")
 
-    -- Rotate Harvester B view left by -0.40 rad
     veh2Cam.rotY = 0.30 - 0.40
     VRCompanion:saveVehicleRotationState(veh2)
 
-    -- 3. Switch back to Tractor A
     VRCompanion:onVehicleTransition(veh2, veh1)
 
-    -- Tractor A must restore its saved rotation state (0.60) without snap or drift
     assert(math.abs(veh1Cam.rotY - 0.60) < 0.0001, "Tractor A must cleanly restore its rotated yaw state (0.60)")
     local lookYawA = VRCompanion:getVehicleLookYaw(veh1Cam)
     assert(math.abs(lookYawA - 0.60) < 0.0001, "Tractor A lookYaw must cleanly evaluate to 0.60")
 end)
 
--- Slice 10: Repeated enter/exit/switch cycles do not cause rotational drift
 test("RepeatedLifecycleTransitionsDoNotCauseRotationalDrift", function()
     local nodeRotations = {}
     _G.setRotation = function(node, rx, ry, rz)
@@ -551,15 +506,13 @@ test("RepeatedLifecycleTransitionsDoNotCauseRotationalDrift", function()
         getActiveCamera = function() return testCam end
     }
 
-    -- Simulate 50 enter -> rotate -> exit -> enter cycles
     for i = 1, 50 do
         VRCompanion:onEnterVehicle(veh, true, nil)
-        testCam.rotY = testCam.origRotY + 0.35 -- Look right by 0.35
+        testCam.rotY = testCam.origRotY + 0.35
         VRCompanion:onVehicleCameraUpdate(testCam, 16.6)
         VRCompanion:onLeaveVehicle(veh)
     end
 
-    -- Re-enter and verify base rotation and tracking node origin haven't drifted
     VRCompanion:onEnterVehicle(veh, true, nil)
     assert(math.abs(testCam.origRotY - 0.10) < 0.0001,
         string.format("origRotY must remain strictly 0.10 after 50 cycles, got %f", testCam.origRotY))
@@ -567,7 +520,6 @@ test("RepeatedLifecycleTransitionsDoNotCauseRotationalDrift", function()
         string.format("origHeadTrackingRotY must remain strictly 0.10, got %f", testCam.origHeadTrackingRotY))
 end)
 
--- Slice 11: Vehicle exit resets camera transforms to neutral so parked vehicles are not left skewed
 test("VehicleExitResetsCameraTransformsToNeutralForTrackingAndFallbackNodes", function()
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -578,7 +530,6 @@ test("VehicleExitResetsCameraTransformsToNeutralForTrackingAndFallbackNodes", fu
         nodeTranslations[node] = { x = x, y = y, z = z }
     end
 
-    -- 1. Test fallback camera exit transform reset
     local fallbackCam = {
         isInside = true,
         cameraNode = 1001,
@@ -587,27 +538,24 @@ test("VehicleExitResetsCameraTransformsToNeutralForTrackingAndFallbackNodes", fu
         origTransY = 1.6,
         origTransZ = 0.2,
         origRotY = 0.20,
-        rotY = 0.80 -- looked right by 0.60
+        rotY = 0.80
     }
     local fallbackVeh = {
         getActiveCamera = function() return fallbackCam end
     }
 
     VRCompanion:onEnterVehicle(fallbackVeh, true, nil)
-    -- Simulate cameraNode being rotated by mouse look
     nodeRotations[1001] = { rx = 0, ry = 0.80, rz = 0 }
     nodeTranslations[1001] = { x = 0.7, y = 1.6, z = 0.3 }
 
     VRCompanion:onLeaveVehicle(fallbackVeh)
 
-    -- After leave, fallback cameraNode must be reset to neutral base transform
     local fbRot = nodeRotations[1001]
     assert(math.abs(fbRot.ry - 0.20) < 0.0001, "Fallback cam rotY must reset to origRotY (0.20) upon exit")
     local fbTrans = nodeTranslations[1001]
     assert(math.abs(fbTrans.x - 0.5) < 0.0001 and math.abs(fbTrans.y - 1.6) < 0.0001 and math.abs(fbTrans.z - 0.2) < 0.0001,
         "Fallback cam translation must reset to base seat coordinates upon exit")
 
-    -- 2. Test head tracking node exit transform reset
     local trackingCam = {
         isInside = true,
         cameraNode = 1002,
@@ -631,7 +579,6 @@ test("VehicleExitResetsCameraTransformsToNeutralForTrackingAndFallbackNodes", fu
     assert(math.abs(trRot.ry - 0.05) < 0.0001, "Tracking node rotY must reset to origHeadTrackingRotY upon exit")
 end)
 
--- Slice 12: In-engine input registration recognizes VR_RECENTER_VIEW action
 test("RegistersVRRecenterViewActionAndBindsToRecenterAction", function()
     local registeredActions = {}
     _G.InputAction = {
@@ -663,7 +610,6 @@ test("RegistersVRRecenterViewActionAndBindsToRecenterAction", function()
     assert(foundRecenterView, "Must register VR_RECENTER_VIEW action in-engine")
 end)
 
--- Slice 13: Starting view in cab and recenter must face forward (+Z) out the windshield
 test("StartingInCabViewAndRecenterFacesForwardOutWindshieldCollinearWithVehicleZ", function()
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -683,21 +629,20 @@ test("StartingInCabViewAndRecenterFacesForwardOutWindshieldCollinearWithVehicleZ
         if t then return t.x, t.y, t.z end
         return 0, 0, 0
     end
-    _G.getParent = function(node) return 10 end -- parent is vehicle cab (node 10)
+    _G.getParent = function(node) return 10 end
     local nextNodeId = 2000
     _G.createTransformGroup = function(name)
         nextNodeId = nextNodeId + 1
         return nextNodeId
     end
     _G.link = function(parent, child) end
-    _G.setDirection = nil -- Simulating engine where setDirection is nil or fails, falling back to line 2110: setRotationFn(tg, 0, 0, 0)
+    _G.setDirection = nil
     _G.localDirectionToLocal = function(fromNode, toNode, x, y, z)
         local fromR = nodeRotations[fromNode] or { rx = 0, ry = 0, rz = 0 }
         local rx, ry, rz = VRCompanion:rotateVectorByYaw(x, y, z, fromR.ry)
         return rx, ry, rz
     end
 
-    -- In GIANTS Engine, localRotationToLocal composites local rotation with parent
     _G.localRotationToLocal = function(fromNode, toNode, rx, ry, rz)
         local fromR = nodeRotations[fromNode] or { rx = 0, ry = 0, rz = 0 }
         return rx + fromR.rx, ry + fromR.ry, rz + fromR.rz
@@ -727,14 +672,13 @@ test("StartingInCabViewAndRecenterFacesForwardOutWindshieldCollinearWithVehicleZ
         resetTemporalHistory = function() end
     }
 
-    -- Standard FS25 vehicle camera: XML/I3D defines rotation="-18 180 0" (math.pi)
     local standardCabCam = {
         isInside = true,
         cameraNode = 1101,
         cameraPositionNode = 1102,
         origRotX = math.rad(-18),
         rotX = math.rad(-18),
-        origRotY = math.pi, -- 180 degrees neutral forward
+        origRotY = math.pi,
         rotY = math.pi,
         origTransX = 0, origTransY = 1.6, origTransZ = -0.2
     }
@@ -749,23 +693,16 @@ test("StartingInCabViewAndRecenterFacesForwardOutWindshieldCollinearWithVehicleZ
         controlledVehicle = veh
     }
 
-    -- 1. Enter vehicle
     VRCompanion:onEnterVehicle(veh, true, nil)
 
-    -- 2. First update tick upon entering cab
     VRCompanion:onVehicleCameraUpdate(standardCabCam, 16.6)
 
-    -- The camera view frustum in GIANTS points along local -Z.
-    -- Forward in vehicle cab space is +Z (0, 0, 1). Backward is -Z (0, 0, -1).
-    -- When looking forward out the windshield, the camera node rotation Y in cab space must be math.pi (180 deg),
-    -- which rotates local look vector (0, 0, -1) to (0, 0, +1).
     local camRot = nodeRotations[1101]
     assert(camRot ~= nil, "Camera rotation must be set")
     local lookDirX, _, lookDirZ = VRCompanion:rotateVectorByYaw(0, 0, -1, camRot.ry)
     assert(lookDirZ > 0.99, string.format("Starting view in cab must face forward (+Z) out windshield, but lookDirZ = %f (camRot.ry = %f rad, %.1f deg)",
         lookDirZ, camRot.ry, math.deg(camRot.ry)))
 
-    -- 3. Recenter view in cab
     VRCompanion:onRecenterAction()
 
     local recenterRot = nodeRotations[1101]
@@ -775,8 +712,6 @@ test("StartingInCabViewAndRecenterFacesForwardOutWindshieldCollinearWithVehicleZ
         recLookZ, recenterRot.ry, math.deg(recenterRot.ry)))
 end)
 
--- The cab rest position: the camera update at a zero head pose and the Recenter Action's realign
--- put the head in the same place (translation and rotation), whichever way the cab is set up
 local function runRestPositionAgreement(withHeadTrackingNode)
     local nodeRotations = {}
     local nodeTranslations = {}
@@ -858,10 +793,6 @@ test("CameraUpdateAndRecenterRestAtTheSameCabPositionWithoutHeadTrackingNode", f
     runRestPositionAgreement(false)
 end)
 
--- A cab whose forward yaw reads 0, entered with mouse look already turned (the game's "don't reset
--- vehicle camera" brings back the last rotY): the head tracking node the mod builds and turns by the
--- look yaw every frame must not be read back as the cab's forward, or the look yaw becomes the new
--- forward and the Recenter Action rests there
 test("CabForwardOfZeroDoesNotTakeUpTheLookYaw", function()
     local nodeRotations = {}
     local nodeTranslations = {}

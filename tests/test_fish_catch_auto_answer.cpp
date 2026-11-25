@@ -1,13 +1,3 @@
-// Stereo Dialogs, the fish catch auto-answer (spec #142, ticket #147, ADR-0032): the saved console command
-// `vrFishCatch [ask|sell|release]` answers the fish catch dialog (Highlands Fishing DLC) as it opens, so the player never sees it,
-// in the stereoscopic view and in 2D Floating Window Mode alike, and shows a short notification of the catch. Seen from outside:
-// the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (the GUI as
-// the engine's Gui.lua keeps it and as the headset probe of ticket #143 measured it; the mission's blinking warning, which is the
-// notification), the test runs the console command, opens the dialog, drives frames the way the game would and asserts what the
-// player gets: which answer the dialog was given, whether it is still open, what the notification said, what the command
-// answers and what is written to the settings file. Never the mod's own state.
-// Prior art: test_stereo_dialogs.cpp (the dialog stub), test_hand_tools_left_hand.cpp (a console setting saved across sessions).
-
 #include "wheel_grab_test_support.h"
 #include <string>
 
@@ -15,17 +5,6 @@ namespace {
 
 using namespace wheel_grab_test;
 
-// The game's GUI with the fish catch dialog as the headset probe measured it (spec #142, the first comment): the dialog is the
-// root element in g_gui.dialogs, g_gui.currentDialogName is "FishDialog", g_gui.currentGuiName stays empty, its target is a
-// generic yes/no dialog (onYes is SELL, onNo is RELEASE) and the catch is only in the text, target.dialogTextElement.text.
-// Answering a dialog closes it, as the game's does. The answers it was given are recorded in `answers`, the notifications the
-// mission was asked to show in `notices`. `showFishDialog{...}` opens one:
-//   text         the text the dialog shows (the probe's, by default)
-//   stayOpen     an answer does not close the dialog
-//   noMethods    the dialog has no onYes / onNo
-//   inputDisabled  isInputDisabled() is true, and an answer is ignored, while `fishInputDisabled` is true
-//   ignoreFirst  the first N calls to onYes / onNo do nothing
-// `showDialog(name)` opens another dialog.
 constexpr const char* kFishStubs = R"luau(
     _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1, isMouseButtonPressed = function() return false end }
     _G.InputAction = { MENU_BACK = "MENU_BACK" }
@@ -94,7 +73,6 @@ constexpr const char* kFishStubs = R"luau(
     _G.getXMLString = function(file, key) local v = _G.savedXml[key]; return type(v) == "string" and v or nil end
 )luau";
 
-// The mod started on a map with a player in a cab and the GUI above.
 #define START_FISH_SCENE() \
     do { \
         headset.SetHeadPose(HandAt(0.0f, 1.6f, 0.0f)); \
@@ -114,9 +92,7 @@ bool DialogIsOpen(lua_State* L) { return EvalLua(L, "#g_gui.dialogs > 0") == "tr
 
 bool Contains(const std::string& text, const char* part) { return text.find(part) != std::string::npos; }
 
-}  // namespace
-
-// ---- It answers as the dialog opens ----
+}
 
 TEST_F(CompanionModTest, WithVrFishCatchSellTheFishDialogIsSoldAsItOpensAndTheCatchIsNotified) {
     FakeTrackedHeadset headset;
@@ -186,8 +162,6 @@ TEST_F(CompanionModTest, InTwoDFloatingWindowModeTheFishDialogIsAnsweredToo) {
     EXPECT_EQ(EvalLua(L, "VRCompanion:getIs2DViewActive()"), "true") << "2D Floating Window Mode carries on";
 }
 
-// ---- It leaves the dialog alone ----
-
 TEST_F(CompanionModTest, WithVrFishCatchAskTheFishDialogStaysOpenForThePlayer) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -201,7 +175,6 @@ TEST_F(CompanionModTest, WithVrFishCatchAskTheFishDialogStaysOpenForThePlayer) {
     EXPECT_TRUE(DialogIsOpen(L));
     EXPECT_EQ(NoticeCount(L), 0);
 
-    // And choosing ask again after sell puts it back.
     ASSERT_EQ(RunLuauChunk(L, "closeDialog(); runCommand('vrFishCatch', 'sell'); runCommand('vrFishCatch', 'ask'); showFishDialog()", "=askAgain"), 0);
     FRAMES(5);
     EXPECT_EQ(Answers(L), "");
@@ -223,8 +196,6 @@ TEST_F(CompanionModTest, WithVrFishCatchSellADialogThatIsNotTheFishDialogIsLeftA
     EXPECT_TRUE(DialogIsOpen(L));
     EXPECT_EQ(NoticeCount(L), 0);
 }
-
-// ---- A dialog that does not close at once (the headset: the dialog stayed up with `sell` set) ----
 
 TEST_F(CompanionModTest, ADialogWhoseInputIsDisabledIsAnsweredOnceItsInputIsBackAndOnlyThenNotified) {
     FakeTrackedHeadset headset;
@@ -265,8 +236,6 @@ TEST_F(CompanionModTest, ADialogThatIgnoresTheFirstCallsIsAskedAgainUntilItClose
     EXPECT_EQ(NoticeCount(L), 1);
 }
 
-// ---- Bounded, and once per opening ----
-
 TEST_F(CompanionModTest, ADialogThatNeverClosesIsAskedAFewTimesThenLeftAndTheNextCatchIsAnsweredAgain) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -290,8 +259,6 @@ TEST_F(CompanionModTest, ADialogThatNeverClosesIsAskedAFewTimesThenLeftAndTheNex
     EXPECT_FALSE(DialogIsOpen(L));
     EXPECT_EQ(NoticeCount(L), 1) << "only the next catch: the player closed the first one, nothing was sold by the mod";
 }
-
-// ---- The notification ----
 
 TEST_F(CompanionModTest, WhenTheDialogTextIsNotTheOneTheProbeMeasuredTheNotificationOnlySaysFishSoldOrReleased) {
     FakeTrackedHeadset headset;
@@ -321,8 +288,6 @@ TEST_F(CompanionModTest, TheNotificationNamesTheSpeciesAndThePriceFromTheDialogT
     EXPECT_EQ(Notices(L), "Sold eel for 1,250 $");
 }
 
-// ---- A dialog without the answer method ----
-
 TEST_F(CompanionModTest, AFishDialogWithoutAnAnswerMethodIsLeftOpenForThePlayerWithNoErrorAndNoNotification) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -336,8 +301,6 @@ TEST_F(CompanionModTest, AFishDialogWithoutAnAnswerMethodIsLeftOpenForThePlayerW
     EXPECT_EQ(NoticeCount(L), 0);
     EXPECT_FALSE(bridge.IsMenuVisible()) << "it is still a Stereo Dialog";
 }
-
-// ---- The command and the setting ----
 
 TEST_F(CompanionModTest, VrFishCatchWithNoArgumentReportsTheValueAndAnInvalidArgumentIsRefusedWithTheUsage) {
     FakeTrackedHeadset headset;
@@ -371,7 +334,6 @@ TEST_F(CompanionModTest, TheFishCatchSettingIsSavedAcrossSessions) {
         EXPECT_EQ(saved, "release") << "the choice is written to the settings file";
     }
 
-    // A fresh game session reads it back.
     lua_close(L);
     L = luaL_newstate();
     luaL_openlibs(L);

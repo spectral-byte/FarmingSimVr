@@ -1,11 +1,3 @@
--- ====================================================================
--- Test Suite for the VR action events (spec #199, ticket #208): the six events (HUD Toggle, Recenter, the two
--- Snap Turns, VR View Toggle, Seat Set) are registered from one table, so a seventh is one more row. Drives
--- registerActionEvents through a mock g_inputBinding and asserts on what the engine would see: the registered
--- action, callback and triggers, the input context, the text priority, activity, visibility and translated
--- text, and the log line (one per event per map).
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -28,7 +20,6 @@ local function test(name, fn)
     end
 end
 
--- The six events as the Controls screen and the input help know them
 local SIX = {
     { action = "VR_HUD_TOGGLE", idField = "hudToggleActionEventId", handler = "onHudToggleAction", loggedField = "hudToggleLoggedOnce", fallback = "Toggle VR HUD Mode" },
     { action = "VR_RECENTER_VIEW", idField = "recenterActionEventId", handler = "onRecenterAction", loggedField = "recenterLoggedOnce", fallback = "Recenter VR View" },
@@ -144,7 +135,6 @@ test("EachEventIsLoggedOncePerMapHoweverOftenItIsRegisteredAgain", function()
         local n = countLogs("Registered in-engine " .. row.action .. " event.")
         assert(n == 1, row.action .. " logged once, got " .. n)
     end
-    -- A new map logs them again
     VRCompanion:deleteMap()
     installBinding()
     captureLogs()
@@ -170,7 +160,6 @@ test("OnlyTheEventsTheEngineDroppedAreRegisteredAgain", function()
     cleanup()
 end)
 
--- The point of the table: a seventh event is one more row
 test("ASeventhRowIsRegisteredLoggedOnceAndForgottenOnMapUnloadWithoutOtherChanges", function()
     local rows = VRCompanion.ACTION_EVENTS
     assert(type(rows) == "table" and #rows == 6, "the six events are described by one table of six rows")
@@ -195,7 +184,6 @@ test("ASeventhRowIsRegisteredLoggedOnceAndForgottenOnMapUnloadWithoutOtherChange
         assert(texts[event.id] == "Seventh" and active[event.id] == true and visible[event.id] == true, "active, visible, with its text")
         assert(countLogs("Registered in-engine VR_TEST_SEVENTH event.") == 1, "logged once")
 
-        -- The periodic check sees it in place, and puts it back when the engine drops it
         local before = nextEventId
         VRCompanion:registerActionEvents(false)
         assert(nextEventId == before, "nothing is registered again while it is in place")
@@ -214,9 +202,6 @@ test("ASeventhRowIsRegisteredLoggedOnceAndForgottenOnMapUnloadWithoutOtherChange
     assert(ok, err)
 end)
 
--- The game ties an action event to its action's bindings when the event is registered, so a binding the player changes in
--- the Controls screen (Snap Turn taken off the right stick for smooth look) reaches the VR events only once they are
--- registered again. They listen for the game's INPUT_BINDINGS_CHANGED, as the on-foot player and an entered vehicle do.
 local subscriptions
 
 local function installMessageCenter()
@@ -273,7 +258,6 @@ test("AChangedBindingRegistersEveryVrEventAgainAtTheNextUpdate", function()
     local old = {}
     for _, row in ipairs(SIX) do old[row.action] = VRCompanion[row.idField] end
 
-    -- Off the periodic check's tick: nothing is registered while every event is in place and no binding changed
     VRCompanion.frameTicks = 0
     VRCompanion:update(16.6)
     local before = nextEventId
@@ -300,9 +284,6 @@ test("AChangedBindingRegistersEveryVrEventAgainAtTheNextUpdate", function()
     cleanup()
 end)
 
--- The frame the player gets into a vehicle, when it is also the periodic check's tick: the update looks after the events first
--- (they are in the on-foot context, and the vehicle's is the one now), and the vehicle transition registers them once more after
--- that. Both registrations, in that order, are what the engine saw before the subsystem registry moved the update's step.
 test("TheFrameTheControlledVehicleChangesRegistersTheEventsBeforeTheTransitionDoesAndThenItDoesAgain", function()
     installBinding()
     _G.g_inputBinding.removeActionEvent = function(self, id) self.events[id] = nil end
@@ -313,7 +294,7 @@ test("TheFrameTheControlledVehicleChangesRegistersTheEventsBeforeTheTransitionDo
     VRCompanion:update(16.6)
     local before = nextEventId
     assert(VRCompanion.frameTicks % 30 ~= 0, "the update is off the periodic tick")
-    VRCompanion.frameTicks = 29  -- the next update is the periodic check's (30th) tick
+    VRCompanion.frameTicks = 29
     assert(#contexts == 1 and contexts[1] == "PLAYER", "on foot so far")
 
     local registeredWhenTheTransitionBegan

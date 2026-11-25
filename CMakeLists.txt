@@ -6,36 +6,21 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Ensure MSVC uses standard-conforming flags and UTF-8
 if(MSVC)
     add_compile_options(/W4 /utf-8 /permissive-)
 endif()
 
-# Shipped configuration: RelWithDebInfo with full inlining (/Ob2) and a PDB.
-# CMake's MSVC default is /Ob1, which only inlines functions marked inline. Set before
-# FetchContent so the statically linked dependencies (Luau, MinHook, OpenXR) match.
-# CI and scripts/package_release.ps1 verify this value in CMakeCache.txt.
 if(MSVC)
     set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/Zi /O2 /Ob2 /DNDEBUG" CACHE STRING "RelWithDebInfo C++ flags (full inlining)" FORCE)
     set(CMAKE_C_FLAGS_RELWITHDEBINFO "/Zi /O2 /Ob2 /DNDEBUG" CACHE STRING "RelWithDebInfo C flags (full inlining)" FORCE)
 endif()
 
-# Static MSVC runtime (/MT): the Injector must not import VCRUNTIME140.dll, MSVCP140.dll or the
-# api-ms-win-crt-* DLLs, so players need no VC++ redistributable. Set before FetchContent so the
-# statically linked dependencies and the test executable use the same runtime as the Injector.
-# CI verifies the built version.dll with scripts/check_injector_imports.ps1.
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 include(FetchContent)
 
-# Every fetched dependency is pinned to a full commit hash with its readable version in a comment, so
-# its sources cannot change under a moved tag; scripts/check_pins.ps1 enforces it. CMake can only
-# shallow clone a branch or a tag, so these are full clones (CI caches them). To bump one, resolve the
-# new tag with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha` and update both.
-
-# Fetch OpenXR-SDK
 set(DYNAMIC_LOADER OFF CACHE BOOL "Build static OpenXR loader" FORCE)
 set(BUILD_TESTS OFF CACHE BOOL "Do not build OpenXR tests" FORCE)
 
@@ -45,29 +30,21 @@ FetchContent_Declare(
     GIT_TAG f2448a8797c85814aa892efc1ab8707900fbcc78 # release-1.1.63
 )
 FetchContent_MakeAvailable(OpenXR)
-# As a static library the OpenXR loader sets its own MSVC_RUNTIME_LIBRARY to the dynamic CRT, which
-# overrides CMAKE_MSVC_RUNTIME_LIBRARY above; set it back to the Injector's static runtime.
 if(MSVC)
     set_target_properties(openxr_loader PROPERTIES
         MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
 endif()
 
-# Fetch GoogleTest for TDD
 FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG b514bdc898e2951020cbdca1304b75f5950d1f59 # v1.15.2
 )
-# GoogleTest must follow the static runtime chosen above (the test executable and the Injector agree).
 set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# Fetch Luau for in-process Luau VM interaction and TDD
 set(LUAU_BUILD_CLI OFF CACHE BOOL "Do not build Luau CLI" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "Do not build Luau tests" FORCE)
-# Must match the Luau FS25 embeds; bumping it also means updating the host fingerprint (ADR-0002
-# amendment) and GIT_TAG below to the commit this tag names. FS25VR_LUAU_TAG reaches the test that
-# compares it with kExpectedLuauVersion.
 set(FS25VR_LUAU_TAG 0.662)
 FetchContent_Declare(
     luau
@@ -76,7 +53,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(luau)
 
-# Fetch MinHook for inline hooking
 FetchContent_Declare(
     minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
@@ -86,7 +62,6 @@ FetchContent_MakeAvailable(minhook)
 
 enable_testing()
 
-# Core source files
 set(CORE_SOURCES
     src/core/logger.cpp
     src/core/logger.h
@@ -158,7 +133,6 @@ set(CORE_SOURCES
     src/fidelityfx/fidelityfx_interceptor.cpp
 )
 
-# Core static library: compiled once, shared by the Injector DLL and the tests
 add_library(fs25_vr_core STATIC ${CORE_SOURCES})
 
 target_include_directories(fs25_vr_core PUBLIC
@@ -179,8 +153,6 @@ target_compile_definitions(fs25_vr_core PUBLIC
     WIN32_LEAN_AND_MEAN
 )
 
-# Version resource of the Injector: "FS25 VR" product identity (the Installer uses it to tell our
-# version.dll from a foreign one, and an earlier dxgi.dll of ours) and the Companion Mod's version from modDesc.xml.
 set(FS25VR_MODDESC "${CMAKE_CURRENT_SOURCE_DIR}/mods/FS25_VRCompanion/modDesc.xml")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FS25VR_MODDESC}")
 file(READ "${FS25VR_MODDESC}" FS25VR_MODDESC_TEXT)
@@ -188,16 +160,12 @@ if(NOT FS25VR_MODDESC_TEXT MATCHES "<version>([0-9]+(\\.[0-9]+)*)</version>")
     message(FATAL_ERROR "No numeric <version> found in ${FS25VR_MODDESC}")
 endif()
 set(FS25VR_VERSION "${CMAKE_MATCH_1}")
-# VERSIONINFO needs exactly four numbers.
 string(REPLACE "." ";" FS25VR_VERSION_PARTS "${FS25VR_VERSION}.0.0.0")
 list(SUBLIST FS25VR_VERSION_PARTS 0 4 FS25VR_VERSION_PARTS)
 string(REPLACE ";" "," FS25VR_VERSION_COMMA "${FS25VR_VERSION_PARTS}")
 configure_file(src/injector.rc.in "${CMAKE_CURRENT_BINARY_DIR}/injector.rc" @ONLY)
-# The same number reaches the core library (src/core/injector_version.h), which the Injector and the tests share:
-# VRBridge reports it and the Injector's first log line names it.
 target_compile_definitions(fs25_vr_core PUBLIC FS25VR_VERSION="${FS25VR_VERSION}")
 
-# The Injector DLL. The game loads it as its version.dll, and it hooks the system's dxgi.dll (ADR-0038).
 add_library(injector SHARED
     src/dllmain.cpp
     src/proxy/version_exports.cpp
@@ -208,11 +176,9 @@ set_target_properties(injector PROPERTIES OUTPUT_NAME version)
 
 target_link_libraries(injector PRIVATE fs25_vr_core)
 
-# Stand-in nvngx.dll for tests (exports the NGX D3D12 entry points)
 add_library(fake_nvngx SHARED tests/fake_nvngx.cpp)
 set_target_properties(fake_nvngx PROPERTIES OUTPUT_NAME nvngx)
 
-# Test executable target
 add_executable(fs25_vr_tests
     tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
@@ -336,7 +302,6 @@ target_link_libraries(fs25_vr_tests PRIVATE
     xinput.lib
 )
 
-# The binary tests load the freshly built Injector (version.dll) by its full path
 add_dependencies(fs25_vr_tests injector)
 
 target_compile_definitions(fs25_vr_tests PRIVATE
@@ -347,9 +312,6 @@ target_compile_definitions(fs25_vr_tests PRIVATE
 )
 add_dependencies(fs25_vr_tests fake_nvngx)
 
-# Warnings as errors for the project's own targets only (never the fetched dependencies, which
-# share the /W4 above but are not ours to fix). Off by default so a newer compiler cannot block a
-# local build; CI turns it on and scripts/check_build_config.ps1 -RequireWarningsAsErrors verifies it.
 option(FS25VR_WARNINGS_AS_ERRORS "Treat compiler warnings in the project's own code as errors" OFF)
 if(FS25VR_WARNINGS_AS_ERRORS AND MSVC)
     foreach(target fs25_vr_core injector fs25_vr_tests fake_nvngx)

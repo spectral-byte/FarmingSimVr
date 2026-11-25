@@ -1,9 +1,3 @@
-// Motion Controller state in the Companion Mod (spec #71), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, the test moves the fake
-// Motion Controllers and drives frames and the game clock, and asserts what the mod reports and what the
-// Injector's OpenXR layer was asked to do. Other Motion Controller features have their own files next
-// to this one and reuse companion_mod_fixture.h.
-
 #include "companion_mod_fixture.h"
 
 namespace {
@@ -25,7 +19,6 @@ HeadPose HandAt(float x, float y, float z) {
     return pose;
 }
 
-// Records console commands as the engine would register them, so tests can call the handlers.
 constexpr const char* kConsoleStubs = R"luau(
     _G.registeredCommands = {}
     _G.removedCommands = {}
@@ -40,7 +33,6 @@ constexpr const char* kConsoleStubs = R"luau(
     end
 )luau";
 
-// Starts the Companion Mod over `headset` with console and engine stubs, ready for frames.
 void StartMod(lua_State* L, FakeTrackedHeadset& headset, fs25vr::VRBridge& bridge) {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -49,8 +41,6 @@ void StartMod(lua_State* L, FakeTrackedHeadset& headset, fs25vr::VRBridge& bridg
     (void)headset;
 }
 
-// Stubs of the engine's XML settings API that remember what was saved, so a "session" can be
-// replayed into a fresh Lua state.
 constexpr const char* kXmlStubs = R"luau(
     _G.savedXml = _G.savedXml or {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -67,7 +57,7 @@ constexpr const char* kXmlStubs = R"luau(
     _G.getXMLString = function(file, key) local v = _G.savedXml[key]; return type(v) == "string" and v or nil end
 )luau";
 
-} // namespace
+}
 
 TEST_F(CompanionModTest, HandStateOfBothMotionControllersReachesTheModEveryFrame) {
     FakeTrackedHeadset headset;
@@ -92,15 +82,12 @@ TEST_F(CompanionModTest, HandStateOfBothMotionControllersReachesTheModEveryFrame
         assert(left.tracked == true and math.abs(left.x + 0.30) < 1e-5 and left.trigger == 0 and left.menu == false)
     )luau", "=handState"), 0);
 
-    // The next frame brings the next values.
     FakeOpenXrControllers::Inputs released;
     headset.SetHandInputs(kRight, released);
     NextFrame(&headset);
     ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion:getHandState(1).trigger == 0 and VRCompanion:getHandState(1).menu == false)",
                            "=handStateNext"), 0);
 }
-
-// ---- In use and the Pointer Hand ----
 
 TEST_F(CompanionModTest, AHandIsInUseWhileTrackedAndMovedWithinAboutThreeSeconds) {
     FakeTrackedHeadset headset;
@@ -113,7 +100,7 @@ TEST_F(CompanionModTest, AHandIsInUseWhileTrackedAndMovedWithinAboutThreeSeconds
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false") << "tracked but never moved";
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0)"), "false");
 
-    headset.SetHandPose(kRight, HandAt(0.35f, 1.22f, -0.40f));  // 5 cm
+    headset.SetHandPose(kRight, HandAt(0.35f, 1.22f, -0.40f));
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0)"), "false") << "the other hand did not move";
@@ -142,7 +129,7 @@ TEST_F(CompanionModTest, AControllerLyingStillOrJitteringBelowTheMoveThresholdIs
     ASSERT_NO_FATAL_FAILURE(StartMod(L, headset, bridge));
     SetGameTime(10000);
     headset.SetHandPose(kRight, HandAt(0.30f, 0.70f, -0.40f));
-    for (int i = 0; i < 400; ++i) {  // about 6.7 s of frames, with sub-millimetre sensor noise
+    for (int i = 0; i < 400; ++i) {
         const float noise = (i % 2 == 0) ? 0.0003f : -0.0003f;
         headset.SetHandPose(kRight, HandAt(0.30f + noise, 0.70f, -0.40f));
         NextFrame(&headset);
@@ -158,7 +145,7 @@ TEST_F(CompanionModTest, ASlowDriftThatAddsUpToARealMoveCountsAsMoving) {
     SetGameTime(10000);
     headset.SetHandPose(kRight, HandAt(0.30f, 0.70f, -0.40f));
     NextFrame(&headset);
-    for (int i = 1; i <= 20; ++i) {  // 2 mm per frame: 4 cm in total
+    for (int i = 1; i <= 20; ++i) {
         headset.SetHandPose(kRight, HandAt(0.30f + 0.002f * i, 0.70f, -0.40f));
         NextFrame(&headset);
     }
@@ -173,7 +160,7 @@ TEST_F(CompanionModTest, TurningAControllerInPlaceCountsAsMoving) {
     HeadPose pose = HandAt(0.30f, 1.00f, -0.40f);
     headset.SetHandPose(kRight, pose);
     NextFrame(&headset);
-    pose.rotation = fs25vr::EulerAngles(0.0f, 0.3f, 0.0f);  // 17 degrees of yaw, same position
+    pose.rotation = fs25vr::EulerAngles(0.0f, 0.3f, 0.0f);
     headset.SetHandPose(kRight, pose);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
@@ -194,7 +181,6 @@ TEST_F(CompanionModTest, ASingleHandInUseIsThePointerHand) {
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "0");
     EXPECT_EQ(EvalLua(L, "VRCompanion.pointerHand"), "0") << "the field mirrors getPointerHand()";
 
-    // Once that hand rests for 3 s, nobody points; moving the other hand makes it the Pointer Hand.
     AdvanceGameTime(3100);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
@@ -216,13 +202,11 @@ TEST_F(CompanionModTest, WithBothHandsInUseThePointerHandStaysUntilItsHandIsPutD
     NextFrame(&headset);
     ASSERT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
 
-    // The left hand is picked up as well: the Pointer Hand does not jump.
     headset.SetHandPose(kLeft, HandAt(-0.20f, 1.10f, -0.35f));
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0) and VRCompanion:isHandInUse(1)"), "true");
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
 
-    // The right hand is set down while the left keeps moving: the left becomes the Pointer Hand.
     for (int i = 0; i < 4; ++i) {
         AdvanceGameTime(900);
         headset.SetHandPose(kLeft, HandAt(-0.20f + 0.1f * (i + 1), 1.10f, -0.35f));
@@ -256,11 +240,10 @@ TEST_F(CompanionModTest, ARecenterDoesNotMakeAControllerLyingStillLookMoved) {
     SetGameTime(10000);
     HeadPose head = HandAt(1.0f, 1.6f, 0.5f);
     headset.SetHeadPose(head);
-    headset.SetHandPose(kRight, HandAt(1.3f, 0.7f, 0.2f));  // lying on the desk
+    headset.SetHandPose(kRight, HandAt(1.3f, 0.7f, 0.2f));
     NextFrame(&headset);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false");
 
-    // The Recenter Action moves the origin to the head: every pose, the desk Motion Controller's too, shifts.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenter"), 0);
     NextFrame(&headset);
 
@@ -269,7 +252,6 @@ TEST_F(CompanionModTest, ARecenterDoesNotMakeAControllerLyingStillLookMoved) {
     EXPECT_LT(std::abs(std::stof(EvalLua(L, "VRCompanion:getHandState(1).x")) - 0.3f), 1e-4f)
         << "the hand pose did follow the recenter";
 }
-// ---- vrMotionControllers and the status command ----
 
 TEST_F(CompanionModTest, MotionControllersAreOnByDefaultAndTheConsoleCommandsAreRegisteredAndRemoved) {
     FakeTrackedHeadset headset;
@@ -316,13 +298,11 @@ TEST_F(CompanionModTest, VrMotionControllersOffIgnoresControllerInputWithoutTouc
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
     EXPECT_EQ(EvalLua(L, "VRCompanion.pointerHand"), "nil");
 
-    // The session, its action set and its attach are untouched: the setting lives in the mod only.
     EXPECT_EQ(controllers.attachCalls, 1u);
     EXPECT_EQ(controllers.actionSetNames.size(), 1u);
     EXPECT_EQ(controllers.destroyActionSetCalls, 0u);
     EXPECT_TRUE(headset.manager->HasMotionControllerActions());
 
-    // Switching back on picks the Motion Controllers up again.
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllers', 'on')").find("on"), std::string::npos);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getHandState(1).tracked"), "true");
@@ -364,7 +344,6 @@ TEST_F(CompanionModTest, VrMotionControllersIsSavedAcrossSessions) {
     }
     ASSERT_EQ(saved, "false") << "the setting is written to the settings file";
 
-    // A fresh game session reads it back.
     lua_close(L);
     L = luaL_newstate();
     luaL_openlibs(L);
@@ -379,7 +358,6 @@ TEST_F(CompanionModTest, VrMotionControllersIsSavedAcrossSessions) {
     ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.motionControllers'] = false; VRCompanion:loadMap('x')", "=loadMapAgain"), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion.motionControllersEnabled"), "false");
 
-    // And "on" is saved too.
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'on')", "=on"), 0);
     EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.motionControllers']"), "true");
 }
@@ -399,11 +377,10 @@ TEST_F(CompanionModTest, TheStatusCommandReportsEachHandsTrackedAndInUseStateAnd
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, headset, bridge));
     SetGameTime(10000);
-    // The status command ends with the Virtual Gamepad's state (test_virtual_gamepad.cpp); this test is about the hands.
     auto HandsPartOfStatus = [&] {
         return EvalLua(L, "(runCommand('vrMotionControllerStatus'):gsub(' | Virtual Gamepad:.*', ''))");
     };
-    headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f), /*tracked=*/false);
+    headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f), false);
     headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
     NextFrame(&headset);
     EXPECT_EQ(HandsPartOfStatus(),
@@ -427,10 +404,8 @@ TEST_F(CompanionModTest, TheStatusCommandReportsEachHandsTrackedAndInUseStateAnd
               "Motion Controllers: off (Motion Controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none");
 }
 
-// ---- Nothing to track ----
-
 TEST_F(CompanionModTest, ARuntimeThatRefusesTheActionSetLeavesHeadTrackingAndTheModUnchanged) {
-    FakeTrackedHeadset headset(fs25vr::FakeTrackedHeadsetOptions{ /*refuseActionSet=*/true });
+    FakeTrackedHeadset headset(fs25vr::FakeTrackedHeadsetOptions{ true });
     fs25vr::HeadPose head = HandAt(0.1f, 1.6f, -0.2f);
     headset.SetHeadPose(head);
     headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
@@ -450,7 +425,6 @@ TEST_F(CompanionModTest, ARuntimeThatRefusesTheActionSetLeavesHeadTrackingAndThe
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("Right: not tracked, not in use"), std::string::npos);
 
-    // Head tracking and presentation are as before.
     EXPECT_EQ(EvalLua(L, "VRBridge.getHeadPose().isValid"), "true");
     EXPECT_NEAR(std::stof(EvalLua(L, "VRBridge.getHeadPose().y")), 1.6f, 1e-5f);
     EXPECT_TRUE(headset.manager->IsSessionRunning());
@@ -487,11 +461,8 @@ TEST_F(CompanionModTest, WithoutAnInjectorTheModKeepsRunningAndNoHandIsTracked) 
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("not available"), std::string::npos);
 }
 
-// ---- The subsystems of the Motion Controller poll, registered with the core ----
-
 namespace {
 
-// Wraps the five subsystem updates the poll fans out to (and VRBridge.onMapUnload) so a test can read the order they ran in.
 constexpr const char* kOrderRecorder = R"luau(
     _G.order = {}
     for _, name in ipairs({ "updateVirtualGamepad", "updateWheelGrab", "updateMenuPointer", "updateVirtualHands", "updateVirtualGamepadUse" }) do
@@ -508,7 +479,7 @@ constexpr const char* kOrderRecorder = R"luau(
     end
 )luau";
 
-} // namespace
+}
 
 TEST_F(CompanionModTest, EachUpdateRunsThePollOnceWithTheVirtualGamepadFirstAndTheMenuPointerVirtualHandsAndPadUsesLast) {
     FakeTrackedHeadset headset;

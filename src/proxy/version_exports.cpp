@@ -1,11 +1,3 @@
-// The exports of the system's version.dll. The Injector is loaded as the game's version.dll (ADR-0038), so every
-// module in the game process that imports version.dll binds to these. Each one calls the same function of the
-// system's version.dll, which is loaded from the system directory on first use (never from DllMain).
-// VerLanguageNameA and VerLanguageNameW are forwarded to kernel32 in version_exports.def, as the system's
-// version.dll forwards them.
-//
-// The Injector must never import version.dll itself: that import would bind to the Injector.
-// scripts/check_injector_imports.ps1 checks it.
 #include <windows.h>
 #include <winver.h>
 
@@ -27,15 +19,10 @@ Fn SystemVersionFunction(const char* name) {
     return module ? reinterpret_cast<Fn>(GetProcAddress(module, name)) : nullptr;
 }
 
-// GetFileVersionInfoByHandle is not in the Windows SDK. Its integer and pointer arguments (at most four) arrive
-// in the first four argument registers, so passing on four of them passes on whatever the caller gave.
 using GenericFourArgFn = INT_PTR(WINAPI*)(INT_PTR, INT_PTR, INT_PTR, INT_PTR);
 
-} // namespace
+}
 
-// A stub that cannot find the system function returns `fail`, as the system function reports an error (FALSE or 0
-// with ERROR_PROC_NOT_FOUND; VerFindFile and VerInstallFile have their own error bits). The .def file exports
-// each Fs25Vr_<name> as <name>.
 #define FS25VR_VERSION_STUB(ret, name, fail, params, args)                          \
     extern "C" ret WINAPI Fs25Vr_##name params {                                    \
         static const auto fn = SystemVersionFunction<decltype(&::name)>(#name);     \

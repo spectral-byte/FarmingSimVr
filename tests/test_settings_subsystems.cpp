@@ -1,11 +1,3 @@
-// The settings and diagnostics subsystems on the subsystem registry (spec #244, ticket #257): FOV Overscan, Menu Distance, Mouse
-// Confinement, the performance trace, Seat Offset, the fish catch and the dialog diagnostics. Seen from outside: the real
-// Companion Mod is loaded in modDesc order and driven as the game does (map load, map unload), and the test asserts what the game
-// was given: which console commands exist after a map loads and after it unloads, and which saved values VRBridge was sent, in
-// which order, after the handshake. Never the registry's contents.
-// Prior art: test_subsystem_registry.cpp (Desktop Mirror through the registry), test_companion_mod.cpp
-// EveryConsoleCommandIsRemovedOnUnloadSoASecondMapLoadsCleanly.
-
 #include "companion_mod_fixture.h"
 #include <string>
 
@@ -50,7 +42,7 @@ protected:
     fs25vr::VRBridge bridge_{nullptr, nullptr};
 };
 
-}  // namespace
+}
 
 TEST_F(SettingsSubsystemsTest, EachConsoleCommandExistsAfterMapLoadIsGoneAfterMapUnloadAndBackOnTheNextMap) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(

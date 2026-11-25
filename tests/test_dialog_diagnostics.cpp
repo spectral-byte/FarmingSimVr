@@ -1,24 +1,11 @@
-// Stereo Dialogs, the probe (spec #142, ticket #143): the console command vrDialogDiagnostics logs what the game shows while a
-// dialog is open, so that a headset run on a real fish catch (Highlands Fishing DLC, whose Lua is encrypted) tells what the rest
-// of the spec needs: the dialog's GUI name, how sell and release are answered, which input actions answer it, which fish fields it
-// holds and where its root sits. Seen from outside: the real Companion Mod runs with the game stood in by Lua stubs (the console
-// and g_gui as the engine's Gui.lua keeps them: `dialogs` holds the open dialogs' root elements, each with a `target` that is the
-// dialog's controller object), the test runs the command as the game would and asserts what the developer reads in the game log
-// and what the command answers. Never the mod's own state.
-// Prior art: test_hand_tools_describe_unsupported.cpp (a probe's log lines), test_virtual_gamepad_menu_use.cpp (g_gui stubs).
-
 #include "companion_mod_fixture.h"
 #include <string>
 #include <vector>
 
 namespace {
 
-// Every line the command writes starts with this.
 constexpr const char* kTag = "[FS25_VR] dialog probe: ";
 
-// The engine's console and the game's GUI. A dialog is the root GuiElement in g_gui.dialogs; its `target` is the controller
-// object (Gui:loadGui, Gui.lua), whose class chain holds the methods. `showFishDialog` opens a stand-in for the fish catch
-// dialog: its own fields (the fish), a class with the answer handlers and a parent class with the base dialog's methods.
 constexpr const char* kStubs = R"luau(
     _G.registeredCommands = {}
     _G.addConsoleCommand = function(name, desc, method, target)
@@ -80,19 +67,16 @@ constexpr const char* kStubs = R"luau(
     end
 )luau";
 
-// The mod started with the stubs in place (the suite is CompanionModTest itself, so the Companion Mod filter covers it).
 void Start(lua_State* L) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, kStubs, "=dialogStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
 }
 
-// Runs the command as the game would; the log lines are what the game logged during it. Returns the command's answer.
 std::string RunCommand(lua_State* L) {
     s_capturedLogs.clear();
     return EvalLua(L, "runCommand('vrDialogDiagnostics')");
 }
-// The lines the command wrote, without the tag.
 std::vector<std::string> Lines() {
     std::vector<std::string> lines;
     const std::string tag = kTag;
@@ -106,7 +90,6 @@ std::string Joined(const std::vector<std::string>& lines) {
     for (const auto& line : lines) all += line + "\n";
     return all;
 }
-// The first line that has all of the texts, or "" when there is none.
 std::string LineWith(const std::vector<std::string>& lines, std::initializer_list<const char*> texts) {
     for (const auto& line : lines) {
         bool all = true;
@@ -115,7 +98,7 @@ std::string LineWith(const std::vector<std::string>& lines, std::initializer_lis
     }
     return "";
 }
-}  // namespace
+}
 
 TEST_F(CompanionModTest, WithTheFishDialogOpenTheCommandLogsTheGuiNameAndTheDialogsNameAndClass) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
@@ -130,8 +113,6 @@ TEST_F(CompanionModTest, WithTheFishDialogOpenTheCommandLogsTheGuiNameAndTheDial
 }
 
 
-// How sell and release are answered, which input actions answer the dialog, and the fish fields: the dialog's own table, and the
-// method names of its class chain (the base dialog's too), which is where the DLC's handlers are.
 TEST_F(CompanionModTest, TheCommandLogsTheDialogsOwnFieldsOneLevelDeepAndTheMethodNamesOfItsClassChain) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
     ASSERT_EQ(RunLuauChunk(L, "showFishDialog()", "=open"), 0);
@@ -149,7 +130,6 @@ TEST_F(CompanionModTest, TheCommandLogsTheDialogsOwnFieldsOneLevelDeepAndTheMeth
     EXPECT_FALSE(LineWith(lines, { "class chain 2", "MessageDialog", "onClickBack", "close" }).empty()) << "the base class too: " << Joined(lines);
 }
 
-// The root element's position, so that the headset round can tell whether the whole dialog can be moved by it.
 TEST_F(CompanionModTest, TheCommandLogsTheRootElementsPositionAndSizeFields) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
     ASSERT_EQ(RunLuauChunk(L, "showFishDialog()", "=open"), 0);
@@ -175,7 +155,6 @@ TEST_F(CompanionModTest, WithNoDialogOpenTheCommandSaysSoAndLogsNothingElse) {
     EXPECT_EQ(lines[0], "no dialog open");
     EXPECT_EQ(s_capturedLogs.size(), 1u) << "nothing else is logged";
 
-    // A menu screen without a dialog, and a dialog list that is gone, are no dialog either.
     ASSERT_EQ(RunLuauChunk(L, "g_gui.currentGuiName = 'InGameMenu'", "=menu"), 0);
     EXPECT_EQ(RunCommand(L), "no dialog open");
     ASSERT_EQ(RunLuauChunk(L, "g_gui.dialogs = nil", "=noList"), 0);
@@ -184,8 +163,6 @@ TEST_F(CompanionModTest, WithNoDialogOpenTheCommandSaysSoAndLogsNothingElse) {
     EXPECT_EQ(RunCommand(L), "no dialog open");
 }
 
-// Read-only and tolerant: the dialog's fields can be anything. A table that holds itself, a huge table, odd keys, a missing target,
-// a table that raises on every read, an enormous string and far too many fields never make an error, and the log is capped.
 TEST_F(CompanionModTest, TheCommandIsReadOnlyAndNeverErrorsOnOddCyclicOrHugeFields) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -234,7 +211,6 @@ TEST_F(CompanionModTest, ADialogWithoutATargetOrNamesStillGivesALogNotAnError) {
     EXPECT_FALSE(LineWith(lines, { "dialog class", "no target" }).empty()) << Joined(lines);
 }
 
-// Without the engine's ClassUtil the class is named by the global it is kept under.
 TEST_F(CompanionModTest, WithoutTheEnginesClassUtilTheClassIsNamedByTheGlobalItIsKeptUnder) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
     ASSERT_EQ(RunLuauChunk(L, "_G.ClassUtil = nil; showFishDialog()", "=open"), 0);
@@ -252,8 +228,6 @@ TEST_F(CompanionModTest, TheCommandIsRegisteredOnMapLoadAndRemovedOnMapUnload) {
 }
 
 
-// A real dialog controller holds hundreds of element tables next to its few values: the values come first, so a cut leaves the
-// fish's species, weight and price in the log.
 TEST_F(CompanionModTest, ADialogWithManyElementFieldsStillLogsItsPlainValuesBeforeTheCut) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -269,8 +243,6 @@ TEST_F(CompanionModTest, ADialogWithManyElementFieldsStillLogsItsPlainValuesBefo
 }
 
 
-// The headset's first run (a generic yes/no dialog: SELL and RELEASE buttons, the catch only in a long text the log cut short):
-// the full text, and the answer buttons' own fields (their input action, their click handler) are what the next step needs.
 TEST_F(CompanionModTest, TheCommandLogsTheFullTextsAndTheAnswerButtonsOwnFields) {
     ASSERT_NO_FATAL_FAILURE(Start(L));
     ASSERT_EQ(RunLuauChunk(L, R"luau(

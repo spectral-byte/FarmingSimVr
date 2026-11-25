@@ -31,10 +31,6 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
 
 namespace {
 
-// Holds the game's garbage collector off while it lives and lets it run again when it ends, whichever way that is: if
-// the collector was running it is stopped and then restarted, and the game's own next allocation runs the step that
-// became due; if the game had stopped it, it stays stopped. Luau raises a Lua error as a C++ exception, so a scope that
-// ends in one releases the hold too.
 class CollectorHold {
 public:
     explicit CollectorHold(lua_State* L) : m_L(L), m_wasRunning(lua_gc(L, LUA_GCISRUNNING, 0) != 0) {
@@ -51,8 +47,6 @@ private:
     bool m_wasRunning;
 };
 
-// The names of the rendering modes, which the handshake, getRenderingMode and VRBridge.renderingMode hand out, indexed by
-// the mode's value. The list of anchored strings is built from this table, so a mode named here is anchored.
 constexpr const char* kRenderingModeNames[] = {"AFR", "SequentialDualPass"};
 static_assert(std::size(kRenderingModeNames) == static_cast<size_t>(VRRenderingMode::SequentialDualPass) + 1,
               "every rendering mode needs a name in kRenderingModeNames");
@@ -61,8 +55,6 @@ constexpr const char* RenderingModeName(VRRenderingMode mode) {
     return kRenderingModeNames[static_cast<size_t>(mode)];
 }
 
-// Every string a per-frame function returns (see VRBridge::PushAnchoredString): the rendering mode names and the
-// reasons the Virtual Gamepad can give.
 const std::vector<const char*>& AnchoredStrings() {
     static const std::vector<const char*> strings = [] {
         std::vector<const char*> all(std::begin(kRenderingModeNames), std::end(kRenderingModeNames));
@@ -72,17 +64,15 @@ const std::vector<const char*>& AnchoredStrings() {
     return strings;
 }
 
-// The string argument at `index`, or null when it is anything else. A number is not converted: lua_tostring would make a
-// string from it, which allocates on the game's heap.
 const char* StringArgument(lua_State* L, int index) {
     return lua_type(L, index) == LUA_TSTRING ? lua_tostring(L, index) : nullptr;
 }
 
-} // anonymous namespace
+}
 
 VRBridge& VRBridge::FromUpvalue(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(kBridgeUpvalue)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");  // does not return
+    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
     return *self;
 }
 
@@ -115,18 +105,10 @@ bool VRBridge::Inject(lua_State* L) {
 
     int origTop = lua_gettop(L);
 
-    // Inject runs inside a hook on the game's own call into this state, at a point the game does not expect the
-    // collector to run. A collection step started from our pushes below has crashed in the allocator
-    // (freeblock, from luaC_step) on several launches. Hold the collector off for the injection and let it run
-    // again afterwards, from the game's own allocations; leave it stopped if the game had stopped it.
     {
         CollectorHold collectorHold(L);
 
-        // The strings the per-frame functions return, made once here and carried by every closure as kAnchorsUpvalue so that
-        // returning one allocates nothing (see PushAnchoredString).
         const std::vector<const char*>& anchoredStrings = AnchoredStrings();
-        // A hash part only, like every other table made here: filled by integer index it had an array part, and the game
-        // crashed freeing it (ADR-0002, "the game's collector around VRBridge calls").
         lua_createtable(L, 0, static_cast<int>(anchoredStrings.size()));
         const int anchors = lua_gettop(L);
         for (size_t i = 0; i < anchoredStrings.size(); ++i) {
@@ -136,44 +118,33 @@ bool VRBridge::Inject(lua_State* L) {
             lua_setfield(L, anchors, key);
         }
 
-        // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
-        // to prevent dynamic table resizing/rehashing during startup
         lua_createtable(L, 0, kExposedFieldCount);
 
-        // VRBridge.version = the Injector's release version
         lua_pushstring(L, m_version.c_str());
         lua_setfield(L, -2, "version");
 
-        // VRBridge.<name> = function [bound with 'this' upvalue], driven by kFunctionTable. A per-frame function is
-        // registered as it is and never touches the collector; every other one is registered behind RunOccasional, which
-        // holds the collector for each call and is the only place that does.
-        // The upvalues are pushed in the order of their slots (kBridgeUpvalue, kAnchorsUpvalue, kEntryUpvalue), and a
-        // closure carries as many as its highest slot.
         for (const LuaFunctionEntry& entry : kFunctionTable) {
-            lua_pushlightuserdata(L, this);  // kBridgeUpvalue
-            lua_pushvalue(L, anchors);       // kAnchorsUpvalue
+            lua_pushlightuserdata(L, this);
+            lua_pushvalue(L, anchors);
             if (entry.kind == CallKind::PerFrame) {
                 lua_pushcclosure(L, entry.fn, entry.name, kAnchorsUpvalue);
             } else {
-                lua_pushlightuserdata(L, const_cast<LuaFunctionEntry*>(&entry));  // kEntryUpvalue
+                lua_pushlightuserdata(L, const_cast<LuaFunctionEntry*>(&entry));
                 lua_pushcclosure(L, &VRBridge::RunOccasional, entry.name, kEntryUpvalue);
             }
             lua_setfield(L, -2, entry.name);
         }
-        // Set metatable on VRBridge table for dynamic property access (__index)
         lua_createtable(L, 0, 1);
-        lua_pushlightuserdata(L, this);  // kBridgeUpvalue
-        lua_pushvalue(L, anchors);       // kAnchorsUpvalue
+        lua_pushlightuserdata(L, this);
+        lua_pushvalue(L, anchors);
         lua_pushcclosure(L, &VRBridge::Lua_Index, "__index", kAnchorsUpvalue);
         lua_setfield(L, -2, "__index");
         lua_setmetatable(L, -2);
 
-        // Set as global variable _G["VRBridge"]
         lua_setglobal(L, "VRBridge");
 
-        // Strictly restore stack state to guarantee zero stack leakage
         lua_settop(L, origTop);
-    }  // the collector runs again here if it was running
+    }
 
     LogInfo("VRBridge: Successfully injected global VRBridge table into Luau environment.");
     return true;
@@ -196,9 +167,7 @@ void VRBridge::PushAnchoredString(lua_State* L, int anchorsIndex, const char* te
 
 int VRBridge::RunOccasional(lua_State* L) {
     const auto* entry = static_cast<const LuaFunctionEntry*>(lua_touserdata(L, lua_upvalueindex(kEntryUpvalue)));
-    if (!entry) luaL_error(L, "VRBridge: function upvalue is missing");  // does not return
-    // The function runs as this closure, so its own kBridgeUpvalue and kAnchorsUpvalue are the bridge and the anchored
-    // strings bound at injection.
+    if (!entry) luaL_error(L, "VRBridge: function upvalue is missing");
     CollectorHold collectorHold(L);
     return entry->fn(L);
 }
@@ -236,7 +205,6 @@ int VRBridge::Lua_IsReady(lua_State* L) {
 int VRBridge::Lua_Handshake(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
-    // Handshake negotiation: allow Luau to optionally specify a preferred mode
     if (lua_gettop(L) >= 1) {
         if (lua_isnumber(L, 1)) {
             int val = lua_tointeger(L, 1);
@@ -249,8 +217,6 @@ int VRBridge::Lua_Handshake(lua_State* L) {
         }
     }
 
-    // The Companion Mod passes its own version as the second argument (the first is the optional mode). One from before
-    // that passes none, and an Injector from before it ignores the argument.
     const char* companionVersion = StringArgument(L, 2);
 
     self->PerformHandshake();
@@ -296,14 +262,11 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->SetDesktopMirrorEnabled(true);
     self->SetMouseConfinementEnabled(true);
     self->SetFovOverscan(0.0f);
-    // The Menu Distance stays: the main menu is a menu too, and the Injector shows it at the saved distance from launch.
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
 
 int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
-    // Fixed verdict: the telemetry probe was retired (ADR-0017); ADR-0015 records that
-    // GIANTS Engine 10 under D3D12 always needs AFR or SDP.
     VRBridge* self = &FromUpvalue(L);
     const bool afrFallback = self->RequiresAfrFallback();
 
@@ -347,7 +310,6 @@ HeadPose VRBridge::GetHeadPose() {
 HeadPose VRBridge::GetHeadPoseForEye(uint32_t eyeIndex) {
     if (m_openXrManager) {
         HeadPose pose = m_openXrManager->PollHeadPose();
-        // Remember the pose handed out for this eye's render so submission uses it.
         m_openXrManager->RecordRenderPose(eyeIndex, pose);
         return pose;
     }
@@ -364,7 +326,6 @@ HandState VRBridge::GetHandState(uint32_t hand) {
 bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
     if (m_openXrManager) {
         const bool played = m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
-        // The Companion Mod's own pulses win over the game's rumble on that hand while they play.
         if (played) m_virtualGamepad.NoteCompanionPulse(hand, durationMs);
         return played;
     }
@@ -399,9 +360,6 @@ void VRBridge::Recenter() {
     LogInfo("VRBridge: Recenter triggered.");
 }
 
-// Scans the call arguments for an optional eye selector (index or "left"/"right") and an optional
-// caller-supplied output table. Position-independent so the table can never be mistaken for the eye.
-// Returns the stack index of the output table, or 0 when none was supplied.
 static int ParseEyeAndOutputArgs(lua_State* L, uint32_t& eyeIndex) {
     int outIndex = 0;
     const int argc = lua_gettop(L);
@@ -423,12 +381,6 @@ static int ParseEyeAndOutputArgs(lua_State* L, uint32_t& eyeIndex) {
     return outIndex;
 }
 
-// The Injector runs its own statically linked Luau on the game's lua_State (ADR-0002). A table the
-// game created points at the game's empty-node sentinel, which the Injector's table code does not
-// recognise, so inserting a new key into it writes through the sentinel and crashes. Overwriting a
-// key that already exists never inserts, so a caller-supplied table is only filled in place when it
-// already holds every field written; otherwise a fresh Injector-made table is returned instead,
-// which the caller can keep and pass back on later calls.
 static bool HasAllFields(lua_State* L, int tableIndex, const char* const* names, size_t count) {
     tableIndex = lua_absindex(L, tableIndex);
     for (size_t i = 0; i < count; ++i) {
@@ -453,9 +405,6 @@ static const char* const kEyeProjectionFields[] = {
 };
 static constexpr size_t kEyeProjectionFieldCount = 15;
 
-// The fields of a hand state table, in documentation order: the aim pose carries the head pose's 13
-// fields (same names, units and convention as getHeadPose), then the raw inputs, then the grip pose
-// (gripPoseTracked and the pose's position, Euler angles and quaternion, in the same convention).
 static const char* const kHandStateFields[] = {
     "tracked",
     "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
@@ -469,9 +418,6 @@ static constexpr size_t kHandStateFieldCount = 33;
 
 static constexpr uint32_t kInvalidHand = 0xFFFFFFFFu;
 
-// Scans the call arguments for a hand selector (0/1 or "left"/"right", also "l"/"r") and an optional
-// caller-supplied output table, in either order. An unrecognised or missing selector yields
-// kInvalidHand, which reports an untracked hand. Returns the stack index of the output table or 0.
 static int ParseHandAndOutputArgs(lua_State* L, uint32_t& hand) {
     int outIndex = 0;
     bool handSeen = false;
@@ -503,7 +449,7 @@ void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
 
 void VRBridge::FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose, int eyeIndex) {
     tableIndex = lua_absindex(L, tableIndex);
-    lua_pushvalue(L, tableIndex);  // fields below are written to the table at -2 after each push
+    lua_pushvalue(L, tableIndex);
 
     lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
     lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
@@ -576,8 +522,6 @@ void VRBridge::FillHandStateTable(lua_State* L, int tableIndex, const HandState&
     lua_pop(L, 1);
 }
 
-// VRBridge.getHandState(hand [, outTable]) -> table. Like getHeadPose it fills a caller-supplied
-// table in place when that table already holds every field, so nothing is allocated per frame.
 int VRBridge::Lua_GetHandState(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -595,10 +539,6 @@ int VRBridge::Lua_GetHandState(lua_State* L) {
     return 1;
 }
 
-// VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean. A short vibration on one Motion
-// Controller: hand is 0 / 1 / "left" / "right" (as getHandState), durationMs the pulse length in
-// milliseconds, strength 0..1. Returns whether a pulse was played; false (and nothing happens) when
-// the runtime offers no controllers, the action set was refused, or an argument is missing or invalid.
 int VRBridge::Lua_PulseHaptic(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -606,7 +546,7 @@ int VRBridge::Lua_PulseHaptic(lua_State* L) {
     uint32_t hand = kInvalidHand;
     const int firstType = lua_type(L, 1);
     if (firstType == LUA_TNUMBER || firstType == LUA_TSTRING) {
-        ParseHandAndOutputArgs(L, hand);  // takes the first scalar argument, which is the hand
+        ParseHandAndOutputArgs(L, hand);
     }
     const float durationMs = lua_isnumber(L, 2) ? static_cast<float>(lua_tonumber(L, 2)) : 0.0f;
     const float strength = lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0.0f;
@@ -614,9 +554,6 @@ int VRBridge::Lua_PulseHaptic(lua_State* L) {
     return 1;
 }
 
-// VRBridge.setVirtualGamepad(enabled, live): the Companion Mod's settings for the Virtual Gamepad. `enabled` is
-// the saved vrVirtualGamepad setting (the pad is wanted at all); `live` says Motion Controller input is on
-// (vrMotionControllers), without which the pad stays present but reads neutral. A missing `live` is true.
 int VRBridge::Lua_SetVirtualGamepad(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -627,10 +564,6 @@ int VRBridge::Lua_SetVirtualGamepad(lua_State* L) {
     return 0;
 }
 
-// VRBridge.getVirtualGamepad() -> present, slot, reason, leftGripHeld, rightGripHeld: whether the game sees the Virtual
-// Gamepad, its XInput slot (0..3, nil while absent) and, while absent, why not ("off", "no OpenXR session", ...), then
-// whether each hand's grip is held as the pad reads it (LB / RB, with the pad's own hysteresis), present or not. Returns
-// plain values so a per-frame caller allocates nothing.
 int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -688,7 +621,7 @@ void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, u
 
 void VRBridge::FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex) {
     tableIndex = lua_absindex(L, tableIndex);
-    lua_pushvalue(L, tableIndex);  // fields below are written to the table at -2 after each push
+    lua_pushvalue(L, tableIndex);
 
     lua_pushnumber(L, proj.fovY);
     lua_setfield(L, -2, "fovY");
@@ -775,7 +708,6 @@ void VRBridge::SetFrameIndex(uint64_t index) {
 
 void VRBridge::SetRenderingMode(VRRenderingMode mode) {
     m_renderingMode.store(mode);
-    // The camera records of the old mode would read as history under the new one (the eye cadence differs).
     m_cameraRecords.Clear();
     m_subPassIndex.store(0);
     SetFrameParity(0);
@@ -877,7 +809,7 @@ void VRBridge::SetMenuVisible(bool visible) {
     if (m_menuVisible != visible) {
         m_menuVisible = visible;
         UpdateFovOverscanSuspension();
-        SetMenuCursor(false, 0.0f, 0.0f);  // a ray cursor from the previous panel must not linger
+        SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
         ResetSubPass();
         SignalDiscontinuity();
@@ -919,9 +851,6 @@ static void FillPanelHitTable(lua_State* L, int tableIndex, const PanelHit& hit)
     lua_pop(L, 1);
 }
 
-// VRBridge.getPanelHit(hand [, outTable]) -> { hit, u, v, distance }. u runs left to right and v top
-// to bottom, both 0..1 (the drawn cursor's convention). Like getHandState, a caller-supplied table is
-// filled in place only when it already holds every field.
 int VRBridge::Lua_GetPanelHit(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -940,17 +869,12 @@ int VRBridge::Lua_GetPanelHit(lua_State* L) {
     return 1;
 }
 
-// VRBridge.getPanelHitAlongRay(hand, ox, oy, oz, dx, dy, dz [, outTable]) -> { hit, u, v, distance }: the same for a ray
-// the caller gives, in the space the hand poses of getHandState are in. The Pointer Ray starts at the index
-// fingertip and runs along the finger, which only the Companion Mod knows. The direction need not be a unit vector.
-// A miss when an argument is missing, the direction has no length, or the hand is not tracked.
 int VRBridge::Lua_GetPanelHitAlongRay(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.getPanelHitAlongRay");
     uint32_t hand = kInvalidHand;
     const int outIndex = ParseHandAndOutputArgs(L, hand);
-    // The six numbers are the numeric arguments that follow the hand (a hand given by name is a string).
     double ray[6] = {};
     int found = 0;
     bool handPassed = false;
@@ -979,8 +903,6 @@ int VRBridge::Lua_GetPanelHitAlongRay(lua_State* L) {
     return 1;
 }
 
-// VRBridge.setMenuCursor(active [, u, v]): the Pointer Ray draws the menu cursor at (u, v) in
-// getPanelHit coordinates; active = false hands the cursor back to the desk mouse.
 int VRBridge::Lua_SetMenuCursor(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -1099,7 +1021,6 @@ int VRBridge::Lua_SetMenuDistance(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.setMenuDistance");
-    // Anything that is not a number is the default (lua_tonumber would make it 0, which clamps to the nearest distance)
     self->SetMenuDistance(lua_isnumber(L, 1) ? static_cast<float>(lua_tonumber(L, 1)) : OpenXrManager::kDefaultMenuQuadDistance);
     return 0;
 }
@@ -1226,7 +1147,6 @@ int VRBridge::Lua_GetActiveEye(lua_State* L) {
 int VRBridge::Lua_Index(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
-    // A key that is not a string (a number, say) is not converted to one: that would allocate. It reads nil.
     if (const char* key = StringArgument(L, 2)) {
         if (strcmp(key, "requiresAfrFallback") == 0) {
             lua_pushboolean(L, self->RequiresAfrFallback() ? 1 : 0);
@@ -1316,7 +1236,6 @@ int VRBridge::Lua_SetDlssMvScale(lua_State* L) {
     double scaleX = luaL_checknumber(L, 1);
     double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
     if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
@@ -1329,7 +1248,6 @@ int VRBridge::Lua_SetDlssMvScale(lua_State* L) {
 int VRBridge::Lua_SetDlssSharpness(lua_State* L) {
     double sharp = luaL_checknumber(L, 1);
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
     if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
@@ -1342,7 +1260,6 @@ int VRBridge::Lua_SetDlssSharpness(lua_State* L) {
 int VRBridge::Lua_SetDlssPreset(lua_State* L) {
     int preset = static_cast<int>(luaL_checkinteger(L, 1));
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
     if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
@@ -1356,7 +1273,6 @@ int VRBridge::Lua_SetDlssSdpMvScale(lua_State* L) {
     double scaleX = luaL_checknumber(L, 1);
     double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
     if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
@@ -1384,12 +1300,10 @@ int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
 int VRBridge::Lua_SetDlssMvFix(lua_State* L) {
     bool enabled = lua_toboolean(L, 1) != 0;
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: there is no motion vector pass to switch.
     if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    // True when the request took effect; turning the pass on after it disabled itself for the session reads false.
     lua_pushboolean(L, self->m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled ? 1 : 0);
     return 1;
 }
@@ -1397,7 +1311,6 @@ int VRBridge::Lua_SetDlssMvFix(lua_State* L) {
 int VRBridge::Lua_SetDlssDepthModel(lua_State* L) {
     bool infinite = lua_toboolean(L, 1) != 0;
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: there is no correction to switch.
     if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
@@ -1414,7 +1327,7 @@ int VRBridge::Lua_SetDlssNearClip(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    self->m_ngxInterceptor->SetNearClipOverride(meters); // 0 = automatic
+    self->m_ngxInterceptor->SetNearClipOverride(meters);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1423,13 +1336,11 @@ int VRBridge::Lua_DlssDiag(lua_State* L) {
     int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
                                          : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);
     VRBridge* self = &FromUpvalue(L);
-    // No NGX interceptor wired: there are no DLSS evaluations to trace.
     if (!self->m_ngxInterceptor || evaluations <= 0) {
         lua_pushboolean(L, 0);
         return 1;
     }
     self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
-    // FSR3 dispatches are traced through the same command.
     if (FidelityFxInterceptor* ffx = self->m_ngxInterceptor->GetFidelityFxInterceptor()) {
         ffx->ArmDiagnostics(static_cast<uint32_t>(evaluations));
     }
@@ -1472,4 +1383,4 @@ int VRBridge::Lua_PerfTraceEnd(lua_State* L) {
     return 0;
 }
 
-} // namespace fs25vr
+}

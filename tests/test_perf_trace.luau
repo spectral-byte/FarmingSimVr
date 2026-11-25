@@ -1,20 +1,13 @@
--- ====================================================================
--- Test Suite for the frame timing trace (vrPerfTrace)
--- ====================================================================
-
--- Mock GIANTS Engine globals before loading VRCompanion
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- The game classes the Companion Mod hooks from its update
 _G.missionUpdates = 0
 _G.FSBaseMission = { update = function(missionSelf, dt) _G.missionUpdates = _G.missionUpdates + 1 end }
 _G.VehicleCamera = { update = function(cam, dt) end }
 
--- Mock VRBridge: records every frame timing call
 _G.perfCalls = {}
 _G.perfTracing = false
 local mockVRBridge = {
@@ -43,7 +36,6 @@ local mockVRBridge = {
 _G.VRBridge = mockVRBridge
 VRBridge = mockVRBridge
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
 
 local passed = 0
@@ -72,7 +64,6 @@ local function hasCall(entry)
     return false
 end
 
--- One game frame as the engine runs it: the mission update (which runs the mod update), a camera update, the draw
 local function frame()
     FSBaseMission.update({}, 16.6)
     VRCompanion:update(16.6)
@@ -82,7 +73,6 @@ end
 
 print("Running Frame Timing Trace Tests...")
 
--- The first update installs the mission and camera hooks
 VRCompanion:update(16.6)
 
 test("WithoutATraceTheHooksNeverCallVRBridge", function()
@@ -109,7 +99,7 @@ end)
 test("TheUpdateNoticesTheInjectorEndedTheTrace", function()
     VRCompanion:consoleCommandPerfTrace("")
     assert(_G.perfCalls[1] == "start 10", "default length: " .. calls())
-    _G.perfTracing = false  -- the Injector's trace reached its end
+    _G.perfTracing = false
     VRCompanion:update(16.6)
     assert(VRCompanion.perfTracing == false, "the flag follows the Injector")
     _G.perfCalls = {}
@@ -156,8 +146,6 @@ test("MapUnloadEndsARunningTrace", function()
     assert(VRCompanion.perfTracing == false)
 end)
 
--- The game's mission classes form a chain: the Mission00 subclass either inherits FSBaseMission's update
--- or calls up to it. The mod wraps both, so the inner wrapper must pass straight through under AFR.
 local function countBegins(section)
     local n = 0
     for _, call in ipairs(_G.perfCalls) do

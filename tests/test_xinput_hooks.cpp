@@ -1,8 +1,3 @@
-// Installing the XInput hooks (ADR-0028, ticket #100, seam 2): against the real xinput1_4.dll of this machine, the
-// Virtual Gamepad answers the game's normal XInputGetState / XInputGetCapabilities / XInputSetState calls in the
-// highest free slot, every other slot still reaches the real devices, and removing the pad (or the Injector) puts
-// the library back as it was. What the pad reads from the Motion Controllers is test_virtual_gamepad.cpp.
-
 #include <gtest/gtest.h>
 #include "core/injector_runtime.h"
 #include "fake_openxr_runtime.h"
@@ -18,7 +13,6 @@ using fs25vr::FakeTrackedHeadset;
 using fs25vr::InjectorRuntime;
 using fs25vr::VRBridge;
 
-// What the real library answers for each slot right now, through the normal import.
 struct RealSlots {
     std::array<DWORD, 4> state{};
     std::array<DWORD, 4> capabilities{};
@@ -37,7 +31,6 @@ struct RealSlots {
         return real;
     }
 
-    // The highest slot no real pad occupies, or -1.
     int HighestFree() const {
         for (int slot = 3; slot >= 0; --slot) {
             if (state[slot] != ERROR_SUCCESS) return slot;
@@ -59,7 +52,7 @@ protected:
     }
 };
 
-} // namespace
+}
 
 TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOtherSlotPassesThrough) {
     const RealSlots real = RealSlots::Read();
@@ -70,7 +63,7 @@ TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOthe
     deps.vrBridge = bridge;
     InjectorRuntime runtime(std::move(deps));
     ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled()) << "the pad is there from the moment the OpenXR session has its action set";
-    bridge->GetVirtualGamepad().Configure(/*enabled=*/true, /*live=*/true);
+    bridge->GetVirtualGamepad().Configure(true, true);
     ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
 
     XINPUT_STATE state{};
@@ -82,7 +75,6 @@ TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOthe
     XINPUT_VIBRATION vibration{};
     EXPECT_EQ(XInputSetState(static_cast<DWORD>(free), &vibration), static_cast<DWORD>(ERROR_SUCCESS));
 
-    // Every other slot is still the real devices'.
     const RealSlots during = RealSlots::Read();
     for (DWORD slot = 0; slot < 4; ++slot) {
         if (static_cast<int>(slot) == free) continue;
@@ -91,7 +83,6 @@ TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOthe
         EXPECT_EQ(during.vibration[slot], real.vibration[slot]) << "slot " << slot;
     }
 
-    // Turning the pad off removes it and puts the library back.
     bridge->GetVirtualGamepad().Configure(false, true);
     EXPECT_FALSE(bridge->GetVirtualGamepad().AreHooksInstalled());
     const RealSlots after = RealSlots::Read();
@@ -101,7 +92,6 @@ TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOthe
 }
 
 TEST_F(XInputHooksTest, TheHooksComeWithTheOpenXrSessionAndItsActionSetWithoutTheCompanionModAndNotInPassThroughMode) {
-    // Pass-Through Mode: an OpenXR manager that never started a session. The game keeps its XInput untouched.
     auto passThroughManager = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>());
     auto passThroughBridge = std::make_shared<VRBridge>(passThroughManager, nullptr);
     {
@@ -112,8 +102,6 @@ TEST_F(XInputHooksTest, TheHooksComeWithTheOpenXrSessionAndItsActionSetWithoutTh
         EXPECT_FALSE(passThroughBridge->GetVirtualGamepad().GetStatus().present);
     }
 
-    // The session starts after the Injector is up (the game reaches its first frame): the pad appears with the first frame, no
-    // Companion Mod needed, so the main menu and the Controls screen reached from it already list it.
     auto fakeRuntime = std::make_shared<fs25vr::FakeOpenXrRuntime>();
     auto manager = std::make_shared<fs25vr::OpenXrManager>(fakeRuntime);
     auto lateBridge = std::make_shared<VRBridge>(manager, nullptr);
@@ -135,7 +123,6 @@ TEST_F(XInputHooksTest, WhenTheHooksCannotBeInstalledThereIsNoPadAndTheReasonSay
     InjectorRuntime first(std::move(firstDeps));
     ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
 
-    // A second Injector in the process cannot hook what the first has hooked: the game could never see its pad.
     FakeTrackedHeadset secondHeadset;
     auto secondBridge = std::make_shared<VRBridge>(secondHeadset.manager, nullptr);
     InjectorRuntime::Dependencies secondDeps;
@@ -151,8 +138,6 @@ TEST_F(XInputHooksTest, WhenTheHooksCannotBeInstalledThereIsNoPadAndTheReasonSay
 }
 
 TEST_F(XInputHooksTest, ACallThatReachesNoPadStillGoesToTheRealFunctionSoRealPadsDoNotVanish) {
-    // The hook entry points can run with no pad to answer (a runtime going away under a call already in flight). The original
-    // functions are kept by the hook layer itself, so such a call reaches the real XInput.
     static DWORD s_stateSlot = 99;
     const auto realGetState = +[](DWORD slot, XINPUT_STATE* state) -> DWORD {
         s_stateSlot = slot;
@@ -193,7 +178,6 @@ TEST_F(XInputHooksTest, TheLibraryIsRestoredWhenTheInjectorGoesAwayWithThePadSti
     EXPECT_FALSE(bridge->GetVirtualGamepad().AreHooksInstalled());
     EXPECT_EQ(RealSlots::Read().state, real.state);
 
-    // The same pad hooks again under a new runtime.
     InjectorRuntime::Dependencies deps;
     deps.vrBridge = bridge;
     InjectorRuntime runtime(std::move(deps));
@@ -218,7 +202,6 @@ TEST_F(XInputHooksTest, VibrationForThePadPlaysOnTheHandsAndVibrationForEverySlo
     bridge->GetVirtualGamepad().Configure(true, true);
     ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
 
-    // Through the normal import, as the game calls it: other slots answer as the real library does and move no hand.
     XINPUT_VIBRATION rumble{ 65535, 65535 };
     for (DWORD slot = 0; slot < 4; ++slot) {
         if (static_cast<int>(slot) == free) continue;
@@ -228,7 +211,6 @@ TEST_F(XInputHooksTest, VibrationForThePadPlaysOnTheHandsAndVibrationForEverySlo
     headset.NextFrame();
     EXPECT_TRUE(headset.HapticPulses().empty()) << "not the pad's slot: nothing for the Motion Controllers";
 
-    // The pad's own slot reaches the hands: the left motor the left hand, the right motor the right.
     XINPUT_VIBRATION leftOnly{ 65535, 0 };
     ASSERT_EQ(XInputSetState(static_cast<DWORD>(free), &leftOnly), static_cast<DWORD>(ERROR_SUCCESS));
     headset.NextFrame();

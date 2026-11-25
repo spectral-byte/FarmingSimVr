@@ -1,6 +1,3 @@
-// Eye snapshots (`vrEyeSnapshot`): the texture an eye is handed, read back to the CPU and written as a BMP that can be looked
-// at. The pixel decoding and the BMP layout are checked on their own; the readback runs on a WARP device against a texture in
-// the PRESENT state, as the back buffer is at Present.
 #include <gtest/gtest.h>
 #include "core/texture_snapshot.h"
 #include <d3d12.h>
@@ -30,7 +27,7 @@ std::array<uint8_t, 3> BmpPixel(const std::vector<uint8_t>& bmp, uint32_t x, uin
     return { bmp[at], bmp[at + 1], bmp[at + 2] };
 }
 
-} // namespace
+}
 
 TEST(TextureSnapshotTest, DecodesTheBackBufferFormatsTheGameUses) {
     uint8_t bgr[3];
@@ -184,7 +181,6 @@ TEST(TextureSnapshotTest, ReadsBackATextureInThePresentStateAndWritesEveryStepth
     EXPECT_EQ((std::array<uint8_t, 3>{ 0, 0, 255 }), BmpPixel(bmp, 1, 1));
     EXPECT_EQ((std::array<uint8_t, 3>{ 255, 0, 0 }), BmpPixel(bmp, 2, 0));
 
-    // The texture is back in PRESENT: a second snapshot from that state works again (above), and the device is fine
     EXPECT_TRUE(SUCCEEDED(device->GetDeviceRemovedReason()));
     std::filesystem::remove(file);
 

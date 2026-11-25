@@ -1,9 +1,3 @@
-// Interactive Control switches on when the Pointer Hand is picked up in a cab (spec #71,
-// ADR-0026), seen from outside: the real Companion Mod runs against the real VRBridge over
-// FakeTrackedHeadset, with a stand-in for the Interactive Control mod whose vehicle records every write
-// of its synced state (companion_mod_stubs.h). The test moves the fake Motion Controllers and the game
-// clock and asserts what Interactive Control's state became and when it was written.
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 
@@ -25,8 +19,6 @@ HeadPose HandAt(float x, float y, float z) {
     return pose;
 }
 
-// A cab at the world origin whose vehicle has Interactive Control's state (`initialState`), an
-// Interactive Control release the Companion Mod supports, and the mod started.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool initialState, const char* icVariant = "ok") {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -41,8 +33,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool initialState, const c
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
 }
 
-// What the game does each frame before the Companion Mod's update: the camera update and Interactive
-// Control's own update of its Click Points.
 void PreFrame(lua_State* L) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         if StubScene.updateCamera then StubScene.updateCamera() end
@@ -50,13 +40,11 @@ void PreFrame(lua_State* L) {
     )luau", "=preFrame"), 0);
 }
 
-} // namespace
+}
 
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The Pointer Hand is in use once its Motion Controller has moved: a Motion Controller held at (x, y, z) that was
-// moved there just now.
 #define PICK_UP(hand) \
     do { \
         headset.SetHandPose((hand), HandAt(0.2f, 0.0f, -0.3f)); \
@@ -65,7 +53,6 @@ void PreFrame(lua_State* L) {
         FRAMES(1); \
     } while (0)
 
-// The Pointer Hand stops being in use: the Motion Controller lies still for longer than the in-use time.
 #define PUT_DOWN() \
     do { \
         AdvanceGameTime(3500); \
@@ -102,7 +89,6 @@ TEST_F(CompanionModTest, PuttingThePointerHandDownRestoresOffAndLeavesOnAlone) {
         EXPECT_EQ(EvalLua(L, "#StubIC.stateWrites"), "2") << "on at pick-up, off at put-down, nothing else";
         EXPECT_EQ(EvalLua(L, "StubIC.stateWrites[2].state"), "false");
 
-        // Picking it up again is a new session: on, and off again.
         PICK_UP(kRight);
         EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "true");
         PUT_DOWN();
@@ -130,7 +116,6 @@ TEST_F(CompanionModTest, TheStateIsWrittenOnlyAtThePickUpAndPutDownNeverPerFrame
     SetGameTime(10000);
     PICK_UP(kRight);
     ASSERT_EQ(EvalLua(L, "#StubIC.stateWrites"), "1");
-    // The hand keeps moving, pulls the trigger and rests, for a long while, but stays in use.
     for (int i = 0; i < 40; ++i) {
         headset.SetHandPose(kRight, HandAt(0.3f + 0.02f * float(i % 2), 0.0f, -0.3f));
         fs25vr::FakeOpenXrControllers::Inputs inputs;
@@ -153,13 +138,11 @@ TEST_F(CompanionModTest, LeavingTheVehicleWhileThePointerHandIsInUseRestoresThat
     ASSERT_EQ(EvalLua(L, "cab:isInteractiveControlActivated()"), "true");
 
     ASSERT_EQ(RunLuauChunk(L, "g_currentMission.controlledVehicle = nil; VRCompanion:onLeaveVehicle(cab)", "=leave"), 0);
-    // The hand is still being moved: it is in use, but there is no cab to switch on.
     headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "cab:isInteractiveControlActivated()"), "false") << "that vehicle's previous state is back";
     EXPECT_EQ(EvalLua(L, "#StubIC.stateWrites"), "2");
 
-    // Back in the same cab with the hand still in use: switched on again, restored at the next put-down.
     ASSERT_EQ(RunLuauChunk(L, "g_currentMission.controlledVehicle = cab; VRCompanion:onEnterVehicle(cab, true, nil)", "=enter"), 0);
     headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(2);
@@ -252,7 +235,6 @@ TEST_F(CompanionModTest, ACameraSwitchThatMakesInteractiveControlSwitchItselfOff
     PICK_UP(kRight);
     ASSERT_EQ(EvalLua(L, "#StubIC.stateWrites"), "1");
 
-    // Interactive Control switches itself off when an inside camera becomes active.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.changeCamera(g_currentMission.controlledVehicle, { isInside = true })", "=camera"), 0);
     ASSERT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "false");
     headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
@@ -280,9 +262,6 @@ TEST_F(CompanionModTest, ControlledVehicleWithoutInteractiveControlClickPointsOr
     EXPECT_EQ(EvalLua(L, "#StubIC.stateWrites"), "0") << "on foot there is no cab";
 }
 
-// When the ray finds nothing in a cab, the game log says what Interactive Control reports for the vehicle being driven: its
-// state, its indoor check, whether the vehicle is active for input and AI-driven, and how many of its indoor Click Points are
-// active and were updated lately. A line is logged when that changes, not on every update.
 TEST_F(CompanionModTest, TheGameLogSaysWhatInteractiveControlReportsForTheDrivenVehicle) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -312,9 +291,6 @@ TEST_F(CompanionModTest, TheGameLogSaysWhatInteractiveControlReportsForTheDriven
                               " | indoor Click Points: 2 (active 1, updated lately 1)"), std::string::npos) << reports[1];
 }
 
-// The game draws the vehicle being driven as part of the HUD, and Interactive Control updates a cab's Click Points from that
-// draw. With the VR HUD hidden the draw does not run, so the Companion Mod runs Interactive Control's indoor update itself and
-// the cab's Click Points become active; with the HUD shown, or while a menu takes the input, it leaves them alone.
 TEST_F(CompanionModTest, WithTheHudHiddenTheCabClickPointsAreUpdatedWithoutTheVehiclesDraw) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -343,12 +319,10 @@ TEST_F(CompanionModTest, WithTheHudHiddenTheCabClickPointsAreUpdatedWithoutTheVe
     EXPECT_NE(EvalLua(L, "VRCompanion:getInteractiveControlDiagnostics()").find("Click Points seen: 1 (active 1)"), std::string::npos)
         << "and the ray can find it: " << EvalLua(L, "VRCompanion:getInteractiveControlDiagnostics()");
 
-    // With the HUD shown the game draws the vehicle, and the draw updates the Click Points.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL); StubIC.cabUpdates = {}", "=hudShown"), 0);
     FRAMES(5);
     EXPECT_EQ(EvalLua(L, "#StubIC.cabUpdates"), "0") << "left to the vehicle's draw";
 
-    // A menu takes the input: nothing is updated behind it.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
         _G.g_gui = { currentGuiName = "InGameMenu", currentDialogName = "", dialogs = {}, getIsGuiVisible = function() return true end }

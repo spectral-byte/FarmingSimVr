@@ -20,9 +20,9 @@ static std::vector<int> s_evalPresets;
 static std::vector<float> s_evalSharpness;
 
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreate(
-    ID3D12GraphicsCommandList* /*InCmdList*/,
-    NVSDK_NGX_Feature /*InFeatureID*/,
-    NVSDK_NGX_Parameter* /*InParameters*/,
+    ID3D12GraphicsCommandList*,
+    NVSDK_NGX_Feature,
+    NVSDK_NGX_Parameter*,
     NVSDK_NGX_Handle** OutHandle
 ) {
     s_createCount++;
@@ -41,10 +41,10 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockRelease(
 }
 
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluate(
-    ID3D12GraphicsCommandList* /*InCmdList*/,
+    ID3D12GraphicsCommandList*,
     const NVSDK_NGX_Handle* InFeatureHandle,
     const NVSDK_NGX_Parameter* InParameters,
-    PFN_NVSDK_NGX_ProgressCallback /*InCallback*/
+    PFN_NVSDK_NGX_ProgressCallback
 ) {
     s_evaluateCount++;
     s_evalHandles.push_back(InFeatureHandle);
@@ -143,25 +143,21 @@ TEST_F(NgxInterceptorTest, SubPassRoutingInSequentialDualPassRoutesLeftAndRight)
     VirtualNgxHandle* vHandle = interceptor.GetVirtualHandle(virtualHandle);
     ASSERT_NE(vHandle, nullptr);
 
-    // Frame 1 - Sub-Pass 0 -> evaluates hLeft
     bridge.SetSubPassIndex(0);
     EXPECT_EQ(MockEvaluate(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
     ASSERT_EQ(s_evalHandles.size(), 1u);
     EXPECT_EQ(s_evalHandles[0], vHandle->hLeft);
 
-    // Frame 1 - Sub-Pass 1 -> evaluates hRight
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(MockEvaluate(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
     ASSERT_EQ(s_evalHandles.size(), 2u);
     EXPECT_EQ(s_evalHandles[1], vHandle->hRight);
 
-    // Frame 2 - Sub-Pass 0 -> evaluates hLeft
     bridge.SetSubPassIndex(0);
     EXPECT_EQ(MockEvaluate(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
     ASSERT_EQ(s_evalHandles.size(), 3u);
     EXPECT_EQ(s_evalHandles[2], vHandle->hLeft);
 
-    // Frame 2 - Sub-Pass 1 -> evaluates hRight
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(MockEvaluate(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
     ASSERT_EQ(s_evalHandles.size(), 4u);
@@ -178,7 +174,6 @@ TEST_F(NgxInterceptorTest, MotionVectorScaleClampedTo1xInDualPassRegardlessOfSet
     interceptor.SetVRBridge(&bridge);
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
-    // Set custom MV scale multiplier e.g. 2.0x (typical for AFR)
     interceptor.SetMvScaleMultiplier(2.0f, 2.0f);
 
     NgxParameterImpl params;
@@ -191,7 +186,6 @@ TEST_F(NgxInterceptorTest, MotionVectorScaleClampedTo1xInDualPassRegardlessOfSet
     ASSERT_EQ(MockCreate(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
     ASSERT_NE(virtualHandle, nullptr);
 
-    // Sub-Pass 0 (Left Eye) -> MV scale multiplier must be locked to 1.0x (0.5f * 1.0f = 0.5f)
     bridge.SetSubPassIndex(0);
     EXPECT_EQ(MockEvaluate(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
     ASSERT_EQ(s_evalMvScaleX.size(), 1u);
@@ -199,7 +193,6 @@ TEST_F(NgxInterceptorTest, MotionVectorScaleClampedTo1xInDualPassRegardlessOfSet
     EXPECT_FLOAT_EQ(s_evalMvScaleX[0], 0.5f);
     EXPECT_FLOAT_EQ(s_evalMvScaleY[0], 0.5f);
 
-    // Sub-Pass 1 (Right Eye) -> MV scale multiplier must be locked to 1.0x (0.5f * 1.0f = 0.5f)
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(MockEvaluate(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
     ASSERT_EQ(s_evalMvScaleX.size(), 2u);
@@ -207,7 +200,6 @@ TEST_F(NgxInterceptorTest, MotionVectorScaleClampedTo1xInDualPassRegardlessOfSet
     EXPECT_FLOAT_EQ(s_evalMvScaleX[1], 0.5f);
     EXPECT_FLOAT_EQ(s_evalMvScaleY[1], 0.5f);
 
-    // Caller's parameters must remain intact
     float restoredX = 0.0f, restoredY = 0.0f;
     EXPECT_EQ(params.Get(NVSDK_NGX_Parameter_MV_Scale_X, &restoredX), NVSDK_NGX_Result_Success);
     EXPECT_EQ(params.Get(NVSDK_NGX_Parameter_MV_Scale_Y, &restoredY), NVSDK_NGX_Result_Success);
@@ -224,7 +216,6 @@ TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandle
     auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
 
-    // Start in AFR mode
     bridge.SetRenderingMode(VRRenderingMode::AFR);
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
@@ -237,7 +228,6 @@ TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandle
     ASSERT_EQ(MockCreate(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
     ASSERT_NE(virtualHandle, nullptr);
 
-    // Frame 0 in AFR: no reset
     bridge.SetFrameParity(0);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
     bridge.SetFrameParity(1);
@@ -246,20 +236,17 @@ TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandle
     EXPECT_EQ(s_evalReset[0], 0);
     EXPECT_EQ(s_evalReset[1], 0);
 
-    // Switch to Sequential Dual-Pass!
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
-    // Frame 1 in Dual-Pass: Sub-Pass 0 and Sub-Pass 1 must BOTH receive Reset = 1
     bridge.SetSubPassIndex(0);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
     bridge.SetSubPassIndex(1);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
 
     ASSERT_EQ(s_evalReset.size(), 4u);
-    EXPECT_EQ(s_evalReset[2], 1); // hLeft reset
-    EXPECT_EQ(s_evalReset[3], 1); // hRight reset
+    EXPECT_EQ(s_evalReset[2], 1);
+    EXPECT_EQ(s_evalReset[3], 1);
 
-    // Frame 2 in Dual-Pass: subsequent frame must NOT have reset (latched for exactly one frame)
     bridge.SetSubPassIndex(0);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
     bridge.SetSubPassIndex(1);
@@ -269,20 +256,17 @@ TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandle
     EXPECT_EQ(s_evalReset[4], 0);
     EXPECT_EQ(s_evalReset[5], 0);
 
-    // Switch back to AFR!
     bridge.SetRenderingMode(VRRenderingMode::AFR);
 
-    // Frame 3 in AFR: Parity 0 (hLeft) and Parity 1 (hRight) must BOTH receive Reset = 1
     bridge.SetFrameParity(0);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
     bridge.SetFrameParity(1);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
 
     ASSERT_EQ(s_evalReset.size(), 8u);
-    EXPECT_EQ(s_evalReset[6], 1); // hLeft reset
-    EXPECT_EQ(s_evalReset[7], 1); // hRight reset
+    EXPECT_EQ(s_evalReset[6], 1);
+    EXPECT_EQ(s_evalReset[7], 1);
 
-    // Frame 4 in AFR: subsequent frame has Reset = 0
     bridge.SetFrameParity(0);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
     bridge.SetFrameParity(1);
@@ -329,11 +313,9 @@ TEST_F(NgxInterceptorTest, SharpnessAndPresetOverridesAppliedToBothContextsInDua
     ASSERT_EQ(MockCreate(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
     ASSERT_NE(virtualHandle, nullptr);
 
-    // Sub-Pass 0
     bridge.SetSubPassIndex(0);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
 
-    // Sub-Pass 1
     bridge.SetSubPassIndex(1);
     MockEvaluate(nullptr, virtualHandle, &params, nullptr);
 
@@ -349,8 +331,6 @@ TEST_F(NgxInterceptorTest, SharpnessAndPresetOverridesAppliedToBothContextsInDua
 }
 
 TEST_F(NgxInterceptorTest, EntryPointsFailSafeWhenNoInterceptorOwnsTheDetours) {
-    // Nothing is attached, so no interceptor owns the feature detours: each entry point fails rather
-    // than reaching for some other interceptor or reporting work it did not do.
     ASSERT_FALSE(m_ngx.IsAttached());
     NgxParameterImpl params;
     NVSDK_NGX_Handle handle{};
@@ -372,8 +352,6 @@ TEST_F(NgxInterceptorTest, EntryPointsFailSafeWhenNoInterceptorOwnsTheDetours) {
 TEST_F(NgxInterceptorTest, SecondInterceptorCannotTakeOverLiveModuleLoadHooks) {
     ASSERT_TRUE(m_ngx.InstallModuleLoadHooks());
 
-    // Taking over the host would leave the live LoadLibrary detours without a trampoline, and they
-    // would recurse into the hooked LoadLibrary until the stack overflowed.
     NgxInterceptor other;
     EXPECT_FALSE(other.InstallModuleLoadHooks());
     EXPECT_FALSE(other.AreModuleHooksInstalled());
@@ -382,7 +360,6 @@ TEST_F(NgxInterceptorTest, SecondInterceptorCannotTakeOverLiveModuleLoadHooks) {
     EXPECT_NE(kernel32, nullptr);
     if (kernel32) FreeLibrary(kernel32);
 
-    // Once the owner lets go, another interceptor may install them.
     m_ngx.UninstallModuleLoadHooks();
     EXPECT_TRUE(other.InstallModuleLoadHooks());
     other.DetachAll();
@@ -398,5 +375,5 @@ TEST_F(NgxInterceptorTest, DetachLiveHooksUnwindsWhicheverInterceptorOwnsThem) {
     EXPECT_FALSE(m_ngx.IsAttached());
 }
 
-} // namespace
-} // namespace fs25vr
+}
+}

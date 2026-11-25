@@ -1,12 +1,3 @@
--- ====================================================================
--- Test Suite for saving the Seat Offsets (spec #166, ticket #169): each vehicle model's in-cab cameras
--- come back with the Seat Offset the player gave them, in the next session. Drives the whole Companion
--- Mod through what the engine calls (saveConfiguration, loadConfiguration, the in-cab camera update and
--- the vrSeatOffset console command) over a mock scene graph and a mock XML store, and asserts on what the
--- engine would see: the keys written to settings.xml, and where the head is placed after a load.
--- Settings schema: vrSettings.seatOffsets.seatOffset(i) with #vehicle, #camera, #forward, #up, #right.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -31,9 +22,6 @@ end
 
 local function near(a, b) return math.abs(a - b) < 0.0005 end
 
--- --------------------------------------------------------------------
--- Mock scene (see test_seat_offset.luau): nodes with a parent, a local translation and a yaw
--- --------------------------------------------------------------------
 local CAB = 999
 local nodes
 
@@ -106,7 +94,6 @@ end
 
 local nextCameraNode = 100
 local nextHeadNode = 500
--- An in-cab camera with a head tracking node at (0, 1.6, 0.2), looking out of the windscreen
 local function trackedCab()
     nextCameraNode = nextCameraNode + 1
     nextHeadNode = nextHeadNode + 1
@@ -130,7 +117,6 @@ end
 
 local function translationOf(id) local t = nodeOf(id).t return { x = t[1], y = t[2], z = t[3] } end
 
--- Where the head-tracked view puts the engine camera, the eye camera and the audio listener
 local function viewAfterUpdate(cam)
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     return {
@@ -228,7 +214,6 @@ local function entryKey(i, name) return string.format("vrSettings.seatOffsets.se
 
 print("Running Seat Offset Save Tests...")
 
--- Slice 1: saving writes one entry per non-zero Seat Offset
 test("SavingWritesOneEntryPerNonZeroSeatOffsetWithVehicleCameraAndAxes", function()
     setup()
     installXmlWriter()
@@ -272,7 +257,6 @@ test("AnOffsetResetToZeroIsNotWritten", function()
     assert(findEntry(rows, model, 1) == nil, "a reset offset has no entry")
 end)
 
--- Slice 2: a vrSeatOffset change saves the settings at once
 test("ASeatOffsetSetByConsoleIsSavedAtOnce", function()
     setup()
     installXmlWriter()
@@ -320,13 +304,12 @@ test("PrintingAndRejectedConsoleInputSaveNothing", function()
     VRCompanion:consoleCommandSeatOffset("nonsense")
     VRCompanion:consoleCommandSeatOffset("a", "b", "c")
     _G.g_currentMission = { controlledVehicle = nil }
-    VRCompanion:consoleCommandSeatOffset("0.1", "0.1", "0.1")  -- not in a cab
+    VRCompanion:consoleCommandSeatOffset("0.1", "0.1", "0.1")
     local saves = saveCount - before
     removeXmlMocks()
     assert(saves == 0, "nothing changed, nothing saved; saves: " .. saves)
 end)
 
--- Slice 3: after a save and a load, each offset comes back to its own camera
 test("SavedSeatOffsetsComeBackForEachModelAndForDriverAndPassengerCameras", function()
     setup()
     installXmlWriter()
@@ -349,7 +332,6 @@ test("SavedSeatOffsetsComeBackForEachModelAndForDriverAndPassengerCameras", func
     VRCompanion:consoleCommandSeatOffset("0.5", "-0.1", "0")
     local file = copyOf(written)
 
-    -- The player tunes things further in a later session, then the saved file is read back
     VRCompanion:consoleCommandSeatOffset("0", "0", "0.4")
     vehA.spec_enterable.camIndex = 1
     enter(vehA)
@@ -432,7 +414,6 @@ test("MalformedOrIncompleteEntriesAreSkippedAndTheOthersStillLoad", function()
     assertMoved(viewAfterUpdate(camB), baseB, 0.3, 0, -0.1, "the valid entry after the broken ones")
 end)
 
--- Slice 5: a settings file from before this feature loads with every Seat Offset at 0 0 0
 test("ASettingsFileWithoutSeatOffsetsLoadsWithEveryOffsetAtZero", function()
     setup()
     local cam = trackedCab()

@@ -1,17 +1,10 @@
--- ====================================================================
--- Test Suite for the HUD Safe Area, HUD Group placement and settings persistence
--- ====================================================================
-
--- Mock GIANTS Engine globals before loading VRCompanion
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
--- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
 VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
@@ -30,7 +23,6 @@ end
 
 print("Running VR HUD Safe Area and HUD Group Tests...")
 
--- Mock display that records the last position and scale it was given
 local function makeDisplay(width, height)
     return {
         width = width, height = height, position = nil, scale = nil,
@@ -52,8 +44,6 @@ end
 local DISPLAY_NAMES = { "ingameMap", "speedMeter", "gameInfo", "inputHelp", "contextAction" }
 local function near(a, b) return a ~= nil and b ~= nil and math.abs(a - b) < 0.0001 end
 
--- Every setting back to its default (a missing settings file yields the defaults), with the HUD at the depth its layouts are
--- set for, where the groups are placed at their layout size
 local function resetHudSettings()
     VRCompanion:loadConfiguration("non_existent_file.xml")
     VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
@@ -79,7 +69,6 @@ local function unloadMap()
     resetHudSettings()
 end
 
--- Slice 1: the HUD Safe Area sets the engine's global HUD anchors (spec #50, ticket #55)
 test("CalculatesDefaultHudAnchors", function()
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "DEFAULT_HUD_SAFE_AREA_HORIZONTAL must be 0.30")
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "DEFAULT_HUD_SAFE_AREA_VERTICAL must be 0.22")
@@ -124,7 +113,6 @@ test("TheGlobalInsetStateAndConstantsAreRemoved", function()
     end
 end)
 
--- Slice 2: Configuration API and metadata / XML fallback
 test("ConfiguresHudSafeAreaAndQueriesState", function()
     VRCompanion:configureHudSafeArea(0.25, 0.18)
     local safeArea = VRCompanion:getHudSafeArea()
@@ -212,8 +200,6 @@ test("HudSafeAreaWithOneKeyMissingKeepsTheOtherDefault", function()
     _G.delete = nil
     resetHudSettings()
 end)
--- Slice 3: HUD Groups are placed by their own HUD Group Margins
--- Each group's default margins and scale, as { horizontal, vertical, scale }
 local DEFAULT_GROUP_LAYOUTS = {
     speedometer = { 0.30, 0.20, 0.82 },
     map = { 0.30, 0.22, 0.82 },
@@ -241,21 +227,15 @@ test("PlacesEveryGroupAtItsDefaultMarginsUponMapLoad", function()
     local hud = makeHud()
     loadMapWith(hud)
 
-    -- The Safe Area still drives the engine's global anchors
     assert(near(_G.g_hudAnchorLeft, 0.30), "g_hudAnchorLeft must be 0.30 upon map load")
     assert(near(_G.g_hudAnchorRight, 0.70), "g_hudAnchorRight must be 0.70 upon map load")
     assert(near(_G.g_hudAnchorBottom, 0.22), "g_hudAnchorBottom must be 0.22 upon map load")
     assert(near(_G.g_hudAnchorTop, 0.78), "g_hudAnchorTop must be 0.78 upon map load")
 
-    -- Map group, bottom-left: left and bottom edges sit at the margins
     assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.position.y, 0.22), "map at its bottom-left margins")
-    -- Speedometer group, bottom-right: the display's width is subtracted from 1 - margin
     assert(near(hud.speedMeter.position.x, 1.0 - 0.30 - 0.15) and near(hud.speedMeter.position.y, 0.20), "speedometer at its bottom-right margins")
-    -- Info group, top-right: width and height are subtracted
     assert(near(hud.gameInfo.position.x, 1.0 - 0.30 - 0.20) and near(hud.gameInfo.position.y, 1.0 - 0.30 - 0.12), "info at its top-right margins")
-    -- Controls group, top-left: the height is subtracted
     assert(near(hud.inputHelp.position.x, 0.30) and near(hud.inputHelp.position.y, 1.0 - 0.30 - 0.30), "controls at its top-left margins")
-    -- The context action prompt is centered on the Speedometer group's bottom margin
     assert(near(hud.contextAction.position.x, 0.5) and near(hud.contextAction.position.y, 0.20), "context action centered at the speedometer bottom margin")
 
     for _, name in ipairs(DISPLAY_NAMES) do
@@ -321,7 +301,6 @@ test("GroupScaleCombinesWithTheGamesUiScale", function()
     assert(near(hud.contextAction.scale, 1.20 * 0.90), "the context action prompt follows the speedometer group's scale")
     assert(near(hud.ingameMap.scale, 1.20 * 0.82), "other groups keep their own scale")
 
-    -- Unloading restores the game's own UI scale
     unloadMap()
     assert(near(hud.speedMeter.scale, 1.20), "map unload restores the base UI scale")
     _G.GameSettings = nil
@@ -352,7 +331,6 @@ test("TwoDFloatingWindowModeKeepsTheEnginesLayoutWhenAGroupChanges", function()
         assert(display.position == nil, name .. " must not be placed in 2D Floating Window Mode")
     end
 
-    -- Back in the stereoscopic view the saved margins apply
     VRCompanion:set2DViewActive(false)
     assert(near(hud.ingameMap.position.x, 0.10) and near(hud.ingameMap.position.y, 0.10), "the margins set in 2D apply on returning to VR")
     VRCompanion:set2DViewActive(false)
@@ -388,7 +366,6 @@ test("PositionsIndividualDisplaysViaHelper", function()
     assert(near(map.anchorY, 0.22), "IngameMap anchorY must be 0.22")
 end)
 
--- HUD Groups (spec #50, ticket #51): a display's home corner comes from its group
 test("PlacesADisplayAtItsGroupsHomeCorner", function()
     resetHudSettings()
     local info = VRCompanion.HUD_GROUPS.info
@@ -420,7 +397,6 @@ test("RestoresOriginalHudAnchorsAndUiScaleOnMapUnload", function()
 
     unloadMap()
 
-    -- Original 2D full-screen corner anchors and base UI scale (1.20) must be restored
     assert(near(_G.g_hudAnchorLeft, 0.0), "g_hudAnchorLeft restored to 0.0")
     assert(near(_G.g_hudAnchorRight, 1.0), "g_hudAnchorRight restored to 1.0")
     assert(near(_G.g_hudAnchorBottom, 0.0), "g_hudAnchorBottom restored to 0.0")
@@ -431,7 +407,6 @@ test("RestoresOriginalHudAnchorsAndUiScaleOnMapUnload", function()
     _G.g_gameSettings = nil
 end)
 
--- Slice 4: User settings path resolution, saving, and modSettings override
 test("ResolvesUserSettingsPathFromAppPath", function()
     assert(VRCompanion:getUserSettingsPath() == nil, "Should return nil when getUserProfileAppPath is undefined")
 
@@ -495,7 +470,7 @@ test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
     _G.loadXMLFile = function(tag, path)
         table.insert(loadedPaths, path)
         if string.find(path, "modSettings") then
-            return 101 -- user settings file handle
+            return 101
         end
         return 0
     end
@@ -537,7 +512,6 @@ test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
     _G.delete = nil
 end)
 
--- Every default is defined exactly once, in the DEFAULT_* constants
 test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "HUD Safe Area horizontal default")
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "HUD Safe Area vertical default")
@@ -592,7 +566,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_AFR, false)
     assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
 
-    -- Reset everything to defaults, then load what was saved
     VRCompanion:configureHudSafeArea()
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do VRCompanion:setHudGroupLayout(groupName, 0.30, 0.22, 0.82) end
     VRCompanion.hudConvergenceDepth = nil
@@ -624,7 +597,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     assert(math.abs(VRCompanion.dlssNearClipOutside - 0.3) < 0.0001, "outside camera DLSS near plane must round-trip")
     assert(VRCompanion.dlssNearClipOnFoot == 0, "on-foot DLSS near plane (auto) must round-trip")
 
-    -- Restore defaults for later tests
     VRCompanion.dlssNearClipCab = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB
     VRCompanion.dlssNearClipOutside = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE
     VRCompanion.dlssNearClipOnFoot = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT
@@ -648,7 +620,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     _G.delete = nil
 end)
 
--- Per-group Streamlined and Full HUD visibility (spec #50, ticket #53)
 local function withMockedSettingsFile(store, fn)
     _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
     _G.createFolder = function() end
@@ -729,7 +700,6 @@ end)
 test("MissingGroupVisibilityKeysFallBackToDefaultConstants", function()
     local store = {}
     withMockedSettingsFile(store, function()
-        -- Only one key is present; a legacy file has none of them
         for _, group in pairs(VRCompanion.HUD_GROUPS) do group.streamlined, group.full = true, false end
         store["vrSettings.hudGroups.info.showStreamlined"] = true
         VRCompanion:loadConfiguration("settings.xml")
@@ -747,7 +717,7 @@ test("FirstRunSavesEveryGroupVisibilityDefault", function()
     local store = {}
     local savedFiles = 0
     withMockedSettingsFile(store, function()
-        _G.loadXMLFile = function() return 0 end -- no settings.xml yet
+        _G.loadXMLFile = function() return 0 end
         _G.saveXMLFile = function() savedFiles = savedFiles + 1 end
         for _, group in pairs(VRCompanion.HUD_GROUPS) do group.streamlined, group.full = true, false end
         VRCompanion:loadConfiguration()
@@ -761,8 +731,6 @@ test("FirstRunSavesEveryGroupVisibilityDefault", function()
     VRCompanion:configureHudSafeArea()
 end)
 
--- The HUD state (Hidden, Streamlined, Full) the player last chose is saved and restored between sessions;
--- a first install starts Hidden.
 test("HudStateRoundTripsThroughSaveAndLoadAndDefaultsToHidden", function()
     local store = {}
     withMockedSettingsFile(store, function()
@@ -791,7 +759,7 @@ test("HudStateRoundTripsThroughSaveAndLoadAndDefaultsToHidden", function()
         VRCompanion:loadConfiguration("settings.xml")
         assert(VRCompanion.persistedHudState == VRCompanion.DEFAULT_HUD_STATE, "an unknown name falls back to the default")
 
-        store["vrSettings.hudState"] = nil -- a settings file from before the HUD state was saved
+        store["vrSettings.hudState"] = nil
         VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
         VRCompanion:loadConfiguration("settings.xml")
         assert(VRCompanion.persistedHudState == VRCompanion.DEFAULT_HUD_STATE, "a missing key falls back to the default")
@@ -801,7 +769,6 @@ test("HudStateRoundTripsThroughSaveAndLoadAndDefaultsToHidden", function()
     VRCompanion:configureHudSafeArea()
 end)
 
--- Whether the Controls group is maximized or minimized (F1) is saved too; a first install starts maximized.
 test("ControlsExpandedRoundTripsThroughSaveAndLoadAndDefaultsToMaximized", function()
     local store = {}
     withMockedSettingsFile(store, function()
@@ -815,7 +782,7 @@ test("ControlsExpandedRoundTripsThroughSaveAndLoadAndDefaultsToMaximized", funct
         VRCompanion:loadConfiguration("settings.xml")
         assert(VRCompanion.controlsExpanded == false, "minimized must round-trip")
 
-        store["vrSettings.hudGroups.controls.expanded"] = nil -- a settings file from before it was saved
+        store["vrSettings.hudGroups.controls.expanded"] = nil
         VRCompanion:loadConfiguration("settings.xml")
         assert(VRCompanion.controlsExpanded == true, "a missing key falls back to maximized")
     end)
@@ -827,7 +794,7 @@ end)
 test("FirstRunSavesTheHiddenHudState", function()
     local store = {}
     withMockedSettingsFile(store, function()
-        _G.loadXMLFile = function() return 0 end -- no settings.xml yet
+        _G.loadXMLFile = function() return 0 end
         VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
         VRCompanion:loadConfiguration()
         assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_HIDDEN, "no settings file starts Hidden")
@@ -867,7 +834,6 @@ test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
 end)
 
 test("RuntimeStateStartsFromDefaultConstants", function()
-    -- Load a fresh copy of the mod and check every setting's runtime value against its constant
     local saved = _G.VRCompanion
     _G.VRCompanion = nil
     local ok, err = pcall(function()
@@ -898,7 +864,6 @@ test("RuntimeStateStartsFromDefaultConstants", function()
     _G.VRCompanion = saved
     assert(ok, tostring(err))
 
-    -- The runtime values are assigned from the constants, not from a second copy of the literal
     local fs = require("@lune/fs")
     local configSource = fs.readFile("mods/FS25_VRCompanion/src/VRCompanionConfig.lua")
     for _, field in ipairs({ "showHudLoadNotification", "recenterVrTrackingSpace" }) do
@@ -913,7 +878,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     local saveCount = 0
     local bridgeMode = nil
     _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
-    _G.loadXMLFile = function() return 0 end -- no settings.xml yet
+    _G.loadXMLFile = function() return 0 end
     _G.createFolder = function() end
     _G.createXMLFile = function() return 999 end
     _G.setXMLFloat = function(_, key, val) store[key] = val end
@@ -921,13 +886,11 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     _G.setXMLString = function(_, key, val) store[key] = val end
     _G.saveXMLFile = function() saveCount = saveCount + 1 end
     _G.delete = function() end
-    -- A bridge that exposes frame parity but no rendering mode reads as AFR until a mode is set explicitly
     _G.VRBridge = {
         getFrameParity = function() return 0 end,
         setRenderingMode = function(mode) bridgeMode = mode end,
     }
 
-    -- Leftover state from an earlier session must not leak into the first-run file
     VRCompanion:configureHudSafeArea(0.10, 0.10)
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do VRCompanion:setHudGroupLayout(groupName, 0.01, 0.02, 1.30) end
     VRCompanion.hudConvergenceDepth = nil
@@ -939,7 +902,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
 
     local safeArea = VRCompanion:loadConfiguration()
 
-    -- Every default is applied
     assert(math.abs(safeArea.horizontal - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "HUD Safe Area horizontal default applied")
     assert(math.abs(safeArea.vertical - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL) < 0.0001, "HUD Safe Area vertical default applied")
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
@@ -953,7 +915,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(VRCompanion.renderingModeExplicit == true, "default mode is applied through setRenderingMode")
     assert(bridgeMode == VRCompanion.DEFAULT_RENDERING_MODE, "default mode must reach VRBridge")
 
-    -- ...and the first-run settings file contains exactly those defaults
     assert(saveCount == 1, "first run must create the settings file")
     assert(math.abs(store["vrSettings.hudSafeAreaHorizontal"] - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "saved HUD Safe Area horizontal margin")
     assert(math.abs(store["vrSettings.hudSafeAreaVertical"] - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL) < 0.0001, "saved HUD Safe Area vertical margin")
@@ -999,7 +960,6 @@ test("SwitchingModeWhileCompositorActivePersistsTheNewMode", function()
     _G.setXMLString = function(_, key, val) store[key] = val end
     _G.saveXMLFile = function() end
     _G.delete = function() end
-    -- An active compositor only queues the change; the latched mode is unchanged until a frame boundary
     _G.VRBridge = {
         getRenderingMode = function() return latchedMode end,
         setRenderingMode = function(mode) queuedMode = mode end,
@@ -1026,37 +986,29 @@ test("SwitchingModeWhileCompositorActivePersistsTheNewMode", function()
     _G.delete = nil
 end)
 
--- Slice 5: Fill level positioning under vehicle element (SpeedMeterDisplay)
 test("ResolvesFillLevelsDisplayAcrossAllHierarchyVariants", function()
-    -- 1. Direct active instance
     local mockActive = { name = "ActiveFill" }
     VRCompanion.activeFillLevelsDisplay = mockActive
     assert(VRCompanion:getFillLevelsDisplay() == mockActive, "Should return cached active instance")
     VRCompanion.activeFillLevelsDisplay = nil
 
-    -- 2. On hud.fillLevels
     local mockHud1 = { fillLevels = { name = "HudFillLevels" } }
     assert(VRCompanion:getFillLevelsDisplay(mockHud1) == mockHud1.fillLevels, "Should resolve from hud.fillLevels")
 
-    -- 3. On hud.fillLevelsDisplay
     local mockHud2 = { fillLevelsDisplay = { name = "HudFillLevelsDisplay" } }
     assert(VRCompanion:getFillLevelsDisplay(mockHud2) == mockHud2.fillLevelsDisplay, "Should resolve from hud.fillLevelsDisplay")
 
-    -- 4. On hud.speedMeter.fillLevels
     local mockHud3 = { speedMeter = { fillLevels = { name = "SmFillLevels" } } }
     assert(VRCompanion:getFillLevelsDisplay(mockHud3) == mockHud3.speedMeter.fillLevels, "Should resolve from hud.speedMeter.fillLevels")
 
-    -- 5. On hud.speedMeter.fillLevelsDisplay
     local mockHud4 = { speedMeter = { fillLevelsDisplay = { name = "SmFillLevelsDisplay" } } }
     assert(VRCompanion:getFillLevelsDisplay(mockHud4) == mockHud4.speedMeter.fillLevelsDisplay, "Should resolve from hud.speedMeter.fillLevelsDisplay")
 
-    -- 6. Global fallback
     _G.g_fillLevelsDisplay = { name = "GlobalFillLevels" }
     assert(VRCompanion:getFillLevelsDisplay({}) == _G.g_fillLevelsDisplay, "Should resolve from _G.g_fillLevelsDisplay")
     _G.g_fillLevelsDisplay = nil
 end)
 
--- Speedometer group (spec #50, ticket #54): the fill levels are stacked directly under the speedometer
 local function makeStackHud(fillLevelCount)
     local hud = makeHud()
     hud.speedMeter = makeDisplay(0.10, 0.12)
@@ -1074,11 +1026,9 @@ test("StacksTheFillLevelsDirectlyUnderTheSpeedometerWithTheGroupsBottomMarginAtT
     loadMapWith(hud)
     setGroup("speedometer", 0.35, 0.25, 0.50)
 
-    -- Right edge at 1 - 0.35 = 0.65 for both; fill width 0.08, speedometer width 0.10
     assert(near(hud.fillLevels.position.x, 0.57) and near(hud.fillLevels.position.x + 0.08, 0.65), "fill levels are right-aligned with the group's horizontal margin")
     assert(near(hud.speedMeter.position.x + 0.10, 0.65), "the speedometer's right edge is on the same line as the fill levels'")
     assert(near(hud.fillLevels.position.y, 0.25), "the bottom margin is measured to the bottom of the fill levels")
-    -- Fixed gap of 0.004 scaled by the group's scale 0.50 = 0.002, above the 0.03-high fill levels
     assert(near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "the speedometer sits above the fill levels, one scaled gap clear of them")
     unloadMap()
 end)
@@ -1088,7 +1038,6 @@ test("MeasuresTheBottomMarginToTheLowestOfSeveralFillLevelsAndStacksTheSpeedomet
     loadMapWith(hud)
     setGroup("speedometer", 0.35, 0.25, 0.50)
 
-    -- Three 0.03-high levels with two row gaps of 0.004 * 0.50 = 0.002 between them
     assert(near(hud.fillLevels.position.y, 0.25), "the lowest fill level's bottom is on the bottom margin")
     assert(near(hud.speedMeter.position.y, 0.25 + 3 * 0.03 + 2 * 0.002 + 0.002), "the speedometer clears all three fill levels by the scaled gap")
     assert(near(hud.fillLevels.position.x + 0.08, 0.65) and near(hud.speedMeter.position.x + 0.10, 0.65), "right-aligned however many levels there are")
@@ -1127,7 +1076,6 @@ test("DrawingTheFillLevelsRestacksTheSpeedometerWhenTheNumberOfFillLevelsChanges
     VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
     assert(near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "one fill level")
 
-    -- An implement with three fill levels is attached: the next draw of the fill levels restacks the group
     hud.fillLevels.fillLevelData = { {}, {}, {} }
     _G.FillLevelsDisplay.draw(hud.fillLevels)
     assert(near(hud.fillLevels.position.y, 0.25), "the lowest fill level stays on the bottom margin")
@@ -1157,13 +1105,11 @@ test("ReservesNoSpaceUnderTheSpeedometerWhileNoFillLevelIsShown", function()
     assert(near(hud.speedMeter.position.y, 0.25), "with no fill levels the speedometer sits on the group's bottom margin, no phantom row or gap")
     assert(near(hud.speedMeter.position.x + 0.10, 0.65), "and stays right-aligned to the group's horizontal margin")
 
-    -- A fill level appears (an implement is attached): the next draw lifts the speedometer above it
     hud.fillLevels.fillLevelData = { {} }
     _G.FillLevelsDisplay.draw(hud.fillLevels)
     assert(near(hud.fillLevels.position.y, 0.25), "the fill level sits on the bottom margin")
     assert(near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "the speedometer rises to clear the one fill level")
 
-    -- The last fill level goes away: the speedometer drops back
     hud.fillLevels.fillLevelData = {}
     _G.FillLevelsDisplay.draw(hud.fillLevels)
     assert(near(hud.speedMeter.position.y, 0.25), "the speedometer drops back to the bottom margin")
@@ -1212,7 +1158,6 @@ test("NeverWritesTheRemovedFillLevelKeysAndIgnoresThemWhenLoading", function()
         assert(store["vrSettings.fillLevelUnderVehicle"] == nil, "the fill-under-vehicle key is not written")
         assert(store["vrSettings.hudFillLevelGap"] == nil, "the fill level gap key is not written")
 
-        -- A settings file from an earlier release carrying both keys must not change the stack
         store["vrSettings.fillLevelUnderVehicle"] = false
         store["vrSettings.hudFillLevelGap"] = 0.05
         VRCompanion:loadConfiguration("settings.xml")
@@ -1287,7 +1232,6 @@ test("SavesAndLoadsHudLoadNotificationConfiguration", function()
     VRCompanion:saveConfiguration()
     assert(savedData["vrSettings.showHudLoadNotification"] == true, "showHudLoadNotification must be saved as true")
 
-    -- Test loading from XML
     _G.loadXMLFile = function(tag, path) return 777 end
     _G.getXMLFloat = function(xmlFile, key) return nil end
     _G.getXMLBool = function(xmlFile, key)
@@ -1298,7 +1242,6 @@ test("SavesAndLoadsHudLoadNotificationConfiguration", function()
     VRCompanion:loadConfiguration("mockSettings.xml")
     assert(VRCompanion.showHudLoadNotification == false, "Must load false from XML")
 
-    -- Clean up mocks
     _G.getUserProfileAppPath = nil
     _G.createFolder = nil
     _G.createXMLFile = nil
@@ -1324,7 +1267,6 @@ test("ConsoleCommandTogglesHudLoadNotification", function()
     local usage = VRCompanion:consoleCommandSetHudLoadNotification("")
     assert(string.find(usage, "Usage") ~= nil, "Empty input should return usage string")
 
-    -- Reset back to default false
     VRCompanion.showHudLoadNotification = false
 end)
 
@@ -1340,24 +1282,20 @@ test("LoadMapSuppressesHudHiddenWarningWhenNotificationDisabled", function()
     }
     _G.g_currentMission = mockMission
 
-    -- 1. When disabled (default), warning must NOT be shown
     VRCompanion.showHudLoadNotification = false
     VRCompanion:loadMap("mapUS")
     assert(warningShown == false, "Warning must be suppressed on map load when showHudLoadNotification is false")
 
-    -- 2. When enabled, warning must be shown
     warningShown = false
     VRCompanion.showHudLoadNotification = true
     VRCompanion:loadMap("mapUS")
     assert(warningShown == true, "Warning must be shown on map load when showHudLoadNotification is true")
     assert(string.find(warningMsg, "VR HUD: Hidden") ~= nil, "Warning message must announce Hidden state")
 
-    -- Reset back to default false
     VRCompanion.showHudLoadNotification = false
     _G.g_currentMission = nil
 end)
 
--- vrHudGroup console command (spec #50, ticket #52)
 local function installSaveMocks()
     local saved = { store = {}, count = 0 }
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -1401,7 +1339,6 @@ test("VrHudGroupAppliesSavesAndConfirmsOnScreen", function()
         "shows an on-screen confirmation")
     assert(string.find(result, "map", 1, true) and not string.find(result, "Usage", 1, true), "console reply confirms the change")
 
-    -- The scale stays when only the margins are given
     setGroup("map", 0.20, 0.20)
     assert(near(hud.ingameMap.scale, 0.70), "an omitted scale keeps the group's current scale")
 
@@ -1506,7 +1443,6 @@ test("GroupLayoutsStartFromTheDefaultsWhenTheSettingsFileHasNoGroupKeys", functi
     resetHudSettings()
 end)
 
--- vrHudSafeArea console command and the HUD Safe Area lifecycle (spec #50, ticket #55)
 local function anchorsAre(left, right, bottom, top)
     return near(_G.g_hudAnchorLeft, left) and near(_G.g_hudAnchorRight, right)
         and near(_G.g_hudAnchorBottom, bottom) and near(_G.g_hudAnchorTop, top)
@@ -1531,7 +1467,6 @@ test("VrHudSafeAreaAppliesSavesAndConfirmsOnScreen", function()
         "shows an on-screen confirmation")
     assert(type(result) == "string" and not string.find(result, "Usage", 1, true), "console reply confirms the change")
     assert(string.find(result, "0.25", 1, true) and string.find(result, "0.18", 1, true), "the reply names the new margins")
-    -- The Safe Area does not move the groups
     assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.position.y, 0.22), "the map group stays on its own margins")
     assert(near(hud.speedMeter.position.x, 1.0 - 0.30 - 0.15), "the speedometer group stays on its own margins")
 
@@ -1608,7 +1543,6 @@ test("TwoDFloatingWindowModeUsesTheFullScreenAnchorsAndTheSafeAreaReturnsWithVr"
     VRCompanion:set2DViewActive(true)
     assert(anchorsAre(0.0, 1.0, 0.0, 1.0), "2D Floating Window Mode keeps the full-screen anchors")
 
-    -- A Safe Area set while in 2D saves, but the engine's layout stays untouched until VR returns
     VRCompanion:consoleCommandSetHudSafeArea("0.20", "0.12")
     assert(anchorsAre(0.0, 1.0, 0.0, 1.0), "the Safe Area does not reach the anchors in 2D Floating Window Mode")
 
@@ -1617,8 +1551,6 @@ test("TwoDFloatingWindowModeUsesTheFullScreenAnchorsAndTheSafeAreaReturnsWithVr"
     unloadMap()
 end)
 
--- FOV Overscan widens the view by (1 + percent / 100) in tangent, so a screen-space HUD placed as before would grow and sit
--- nearer. HUD placement, scale and convergence disparity shrink toward the screen centre by the same factor instead.
 local OVERSCAN_COMPENSATION = 1.0 / 1.2
 
 local function withOverscan(percent, fn)
@@ -1634,10 +1566,8 @@ test("FovOverscanPullsEveryGroupInTowardTheCentreAndShrinksIt", function()
     withOverscan(20, function()
         VRCompanion:repositionAllHudDisplays(hud)
         local m = 0.5 - (0.5 - 0.30) * OVERSCAN_COMPENSATION
-        -- Map group, bottom-left: both margins measured from the corner, pulled in toward the centre
         local mapY = 0.5 - (0.5 - 0.22) * OVERSCAN_COMPENSATION
         assert(near(hud.ingameMap.position.x, m) and near(hud.ingameMap.position.y, mapY), "map margins are pulled in by the overscan")
-        -- Info group, top-right: the display's size is subtracted from the pulled-in margin
         assert(near(hud.gameInfo.position.x, 1.0 - m - 0.20) and near(hud.gameInfo.position.y, 1.0 - m - 0.12), "info margins are pulled in by the overscan")
         for _, name in ipairs(DISPLAY_NAMES) do
             assert(near(hud[name].scale, 0.82 * OVERSCAN_COMPENSATION), name .. " is drawn smaller by the overscan")
@@ -1679,9 +1609,6 @@ test("ChangingTheFovOverscanReplacesTheHudAtOnce", function()
     unloadMap()
 end)
 
--- vrHudDepth moves the HUD Groups back or forward as one panel straight ahead. Their layouts are set for the default depth
--- (1.8 m); at another depth each group is drawn default / depth times its size and that much nearer to (or further from) the
--- screen centre, which is how a panel looks from further away, while the convergence disparity gives the same depth.
 local function withHudDepth(depth, fn)
     VRCompanion.hudConvergenceDepth = depth
     local ok, err = pcall(fn)
@@ -1695,7 +1622,6 @@ test("AFurtherHudDepthShrinksEveryGroupAndPullsItInTowardTheCentre", function()
     loadMapWith(hud)
     withHudDepth(3.6, function()
         VRCompanion:repositionAllHudDisplays(hud)
-        -- Twice the default depth: half the size, half as far from the centre
         local function pulledIn(margin) return 0.5 - (0.5 - margin) * 0.5 end
         assert(near(hud.ingameMap.position.x, pulledIn(0.30)) and near(hud.ingameMap.position.y, pulledIn(0.22)),
             "the Map group is pulled in toward the centre")
@@ -1721,7 +1647,6 @@ test("ANearerHudDepthGrowsTheGroupsButKeepsThemOnTheScreen", function()
         VRCompanion:repositionAllHudDisplays(hud)
         local grow = 1.8
         assert(near(hud.ingameMap.position.x, 0.5 - 0.20 * grow), "the Map group is pushed out toward its corner")
-        -- 0.5 - 0.28 * 1.8 and 0.5 - 0.30 * 1.8 would be below the screen: the groups stop at its bottom edge
         assert(near(hud.ingameMap.position.y, 0.0), "the Map group stops at the bottom edge, got " .. hud.ingameMap.position.y)
         assert(near(hud.speedMeter.position.y, 0.0), "the Speedometer group stops at the bottom edge, got " .. hud.speedMeter.position.y)
         for _, name in ipairs(DISPLAY_NAMES) do

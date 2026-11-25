@@ -12,3 +12,5 @@ Accepted
 - Warping monoscopic 2D frames across immersive projection layers (rejected: causes severe visual distortion, edge swimming, and uncomfortable optical disparity).
 - Head-locked quad layer in view space (`XR_REFERENCE_SPACE_TYPE_VIEW`) (rejected: locks the menu screen to the player's face, preventing natural 6DOF head motion and increasing disorientation).
 - World-anchored quad layer in local tracking space (`XR_REFERENCE_SPACE_TYPE_LOCAL`) with companion handshake gating (selected: delivers immediate, comfortable 6DOF head tracking in pre-game menus, supports in-menu view recentering, and transitions seamlessly to in-engine stereo rendering upon map load).
+
+More decisions about this area, from the code comments: [ADR-0056](0056-openxr-decisions.md).

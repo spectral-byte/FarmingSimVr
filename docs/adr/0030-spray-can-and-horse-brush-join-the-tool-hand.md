@@ -47,3 +47,5 @@ Proposed. The diagnostic dump of an unsupported held Hand Tool (last bullet abov
 - A game update that renames or reshapes `HandToolSprayCan.activateSpraying`, `HandToolHorseBrush.onBrushAction`, `HandToolHorseBrush.getHusbandryAndClusterFromNode` (wrapped for the touching cap), the specializations' `onDraw`, or the targeter's `closestTargetsByKey` / `getClosestTargetedNodeFromType` turns the feature off with a warning, as in ADR-0029.
 - `vrHandToolsDiagnostics` with an unsupported tool in hand writes up to 200 more lines to the log (one run, tagged `Hand Tool probe:`); with nothing, or a supported tool, held it logs what it logged before. Not yet confirmed in game: what the fishing rod's dump reads like, as the stub tools are shaped after readable game code.
 - Not yet confirmed in game: the spray and bristle axes, each tool's handle offset, whether the marker faces the can, and whether the brush's 0.25 m reach feels like touching.
+
+More decisions about this area, from the code comments: [ADR-0050](0050-hand-tool-decisions.md).

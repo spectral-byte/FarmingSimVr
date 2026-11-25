@@ -1,12 +1,3 @@
--- Hand Tools: scene helpers
--- Lua helpers for reading the scene as the player would see it, run once after the scene exists.
---   isBelow(node, ancestor)           the node hangs somewhere below the ancestor
---   handHolder(which)                 the Virtual Hand's node ("left" or "right"), nil without one
---   distance(a, b)                    metres between two nodes' world positions
---   offsetInHolder(node, which)       the node's position in the Virtual Hand's space, x y z
---   shown(which)                      the Virtual Hand is shown
---   fingerCurl(which, finger)         the curl of the three joints of a finger of a Virtual Hand, radians, toward the palm
-
     function _G.isBelow(node, ancestor)
         local guard = 0
         while node ~= nil and node ~= 0 and guard < 100 do

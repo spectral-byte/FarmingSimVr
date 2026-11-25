@@ -1,14 +1,4 @@
-# Fails when anything the build fetches or CI runs is not pinned to fixed content (spec #280):
-#   - every FetchContent_Declare in a CMakeLists.txt or *.cmake file fetches either GIT_TAG <full
-#     40-hex commit hash> or a URL with a URL_HASH, with the readable version in a comment beside it
-#     (GIT_TAG c2e7...e998c # 0.662). A hash does not work with GIT_SHALLOW (CMake can only shallow
-#     clone a branch or tag), so pinned git dependencies are cloned in full;
-#   - every Action a workflow uses (other than a local ./ one) is owner/repo@<full commit SHA> with
-#     its version in a comment (uses: actions/checkout@3d3c...0b1 # v7);
-#   - the workflows install Inno Setup with choco at a stated --version.
-# Each problem is reported with its file and line. scripts\test_check_pins.ps1 is this script's own check.
 param(
-    # The repository root to check (a scratch copy in the test).
     [string]$Root = (Split-Path -Parent $PSScriptRoot)
 )
 $ErrorActionPreference = "Stop"
@@ -20,14 +10,12 @@ function Get-RelativePath([string]$path) {
     $path.Substring($Root.TrimEnd('\', '/').Length).TrimStart('\', '/')
 }
 
-# Splits a line into its code and its comment (the text after the first #, trimmed; "" when none).
 function Split-Comment([string]$line, [string]$marker) {
     $index = $line.IndexOf($marker)
     if ($index -lt 0) { return @($line, "") }
     @($line.Substring(0, $index), $line.Substring($index + 1).Trim())
 }
 
-# CMake files, skipping build trees and fetched sources.
 function Get-CMakeFiles([string]$dir) {
     foreach ($item in Get-ChildItem -LiteralPath $dir -Force) {
         if ($item.PSIsContainer) {
@@ -39,7 +27,6 @@ function Get-CMakeFiles([string]$dir) {
     }
 }
 
-# --- Fetched dependencies -------------------------------------------------------------------------
 function Test-Declaration($file, [int]$line, [string]$name, [hashtable]$keys) {
     $where = "$(Get-RelativePath $file):$line"
     if ($keys.ContainsKey("GIT_REPOSITORY")) {
@@ -92,7 +79,6 @@ foreach ($file in Get-CMakeFiles $Root) {
     }
 }
 
-# --- Workflows: Actions and Inno Setup ------------------------------------------------------------
 $workflowDir = Join-Path $Root ".github\workflows"
 $workflows = @(Get-ChildItem -LiteralPath $workflowDir -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in ".yml", ".yaml" })
@@ -124,7 +110,6 @@ if ($innoInstalls -eq 0) {
 }
 
 if ($problems.Count -gt 0) {
-    # One line per problem on stdout, so no console width wraps a file name or a reference.
     Write-Host "Not pinned:"
     foreach ($problem in $problems) { Write-Host "  $problem" }
     exit 1

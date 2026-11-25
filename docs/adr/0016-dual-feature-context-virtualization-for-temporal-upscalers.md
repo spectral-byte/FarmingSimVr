@@ -14,3 +14,5 @@ accepted
 - **NVNGX Detour & Proxy Handle**: The native Injector (`dxgi.dll`) dynamically detours `NVSDK_NGX_D3D12_CreateFeature`, `EvaluateFeature`, and `ReleaseFeature` on `LoadLibrary`, returning an opaque `VirtualNgxHandle` wrapping `{ hLeft, hRight }` and routing evaluation synchronously based on `VRBridge::GetFrameParity()`.
 - **Dual Camera Nodes & Cyclopean Audio**: `VRCompanion.lua` alternates between two distinct scene-graph camera nodes (`cameraNodeLeft` and `cameraNodeRight`) to ensure native eye-stride motion vectors ($2\Delta t$), while spatial audio is bound to a stationary `Cyclopean Audio Listener Node` at the head pose midpoint.
 - **Resolution & Monoscopic Handling**: DLSS reconstructs directly to the decoupled OpenXR recommended eye resolution (ADR-0014), bypasses virtualization in 2D Floating Window and GUI Menu modes via single-context routing (`hLeft`), and triggers a `Discontinuity Flush` (`Reset = 1`) on snap turns, recentering, and view transitions.
+
+More decisions about this area, from the code comments: [ADR-0055](0055-upscaler-interception-decisions.md).

@@ -8,7 +8,6 @@
 namespace fs25vr {
 
 bool ThreadTrace::Record(uint32_t threadId) {
-    // Steady state is a plain load; only a different thread pays for the exchange.
     if (m_lastThread.load(std::memory_order_relaxed) == threadId) return false;
     uint32_t previous = m_lastThread.exchange(threadId);
     if (previous == threadId) return false;
@@ -36,4 +35,4 @@ bool ThreadTrace::Record() {
     return Record(static_cast<uint32_t>(GetCurrentThreadId()));
 }
 
-} // namespace fs25vr
+}

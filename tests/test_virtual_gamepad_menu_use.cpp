@@ -1,11 +1,3 @@
-// The Virtual Gamepad while a menu shows (ADR-0028, spec #98, ticket #101), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, the test drives the fake Motion
-// Controllers and the game's menu, and reads what the game would read from XInput (the answers the hooks route
-// the game's calls to) next to what the stub GUI receives. While a menu shows, the Companion Mod is using every
-// input on both hands (the Pointer Ray menus: cursor, trigger click, grip or lower face button for back, stick
-// scroll), so none of them reaches the pad, except an input already held when the menu came up, which keeps its
-// binding until it is let go.
-
 #include "companion_mod_fixture.h"
 #include "input/virtual_gamepad.h"
 
@@ -19,9 +11,6 @@ using fs25vr::Vector3;
 constexpr uint32_t kLeft = 0;
 constexpr uint32_t kRight = 1;
 
-// The engine's console, and the game's GUI as the mod sees it: it records the mouse events (cursor moves, clicks, wheel
-// steps) and the menu back input it is given. `list` covers the middle of the screen and scrolls the way the game's list
-// elements do (they poll the mouse wheel state while handling a mouse-down inside them).
 constexpr const char* kGuiStubs = R"luau(
     _G.registeredCommands = {}
     _G.addConsoleCommand = function(name, desc, method, target)
@@ -81,7 +70,6 @@ HeadPose PoseAt(float x, float y, float z) {
     return pose;
 }
 
-// The point on the menu panel a hand at the head's height aims at when its ray runs parallel to the panel's normal.
 HeadPose AimAt(float u, float v) {
     return PoseAt((u - 0.5f) * 1.6f, 1.6f + (0.5f - v) * 0.9f, 0.0f);
 }
@@ -105,8 +93,6 @@ FakeOpenXrControllers::Inputs Stick(float x, float y) {
     return inputs;
 }
 
-// Every control of a hand at once. (The right stick click is also the D-pad chord and reports RS on release, so a test that wants a quiet
-// pad after letting go leaves it out.)
 FakeOpenXrControllers::Inputs Everything(bool stickClick = true) {
     FakeOpenXrControllers::Inputs inputs;
     inputs.trigger = 1.0f;
@@ -125,8 +111,6 @@ protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // The mod started over the headset with the Virtual Gamepad on, no menu showing, and the right hand pointing at
-    // the middle of the panel, which is over the stub list.
     void StartWithPadOn() {
         headset.SetHeadPose(PoseAt(0.0f, 1.6f, 0.0f));
         headset.manager->PollHeadPose();
@@ -138,7 +122,7 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, "runCommand('vrVirtualGamepad', 'on')", "=padOn"), 0);
         headset.SetHandPointing(kRight, AimAt(0.5f, 0.5f));
         NextFrame(&headset);
-        headset.SetHandPointing(kRight, AimAt(0.55f, 0.5f));  // a real move: the hand is in use and points
+        headset.SetHandPointing(kRight, AimAt(0.55f, 0.5f));
         NextFrame(&headset);
     }
 
@@ -156,7 +140,6 @@ protected:
     }
     void Release(uint32_t hand) { Hold(hand, FakeOpenXrControllers::Inputs{}); }
 
-    // What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
     XINPUT_GAMEPAD Pad() {
         XINPUT_STATE state{};
         EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
@@ -173,13 +156,12 @@ protected:
     int Scrolls() { return std::stoi(EvalLua(L, "#scrolls")); }
 };
 
-} // namespace
+}
 
 TEST_F(VirtualGamepadMenuUseTest, WhileAMenuShowsTheWholePadReadsNeutralOnBothHands) {
     StartWithPadOn();
     ASSERT_FALSE(HasFatalFailure());
 
-    // No menu: everything reaches the pad.
     headset.SetHandInputs(kLeft, Everything());
     headset.SetHandInputs(kRight, Everything(false));
     NextFrame(&headset);
@@ -236,7 +218,6 @@ TEST_F(VirtualGamepadMenuUseTest, AnInputHeldWhenTheMenuOpensKeepsItsBindingUnti
     StartWithPadOn();
     ASSERT_FALSE(HasFatalFailure());
 
-    // The menu button opens the pause menu, so it is down when the menu comes up; so is a trigger held for throttle.
     FakeOpenXrControllers::Inputs left;
     left.menu = true;
     left.trigger = 1.0f;
@@ -246,14 +227,12 @@ TEST_F(VirtualGamepadMenuUseTest, AnInputHeldWhenTheMenuOpensKeepsItsBindingUnti
     EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_START, 0) << "Start was held before the menu: it keeps its binding";
     EXPECT_EQ(pad.bLeftTrigger, 255) << "so does the trigger";
 
-    // Something else pressed in the menu is the menu's.
     Hold(kRight, Everything());
     pad = Pad();
     EXPECT_EQ(pad.wButtons & ~XINPUT_GAMEPAD_START, 0);
     EXPECT_EQ(pad.bRightTrigger, 0);
     EXPECT_EQ(pad.sThumbRX, 0);
 
-    // Letting go of the trigger hands it to the menu: pulled again, it is the menu's click and not a binding.
     left.trigger = 0.0f;
     Hold(kLeft, left);
     EXPECT_EQ(Pad().bLeftTrigger, 0);
@@ -273,7 +252,7 @@ TEST_F(VirtualGamepadMenuUseTest, AnInputThePlayerPressedInTheMenuStaysOffThePad
     ASSERT_FALSE(HasFatalFailure());
     OpenMenu();
 
-    Hold(kRight, Grip(1.0f));  // goes back; the game closes the menu
+    Hold(kRight, Grip(1.0f));
     CloseMenu();
     EXPECT_EQ(Pad().wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0) << "the grip that went back does not fire its binding as the menu goes";
 
@@ -281,8 +260,6 @@ TEST_F(VirtualGamepadMenuUseTest, AnInputThePlayerPressedInTheMenuStaysOffThePad
     Hold(kRight, Grip(1.0f));
     EXPECT_NE(Pad().wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0) << "pressed afresh outside the menu it is the pad's again";
 }
-
-// ---- The pause menu's Settings page (the Controls screen is a sub-page of it): the player must be able to bind the pad ----
 
 TEST_F(VirtualGamepadMenuUseTest, OnThePauseMenusSettingsPageTheMotionControllersReachThePadSoTheyCanBeBoundInTheControlsScreen) {
     StartWithPadOn();
@@ -337,7 +314,7 @@ TEST_F(VirtualGamepadMenuUseTest, MovingFromAnotherPageToSettingsAKeptInputStays
     ASSERT_FALSE(HasFatalFailure());
     ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageMapOverview"));
 
-    Hold(kRight, Trigger(1.0f));   // the menu's click
+    Hold(kRight, Trigger(1.0f));
     ASSERT_EQ(Pad().bRightTrigger, 0);
     ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSettings"));
     EXPECT_EQ(Pad().bRightTrigger, 0) << "taken by the menu, it does not fire a binding as the page changes";
@@ -377,7 +354,6 @@ TEST_F(VirtualGamepadMenuUseTest, WithoutTheInGameMenuOrAPageTheMenuIsTreatedAsA
     StartWithPadOn();
     ASSERT_FALSE(HasFatalFailure());
 
-    // The pause menu is the current GUI but the game gives no page object: not the Settings page as far as anyone can tell.
     ASSERT_EQ(RunLuauChunk(L, "showPausePage('pageSettings'); g_inGameMenu.currentPage = nil", "=noPage"), 0);
     Hold(kRight, Trigger(1.0f));
     EXPECT_EQ(Pad().bRightTrigger, 0);
@@ -417,8 +393,6 @@ TEST_F(VirtualGamepadMenuUseTest, WithMotionControllersOffTheMenuUsesNothingAndT
     OpenMenu();
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("the Companion Mod is using: none"), std::string::npos);
 }
-// The Injector's side of the same thing, without the Companion Mod: whatever the Companion Mod says it is using reads
-// as released or centred, per hand, and only that.
 TEST_F(CompanionModTest, TheInputsTheCompanionModSaysItIsUsingReadReleasedOnThePadPerHandAndOnlyThose) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

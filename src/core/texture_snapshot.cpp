@@ -22,14 +22,13 @@ float HalfToFloat(uint16_t half) {
     if (exponent == 0) {
         value = std::ldexp(static_cast<float>(mantissa), -24);
     } else if (exponent == 31) {
-        value = mantissa ? 0.0f : 65504.0f;  // NaN reads as black, infinity as the largest value
+        value = mantissa ? 0.0f : 65504.0f;
     } else {
         value = std::ldexp(static_cast<float>(mantissa | 0x400u), static_cast<int>(exponent) - 25);
     }
     return sign ? -value : value;
 }
 
-// A linear channel (scRGB, 1.0 = SDR white) as an 8-bit value with an sRGB-like curve
 uint8_t LinearToByte(float linear) {
     if (!(linear > 0.0f)) return 0;
     const float encoded = std::pow(std::min(linear, 1.0f), 1.0f / 2.2f);
@@ -60,7 +59,7 @@ uint32_t BytesPerPixel(DXGI_FORMAT format) {
     }
 }
 
-} // namespace
+}
 
 bool DecodePixelToBgr8(DXGI_FORMAT format, const uint8_t* pixel, uint8_t bgr[3]) {
     switch (format) {
@@ -79,9 +78,9 @@ bool DecodePixelToBgr8(DXGI_FORMAT format, const uint8_t* pixel, uint8_t bgr[3])
         case DXGI_FORMAT_R10G10B10A2_UNORM: {
             uint32_t value;
             std::memcpy(&value, pixel, sizeof(value));
-            bgr[2] = static_cast<uint8_t>((value >> 2) & 0xFFu);   // red: bits 0-9
-            bgr[1] = static_cast<uint8_t>((value >> 12) & 0xFFu);  // green: bits 10-19
-            bgr[0] = static_cast<uint8_t>((value >> 22) & 0xFFu);  // blue: bits 20-29
+            bgr[2] = static_cast<uint8_t>((value >> 2) & 0xFFu);
+            bgr[1] = static_cast<uint8_t>((value >> 12) & 0xFFu);
+            bgr[0] = static_cast<uint8_t>((value >> 22) & 0xFFu);
             return true;
         }
         case DXGI_FORMAT_R16G16B16A16_FLOAT: {
@@ -108,7 +107,7 @@ std::vector<uint8_t> EncodeBmp24(uint32_t width, uint32_t height, const std::vec
     PutLE32(out, 10, kHeaderBytes);
     PutLE32(out, 14, 40);
     PutLE32(out, 18, width);
-    PutLE32(out, 22, height);  // positive: rows stored bottom-up
+    PutLE32(out, 22, height);
     PutLE16(out, 26, 1);
     PutLE16(out, 28, 24);
     PutLE32(out, 34, imageBytes);
@@ -216,4 +215,4 @@ std::string SnapshotTextureToBmp(ID3D12Device* device, ID3D12CommandQueue* queue
     return out ? std::string() : "could not write " + file.string();
 }
 
-} // namespace fs25vr
+}

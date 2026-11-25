@@ -1,10 +1,6 @@
 #include <gtest/gtest.h>
 #include "proxy/present_plan.h"
 
-// The decision of what one Present is, from the facts alone: no OpenXR runtime, no swap chain, no bridge.
-// Each case names the facts that differ from "Active, session running, Companion Mod in the 3D view, Desktop Mirror
-// Window on" and checks the whole plan against literals written out from the rule (ADR-0015, ADR-0019).
-
 namespace fs25vr {
 namespace {
 
@@ -20,7 +16,7 @@ PresentFacts StereoFacts() {
 TEST(PresentPlanTest, PassThroughModePresentsAsTheGameDidAndLatchesTheQueuedMode) {
     PresentFacts f = StereoFacts();
     f.active = false;
-    f.wasInQuadMode = true;  // left over from before the drop: not touched by a Present that does no VR
+    f.wasInQuadMode = true;
 
     const PresentPlan p = PlanPresent(f);
 
@@ -58,7 +54,7 @@ TEST(PresentPlanTest, SessionNotRunningStartsAFreshEyePairAndLeavesTheMirrorToIt
     PresentFacts f = StereoFacts();
     f.sessionRunning = false;
     f.wasInQuadMode = true;
-    f.desktopMirrorOff = true;  // cannot be off with the session stopped; the plan must not depend on it
+    f.desktopMirrorOff = true;
 
     const PresentPlan p = PlanPresent(f);
 
@@ -139,7 +135,7 @@ TEST(PresentPlanTest, SequentialDualPassFirstSubPassCopiesTheLeftEyeAndHoldsBack
     EXPECT_TRUE(p.snapshotEye);
     EXPECT_EQ(p.submit, EyeSubmission::None);
     EXPECT_EQ(p.advance, FrameAdvance::ToSecondSubPass);
-    EXPECT_FALSE(p.latchQueuedMode);  // an eye pair is in flight
+    EXPECT_FALSE(p.latchQueuedMode);
     EXPECT_FALSE(p.clearBackBufferToBlack);
     EXPECT_FALSE(p.callRealPresent);
     EXPECT_EQ(p.mirror, MirrorBookkeeping::Unchanged);
@@ -177,7 +173,7 @@ TEST(PresentPlanTest, AlternateFrameRenderingEvenParityCopiesTheLeftEyeAndPresen
     EXPECT_EQ(*p.copyToEye, 0u);
     EXPECT_TRUE(p.hideMenuCursor);
     EXPECT_TRUE(p.snapshotEye);
-    EXPECT_EQ(p.submit, EyeSubmission::None);  // the pair is not whole yet
+    EXPECT_EQ(p.submit, EyeSubmission::None);
     EXPECT_EQ(p.advance, FrameAdvance::ToNextFrame);
     EXPECT_FALSE(p.latchQueuedMode);
     EXPECT_TRUE(p.callRealPresent);
@@ -201,7 +197,6 @@ TEST(PresentPlanTest, AlternateFrameRenderingOddParityCopiesTheRightEyeSubmitsTh
 }
 
 TEST(PresentPlanTest, ReturningFromTheQuadStartsTheEyePairAgainFromTheLeftEye) {
-    // The phase in the facts is the one before the pacing is reset; the plan copies as it stands after.
     for (bool sdp : {false, true}) {
         PresentFacts f = StereoFacts();
         f.sequentialDualPass = sdp;
@@ -228,7 +223,7 @@ TEST(PresentPlanTest, DesktopMirrorOffSuppressesTheRealPresentOnceTheBlackFrameI
 
     const PresentPlan p = PlanPresent(f);
 
-    EXPECT_EQ(p.submit, EyeSubmission::FramePair);  // the headset still gets its frame
+    EXPECT_EQ(p.submit, EyeSubmission::FramePair);
     EXPECT_TRUE(p.latchQueuedMode);
     EXPECT_FALSE(p.clearBackBufferToBlack);
     EXPECT_FALSE(p.callRealPresent);
@@ -266,7 +261,7 @@ TEST(PresentPlanTest, DesktopMirrorOffDoesNotChangeTheFirstSubPassThatNeverPrese
     f.sequentialDualPass = true;
     f.eyePhase = 0;
     f.desktopMirrorOff = true;
-    f.mirrorWasShowing = true;  // the black frame belongs to the sub-pass that presents
+    f.mirrorWasShowing = true;
 
     const PresentPlan p = PlanPresent(f);
 
@@ -279,7 +274,7 @@ TEST(PresentPlanTest, DesktopMirrorOnShowsEveryPresentThatReachesDxgi) {
     PresentFacts f = StereoFacts();
     f.eyePhase = 1;
     f.desktopMirrorOff = false;
-    f.mirrorWasShowing = false;  // coming back on after being off
+    f.mirrorWasShowing = false;
 
     const PresentPlan p = PlanPresent(f);
 
@@ -288,5 +283,5 @@ TEST(PresentPlanTest, DesktopMirrorOnShowsEveryPresentThatReachesDxgi) {
     EXPECT_EQ(p.mirror, MirrorBookkeeping::Showing);
 }
 
-}  // namespace
-}  // namespace fs25vr
+}
+}

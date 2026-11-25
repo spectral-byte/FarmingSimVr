@@ -1,15 +1,3 @@
-# Verifies that a release tag names the Companion Mod's version, and says what the release workflow
-# needs to know about it. A release is named by its tag: v1.2.0, or v1.2.0-pre.1 for a pre-release
-# (any suffix after the version). Its assets carry the Companion Mod's four-part version (modDesc.xml,
-# for example 1.2.0.0) with the last ".0" dropped, so the tag must equal that: v1.2.0 for 1.2.0.0.
-# A mod version that does not end in ".0" has no release name on that rule and cannot be released.
-#
-# When GITHUB_OUTPUT is set (GitHub Actions), writes these outputs for later steps, and only once every
-# check has passed:
-#   version      the tag's version without the leading v or the suffix (1.2.0)
-#   mod_version  the Companion Mod's version (1.2.0.0), the one packaging puts in the asset names
-#   prerelease   true when the tag has a suffix, else false
-# scripts\test_check_release_tag.ps1 is this script's own check.
 param(
     [Parameter(Mandatory = $true)]
     [string]$Tag,
@@ -17,7 +5,6 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-# Numbers have no leading zeros; a suffix is dot-separated lowercase letters and digits.
 $number = '(0|[1-9][0-9]*)'
 $tagPattern = "^v($number\.$number\.$number)(-[a-z0-9]+(\.[a-z0-9]+)*)?$"
 if ($Tag -cnotmatch $tagPattern) {

@@ -31,9 +31,6 @@ using Microsoft::WRL::ComPtr;
 
 namespace fs25vr {
 
-// Detours are installed only by a proxy a live runtime owns, and hook entry points resolve their
-// subsystem through the live runtimes, so tests that drive them build their proxy through one. Each
-// runtime gets its own window controller and Luau interceptor.
 static std::unique_ptr<InjectorRuntime> MakeRuntime(
     std::shared_ptr<OpenXrManager> openXrManager,
     std::shared_ptr<VRBridge> vrBridge = nullptr,
@@ -125,7 +122,6 @@ TEST(DxgiProxyTest, ForwardsCreateDXGIFactory1SilentlyInPassThrough) {
     EXPECT_EQ(hr, S_OK);
     ASSERT_NE(factory.Get(), nullptr);
 
-    // Verify OpenXR manager entered Pass-Through Mode
     EXPECT_TRUE(openXrManager->IsPassThrough());
     EXPECT_FALSE(openXrManager->IsActive());
 }
@@ -145,8 +141,6 @@ TEST(DxgiProxyTest, ForwardsCreateDXGIFactory2SilentlyInPassThrough) {
     EXPECT_TRUE(openXrManager->IsPassThrough());
 }
 
-// Like VDXR: xrGetSystem creates a DXGI factory on the thread that starts VR. In the game DxgiExportHooks passes
-// that call straight to the system; a runtime that reached the proxy itself must not deadlock either.
 class DxgiCallingOpenXrRuntime : public FakeOpenXrRuntime {
 public:
     DxgiProxy* proxy = nullptr;
@@ -160,14 +154,12 @@ public:
 };
 
 TEST(DxgiProxyTest, RuntimeCreatingAFactoryDuringInitializationDoesNotDeadlock) {
-    // Leaked on a timeout: the blocked worker thread still uses them.
     auto* runtime = new std::shared_ptr<DxgiCallingOpenXrRuntime>(std::make_shared<DxgiCallingOpenXrRuntime>());
     auto* openXrManager = new std::shared_ptr<OpenXrManager>(std::make_shared<OpenXrManager>(*runtime));
     auto* proxy = new DxgiProxy(std::make_shared<SystemDxgi>(), *openXrManager, nullptr, nullptr,
                                 std::make_shared<MirrorWindowController>(), nullptr);
     (*runtime)->proxy = proxy;
 
-    // A detached thread rather than std::async, whose pool would keep a deadlocked process from exiting.
     auto result = std::make_shared<std::promise<bool>>();
     std::future<bool> outerCall = result->get_future();
     std::thread([proxy, result] {
@@ -190,7 +182,6 @@ TEST(DxgiProxyTest, RuntimeCreatingAFactoryDuringInitializationDoesNotDeadlock) 
     delete runtime;
 }
 
-// Like a real runtime: a session needs a graphics binding once a graphics extension is enabled.
 class GraphicsBindingRequiredOpenXrRuntime : public FakeOpenXrRuntime {
 public:
     uint32_t createSessionCalls = 0;
@@ -208,14 +199,12 @@ TEST(DxgiProxyTest, SessionWaitsForTheGamesD3D12DeviceInsteadOfBeingCreatedAtSta
     DxgiProxy proxy(std::make_shared<SystemDxgi>(), openXrManager, nullptr, nullptr,
                     std::make_shared<MirrorWindowController>(), nullptr);
 
-    // The game asks for a factory before it has a device to bind a session to.
     ComPtr<IDXGIFactory1> factory;
     ASSERT_EQ(proxy.CreateDXGIFactory1(IID_PPV_ARGS(&factory)), S_OK);
     EXPECT_TRUE(openXrManager->IsActive());
     EXPECT_EQ(runtime->createSessionCalls, 0u);
     EXPECT_FALSE(openXrManager->HasSession());
 
-    // Its swap chain then supplies the device and queue, and the session is created once, bound to them.
     auto* device = reinterpret_cast<ID3D12Device*>(static_cast<uintptr_t>(0x1000));
     auto* queue = reinterpret_cast<ID3D12CommandQueue*>(static_cast<uintptr_t>(0x2000));
     openXrManager->SetD3D12DeviceAndQueue(device, queue);
@@ -292,7 +281,6 @@ public:
         }
         return XR_SUCCESS;
     }
-    // Fake runtime event queue; a created session reports READY like a real runtime would.
     FakeOpenXrEventQueue events;
     XrResult PollEvent(XrInstance, XrEventDataBuffer* eventData) override { return events.Poll(eventData); }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession* session) override {
@@ -568,20 +556,18 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // Frame 0 (even, left eye, parity = 0)
     proxy.OnPresent(nullptr, 0, 0);
 
     EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
-    EXPECT_EQ(vrBridge->GetFrameParity(), 1u); // parity advanced to 1
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
 
-    // Frame 1 (odd, right eye, parity = 1)
     proxy.OnPresent(nullptr, 0, 0);
 
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
-    EXPECT_EQ(vrBridge->GetFrameParity(), 0u); // parity advanced back to 0
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 }
 
 TEST(DxgiProxyTest, PerfTraceTimesTheInjectorsPresentPathPerStereoFrame) {
@@ -615,7 +601,6 @@ TEST(DxgiProxyTest, PerfTraceTimesTheInjectorsPresentPathPerStereoFrame) {
                                 "| frame begin "}) {
         EXPECT_NE(summary.find(section), std::string::npos) << section << " missing from: " << summary;
     }
-    // Four eye frames are two headset frames: the frame begins once per pair
     EXPECT_EQ(mockDispatch->endFrameCalls, 2u);
 }
 
@@ -643,7 +628,6 @@ TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {
         InjectorRuntime runtime(std::move(deps));
         runtimeProxy = &runtime.GetDxgiProxy();
 
-        // One object owns and wires every subsystem.
         EXPECT_EQ(&runtime.GetOpenXrManager(), openXrManager.get());
         EXPECT_EQ(&runtime.GetVrBridge(), vrBridge.get());
         EXPECT_EQ(runtime.GetDxgiProxy().GetOpenXrManager(), openXrManager.get());
@@ -654,7 +638,6 @@ TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {
         EXPECT_EQ(ngx->GetOpenXrManager(), openXrManager.get());
         EXPECT_EQ(ngx->GetDxgiProxy(), &runtime.GetDxgiProxy());
 
-        // Drive an AFR present pair through the runtime-owned proxy.
         runtime.GetDxgiProxy().OnPresent(nullptr, 0, 0);
         EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
         EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
@@ -663,7 +646,6 @@ TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {
         EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
     }
 
-    // The runtime does not leave the NGX interceptor pointing at freed subsystems.
     EXPECT_NE(ngx->GetDxgiProxy(), runtimeProxy);
     EXPECT_NE(ngx->GetVRBridge(), vrBridge.get());
     EXPECT_NE(ngx->GetOpenXrManager(), openXrManager.get());
@@ -682,8 +664,6 @@ TEST(InjectorRuntimeTest, ProductionRuntimeCreatesAndWiresEverySubsystem) {
 }
 
 TEST(InjectorRuntimeTest, NgxInterceptorIgnoresAnInactiveProxyInPassThrough) {
-    // In Pass-Through the NGX hooks must not take the proxy's mirror target resolution, or DLSS would be
-    // created at that size instead of the game's own output size.
     InjectorRuntime& runtime = InjectorRuntime::Instance();
     DxgiProxy& proxy = runtime.GetDxgiProxy();
     ASSERT_FALSE(proxy.IsActive());
@@ -722,7 +702,6 @@ TEST(InjectorRuntimeTest, RuntimeWithoutInjectedNgxCreatesAndWiresItsOwn) {
 }
 
 TEST(InjectorRuntimeTest, DestructorTakesNoNgxLockWhileProcessTerminates) {
-    // A thread killed at termination may own the NGX mutex; the destructor must not touch it.
     auto ngx = std::make_shared<NgxInterceptor>();
     InjectorRuntime::Dependencies deps;
     deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
@@ -731,11 +710,10 @@ TEST(InjectorRuntimeTest, DestructorTakesNoNgxLockWhileProcessTerminates) {
     {
         InjectorRuntime runtime(std::move(deps));
         runtimeProxy = &runtime.GetDxgiProxy();
-        OnProcessDetach(reinterpret_cast<LPVOID>(1));  // non-null lpReserved: process terminating
+        OnProcessDetach(reinterpret_cast<LPVOID>(1));
     }
     ResetProcessTerminatingForTesting();
 
-    // The wiring was left untouched, so the destructor never reached the locking setters.
     EXPECT_EQ(ngx->GetDxgiProxy(), runtimeProxy);
     ngx->SetDxgiProxy(nullptr);
     ngx->SetVRBridge(nullptr);
@@ -761,7 +739,6 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPas
     EXPECT_EQ(vrBridge->GetFrameIndex(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // Sub-Pass 0 (Left Eye): copies eye 0, suppresses physical DXGI present, advances subPassIndex to 1 within the same logical frame
     bool presented = proxy.OnPresent(nullptr, 0, 0);
 
     EXPECT_FALSE(presented);
@@ -772,7 +749,7 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPas
     EXPECT_EQ(mockDispatch->endFrameCalls, 0u);
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
-    EXPECT_EQ(vrBridge->GetFrameIndex(), 0u); // Frame index remains on the same logical frame
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 0u);
 }
 
 TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
@@ -788,13 +765,11 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Sub-Pass 0 (Left Eye)
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
     EXPECT_EQ(vrBridge->GetFrameIndex(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // Sub-Pass 1 (Right Eye): copies eye 1, submits pair, executes physical present, resets subPassIndex to 0 and advances logical frame
     bool presented = proxy.OnPresent(nullptr, 0, 0);
     EXPECT_TRUE(presented);
     EXPECT_FALSE(proxy.IsPresentSuppressed());
@@ -802,7 +777,7 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
-    EXPECT_EQ(vrBridge->GetFrameIndex(), 1u); // Exactly 1 logical frame boundary completed
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 1u);
 }
 
 namespace {
@@ -813,7 +788,7 @@ fs25vr::CameraRecord CameraAt(uint32_t eye, double x) {
     r.fovY = 1.0f;
     return r;
 }
-} // namespace
+}
 
 TEST(DxgiProxyTest, EveryStereoPresentAdvancesTheRenderedFrameThatStampsCameraRecords) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
@@ -830,11 +805,11 @@ TEST(DxgiProxyTest, EveryStereoPresentAdvancesTheRenderedFrameThatStampsCameraRe
     CameraRecordStore& records = vrBridge->GetCameraRecords();
 
     ASSERT_EQ(records.GetFrame(), 0u);
-    ASSERT_TRUE(records.Report(CameraAt(0, 0.0)));          // sub-pass 0 renders the left eye
+    ASSERT_TRUE(records.Report(CameraAt(0, 0.0)));
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
-    EXPECT_EQ(records.GetFrame(), 1u);                       // a suppressed sub-pass present counts too
+    EXPECT_EQ(records.GetFrame(), 1u);
 
-    ASSERT_TRUE(records.Report(CameraAt(1, 0.064)));         // sub-pass 1 renders the right eye
+    ASSERT_TRUE(records.Report(CameraAt(1, 0.064)));
     auto resolved = records.Resolve(1);
     ASSERT_TRUE(resolved.current.has_value());
     EXPECT_EQ(resolved.current->frame, 1u);
@@ -859,16 +834,12 @@ TEST(DxgiProxyTest, PresentsOutsideStereoPresentationDiscardCameraRecordsInstead
     CameraRecordStore& records = vrBridge->GetCameraRecords();
 
     ASSERT_TRUE(records.Report(CameraAt(0, 0.0)));
-    vrBridge->Set2DViewActive(true); // 2D Floating Window Mode presents as a quad
+    vrBridge->Set2DViewActive(true);
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
-    EXPECT_EQ(records.GetFrame(), 0u); // the counter only advances in stereo presentation
+    EXPECT_EQ(records.GetFrame(), 0u);
     EXPECT_FALSE(records.Resolve(0).current.has_value());
 }
 
-// Drives eye pairs through OnPresent/OnPresentReturned the way the Present detour does. For each
-// pair the head is at x = pairIndex when the frame begins and has moved on by the time the
-// Companion Mod asks for either eye's pose; both eyes must still get the pose located at the
-// pair's predicted display time.
 static void ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode mode) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     mockDispatch->enforceCallOrder = true;
@@ -882,10 +853,9 @@ static void ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode mode) {
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(mode);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
-    openXrManager->PollEvents();  // READY: the session runs
+    openXrManager->PollEvents();
     ASSERT_TRUE(openXrManager->IsSessionRunning());
 
-    // A Present returned: the first pair's frame is waited on and begun before the engine updates.
     mockDispatch->tracking.head.pose.position = { 1.0f, 1.5f, 0.0f };
     proxy.OnPresentReturned();
 
@@ -894,11 +864,10 @@ static void ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode mode) {
 
         for (uint32_t eye = 0; eye < 2; ++eye) {
             mockDispatch->tracking.head.pose.position = { 100.0f + eye, 1.5f, 0.0f };
-            HeadPose pose = vrBridge->GetHeadPose();  // the eye of the pair now being rendered
+            HeadPose pose = vrBridge->GetHeadPose();
             EXPECT_NEAR(pose.position.x, static_cast<float>(pair), 1e-4f) << "pair " << pair << " eye " << eye;
             ASSERT_TRUE(openXrManager->IsFrameBegun());
             proxy.OnPresent(nullptr, 0, 0);
-            // After the pair's second Present the next frame begins with the head at pair + 1.
             mockDispatch->tracking.head.pose.position = { static_cast<float>(pair + 1), 1.5f, 0.0f };
             proxy.OnPresentReturned();
             if (eye == 0) {
@@ -908,11 +877,10 @@ static void ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode mode) {
         EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), pair);
     }
 
-    // Every pose lookup used a frame's predicted display time, never a time derived from "now".
     for (XrTime time : mockDispatch->locateSpaceTimes) {
         EXPECT_EQ((time - 1000000) % 11111111, 0) << "time " << time;
     }
-    EXPECT_EQ(mockDispatch->waitFrameCalls, 4u);  // 3 pairs + the frame begun after the last submit
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 4u);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 }
 
@@ -932,7 +900,7 @@ TEST(DxgiProxyTest, OnPresentReturnedDoesNotBeginAFrameWithoutARunningSessionAnd
     ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
     DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
 
-    proxy.OnPresentReturned();  // no eye swapchains yet
+    proxy.OnPresentReturned();
 
     EXPECT_FALSE(openXrManager->IsFrameBegun());
     EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
@@ -946,14 +914,14 @@ TEST(DxgiProxyTest, OnPresentReturnedDoesNotBeginAFrameAfterAFailedPresent) {
     ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
     DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
-    openXrManager->PollEvents();  // READY: the session runs
+    openXrManager->PollEvents();
     ASSERT_TRUE(openXrManager->IsSessionRunning());
 
     proxy.OnPresentReturned(DXGI_ERROR_DEVICE_REMOVED);
     EXPECT_FALSE(openXrManager->IsFrameBegun());
     EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
 
-    proxy.OnPresentReturned(DXGI_STATUS_OCCLUDED);  // a success code: the next frame begins
+    proxy.OnPresentReturned(DXGI_STATUS_OCCLUDED);
     EXPECT_TRUE(openXrManager->IsFrameBegun());
     EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
 }
@@ -988,14 +956,12 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     void** hookedVTable = *reinterpret_cast<void***>(pSwapChain);
     auto pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
 
-    // Sub-Pass 0: returns S_OK, physical present call is suppressed (s_mockPresentCalls remains 0)
     HRESULT hr0 = pfnPresent(pSwapChain, 1, 0);
     EXPECT_EQ(hr0, S_OK);
     EXPECT_EQ(s_mockPresentCalls, 0);
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
     EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
 
-    // Sub-Pass 1: returns S_OK, physical present call executes (s_mockPresentCalls increments), pair submitted
     HRESULT hr1 = pfnPresent(pSwapChain, 1, 0);
     EXPECT_EQ(hr1, S_OK);
     EXPECT_GT(s_mockPresentCalls, 0);
@@ -1005,12 +971,6 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     proxy.DetachAll();
 }
 
-// The game's swapchain Present as the Desktop Mirror Window tests drive it: an active OpenXR mock, a real
-// VRBridge and a mock swapchain whose real Present calls are counted in s_mockPresentCalls.
-// The game has a window (an on-screen test window of 800x600, whose client area in screen coordinates is
-// clientArea), and the runtime reaches the desktop's cursor and focus through cursorPort, a fake: the test
-// chooses the foreground window and reads the clip and the cursor position. Tests never touch the real
-// cursor.
 struct MirrorPresentRig {
     std::shared_ptr<MockActiveOpenXrDispatch> dispatch = std::make_shared<MockActiveOpenXrDispatch>();
     std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(dispatch);
@@ -1043,7 +1003,7 @@ struct MirrorPresentRig {
             vrBridge->PerformHandshake();
         }
         vrBridge->SetRenderingMode(mode);
-        dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // the headset is on, as in play
+        dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
         runtime = MakeRuntime(openXrManager, vrBridge, cursorPort);
         runtime->GetWindowController().SetGameHwnd(gameWindow);
         vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
@@ -1062,7 +1022,6 @@ struct MirrorPresentRig {
         if (gameWindow) DestroyWindow(gameWindow);
     }
 
-    // The game presents one frame; returns how many real Present calls reached DXGI for it.
     int Present() {
         int before = s_mockPresentCalls;
         EXPECT_EQ(pfnPresent(swapChain, 1, 0), S_OK);
@@ -1094,9 +1053,9 @@ TEST(DxgiProxyTest, DesktopMirrorOffSuppressesBothSequentialDualPassSubPasses) {
     MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
     for (int pair = 0; pair < 2; ++pair) {
-        EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+        EXPECT_EQ(rig.Present(), 0);
         EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
-        EXPECT_EQ(rig.Present(), 0);  // sub-pass 1
+        EXPECT_EQ(rig.Present(), 0);
         EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
     }
     EXPECT_EQ(s_mockPresentCalls, 0);
@@ -1141,14 +1100,14 @@ TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsWhileTheSessionIsNotRunning) {
     EXPECT_EQ(rig.Present(), 0);
     ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep, dashboard
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 1);
     ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on: dark again
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
-    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_TRUE(rig.openXrManager->IsSessionRunning());
@@ -1159,7 +1118,6 @@ TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheHeadsetIsAsleepEvenThoughT
     rig.vrBridge->SetDesktopMirrorEnabled(false);
     EXPECT_EQ(rig.Present(), 0);
 
-    // Real runtimes drop to SYNCHRONIZED when the headset sleeps; the session is not stopped.
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
     EXPECT_EQ(rig.Present(), 1);
@@ -1167,8 +1125,8 @@ TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheHeadsetIsAsleepEvenThoughT
     ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
 
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // headset back on: dark again
-    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_EQ(rig.Present(), 0);
 }
@@ -1178,12 +1136,12 @@ TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheDashboardHasFocus) {
     rig.vrBridge->SetDesktopMirrorEnabled(false);
     EXPECT_EQ(rig.Present(), 0);
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // the dashboard took the focus
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
     EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 1);
 
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
-    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
 }
 
@@ -1199,13 +1157,13 @@ TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsInPassThroughMode) {
 }
 
 TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsBeforeTheCompanionModHandshake) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
     EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 1);
 
-    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
-    EXPECT_EQ(rig.Present(), 1);  // the one black frame (#195)
+    rig.vrBridge->PerformHandshake();
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
 }
 
@@ -1237,13 +1195,11 @@ TEST(DxgiProxyTest, DesktopMirrorSettingDoesNotChangeWhatTheHeadsetReceives) {
     }
 }
 
-// Desktop Mirror Window black frame: each time the mirror goes from showing to off, one real Present reaches
-// DXGI (the backbuffer cleared black after the eye copy), then none until the mirror shows again.
 TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffWhileTheSessionRunsPresentsExactlyOnceInAfr) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
-    EXPECT_EQ(rig.Present(), 1);  // the mirror shows
+    EXPECT_EQ(rig.Present(), 1);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
-    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_EQ(rig.Present(), 1);
     for (int i = 0; i < 4; ++i) {
         EXPECT_EQ(rig.Present(), 0);
     }
@@ -1251,11 +1207,11 @@ TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffWhileTheSessionRunsPresentsExac
 
 TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffPresentsExactlyOnceInSequentialDualPass) {
     MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
-    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0 is always suppressed
-    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1, mirror showing
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 1);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
-    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
-    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1: the one black frame
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 1);
     for (int pair = 0; pair < 3; ++pair) {
         EXPECT_EQ(rig.Present(), 0);
         EXPECT_EQ(rig.Present(), 0);
@@ -1289,26 +1245,26 @@ TEST(DxgiProxyTest, BlackFrameTheSessionResumingWithTheMirrorOffPresentsExactlyO
     EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 1);
     ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on, mirror still off
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
-    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_EQ(rig.Present(), 0);
 }
 
 TEST(DxgiProxyTest, BlackFrameTheCompanionHandshakeArrivingWithTheMirrorOffPresentsExactlyOnce) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
     EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 1);
 
-    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
-    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    rig.vrBridge->PerformHandshake();
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_EQ(rig.Present(), 0);
 }
 
@@ -1335,7 +1291,7 @@ TEST(DxgiProxyTest, BlackFrameDoesNotChangeWhatTheHeadsetReceives) {
         for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
             MirrorPresentRig rig(mode);
             for (int i = 0; i < 4; ++i) rig.Present();
-            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);  // switch-off lands mid-run
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);
             for (int i = 0; i < 6; ++i) rig.Present();
             pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
             quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
@@ -1350,7 +1306,6 @@ TEST(DxgiProxyTest, BlackFrameDoesNotChangeWhatTheHeadsetReceives) {
     }
 }
 
-// Whether the clip the fake desktop holds is exactly `expected`.
 static ::testing::AssertionResult ClipIs(const std::optional<RECT>& actual, const RECT& expected) {
     if (!actual) {
         return ::testing::AssertionFailure() << "the cursor is not clipped";
@@ -1367,10 +1322,9 @@ static ::testing::AssertionResult ClipIs(const std::optional<RECT>& actual, cons
 TEST(DxgiProxyTest, TheGamesGameplayClipReachesTheDesktopAsThePhysicalClientAreaUnderResolutionDecoupling) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
-    // The game's call is hooked: it must reach the fake desktop, never the real cursor.
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
 
-    RECT gameplayClip{ 0, 0, 3840, 2160 };  // the whole render-size picture, as mouse-look asks for it
+    RECT gameplayClip{ 0, 0, 3840, 2160 };
     EXPECT_TRUE(ClipCursor(&gameplayClip));
 
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
@@ -1381,7 +1335,6 @@ TEST(DxgiProxyTest, TheGamesMouseLookWarpReachesTheDesktopAsThePhysicalCenterUnd
     rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourSetCursorPosInstalled());
 
-    // The game centres the cursor for mouse-look at the middle of the render-size picture.
     EXPECT_TRUE(SetCursorPos(rig.clientArea.left + 1920, rig.clientArea.top + 1080));
 
     EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
@@ -1389,9 +1342,8 @@ TEST(DxgiProxyTest, TheGamesMouseLookWarpReachesTheDesktopAsThePhysicalCenterUnd
     EXPECT_NEAR(rig.cursorPort->cursor.y, (rig.clientArea.top + rig.clientArea.bottom) / 2, 1);
 }
 
-// The menu quad shows the drawn cursor where the Desk Mouse is, while the game window has focus.
 TEST(DxgiProxyTest, TheDrawnCursorFollowsTheDesktopCursorWhileTheGameWindowIsInTheForeground) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);  // no handshake: the menu quad shows
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     rig.cursorPort->foreground = rig.gameWindow;
     rig.cursorPort->cursor = { rig.clientArea.left + (rig.clientArea.right - rig.clientArea.left) / 4,
                                rig.clientArea.top + (rig.clientArea.bottom - rig.clientArea.top) / 2 };
@@ -1405,7 +1357,7 @@ TEST(DxgiProxyTest, TheDrawnCursorFollowsTheDesktopCursorWhileTheGameWindowIsInT
 }
 
 TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileAnotherWindowIsInTheForeground) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
     rig.cursorPort->foreground = GetDesktopWindow();
 
@@ -1415,7 +1367,7 @@ TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileAnotherWindowIsInTheForeground) {
 }
 
 TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileTheSystemCursorIsHidden) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     rig.cursorPort->foreground = rig.gameWindow;
     rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
     rig.cursorPort->cursorShowing = false;
@@ -1438,21 +1390,16 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Sub-Pass 0
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
 
-    // Mode change requested during Sub-Pass 0
     vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
     EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::AFR);
-    // Mode must NOT have changed yet because compositor frame is mid-pair
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
 
-    // Sub-Pass 1 completes the pair
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
-    // Completed frame boundary: pending mode is latched atomically
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
     EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
@@ -1472,30 +1419,24 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     vrBridge->SetRenderingMode(VRRenderingMode::AFR);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Queue pending mode change to SequentialDualPass
     vrBridge->SetPendingRenderingMode(VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
 
-    // AFR Frame 0 (parity = 0, Left Eye): does NOT complete pair
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
-    // Mode must NOT be latched yet!
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
     EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
 
-    // AFR Frame 1 (parity = 1, Right Eye): completes pair and calls SubmitFramePair()
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
-    // Completed frame boundary: pending mode is latched atomically
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
     EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Next pass is now Dual-Pass Sub-Pass 0: suppresses present!
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_TRUE(proxy.IsPresentSuppressed());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
@@ -1519,26 +1460,21 @@ TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatch
     luaL_openlibs(L);
     ASSERT_TRUE(vrBridge->Inject(L));
 
-    // Sub-Pass 0 (Left Eye)
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
 
-    // Companion Mod / Luau calls VRBridge.setRenderingMode("AFR") mid-pair
     lua_getglobal(L, "VRBridge");
     lua_getfield(L, -1, "setRenderingMode");
     lua_pushstring(L, "AFR");
     ASSERT_EQ(lua_pcall(L, 1, 0, 0), 0);
-    lua_pop(L, 1); // pop VRBridge
+    lua_pop(L, 1);
 
-    // Mode is queued in VRBridge and NOT latched mid-pair
     EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::AFR);
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
 
-    // Sub-Pass 1 (Right Eye) completes the pair
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
-    // Latched strictly on completed compositor frame boundary
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
     EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
 
@@ -1616,7 +1552,6 @@ TEST(DxgiProxyTest, PresentHookActsForTheRuntimeThatInstalledItAndIsRemovedWithI
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
     ASSERT_TRUE(installer->GetDxgiProxy().AttachSwapChain(pSwapChain));
 
-    // A newer runtime that installed nothing must not take over the installer's hook.
     auto newerXr = makeActive();
     auto newerBridge = std::make_shared<VRBridge>(newerXr, nullptr);
     newerBridge->PerformHandshake();
@@ -1630,7 +1565,6 @@ TEST(DxgiProxyTest, PresentHookActsForTheRuntimeThatInstalledItAndIsRemovedWithI
     EXPECT_EQ(installerBridge->GetFrameParity(), 1u);
     EXPECT_EQ(newerBridge->GetFrameParity(), 0u);
 
-    // Destroying the installer removes its detour before it leaves the registry.
     installer.reset();
     EXPECT_EQ(pfnPresent(pSwapChain, 1, 0), S_OK);
     EXPECT_EQ(s_mockPresentCalls, 2 * kMockPresentIncrement);
@@ -1653,7 +1587,6 @@ TEST(DxgiProxyTest, StandaloneProxyInstallsNoDetours) {
     MockComObject mockSwapChain{ vtable.data() };
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
-    // No runtime owns this proxy, so a hook could not find its original: it must not detour.
     EXPECT_FALSE(proxy.AttachSwapChain(pSwapChain));
     EXPECT_FALSE(proxy.IsSwapChainAttached());
     auto pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(vtable[kPresentVTableSlot]);
@@ -1669,7 +1602,6 @@ TEST(DxgiProxyTest, ProxyWithNullCollaboratorsForwardsSafely) {
     EXPECT_EQ(proxy.GetVrBridge(), nullptr);
     EXPECT_FALSE(proxy.IsActive());
 
-    // No NGX interceptor, OpenXR manager or system DXGI: initialization is skipped, the call fails cleanly.
     void* factory = nullptr;
     EXPECT_EQ(proxy.CreateDXGIFactory(__uuidof(IDXGIFactory), &factory), E_FAIL);
     EXPECT_EQ(factory, nullptr);
@@ -1693,10 +1625,10 @@ TEST(InjectorRuntimeTest, CurrentIsTheNewestLiveRuntimeWhateverTheDestructionOrd
     auto c = make();
     EXPECT_EQ(InjectorRuntime::Current(), c.get());
 
-    b.reset();  // not the newest: Current() is unchanged
+    b.reset();
     EXPECT_EQ(InjectorRuntime::Current(), c.get());
 
-    c.reset();  // falls back to a, never to the destroyed b
+    c.reset();
     EXPECT_EQ(InjectorRuntime::Current(), a.get());
 
     a.reset();
@@ -1710,21 +1642,14 @@ TEST(InjectorRuntimeTest, AdoptsTheCollaboratorsOfASuppliedVrBridge) {
     deps.vrBridge = std::make_shared<VRBridge>(openXrManager, ngx);
     InjectorRuntime runtime(std::move(deps));
 
-    // The bridge's DLSS tuning and the hooks must reach the same interceptor and OpenXR manager.
     EXPECT_EQ(&runtime.GetOpenXrManager(), openXrManager.get());
     EXPECT_EQ(&runtime.GetNgxInterceptor(), ngx.get());
     EXPECT_EQ(ngx->GetDxgiProxy(), &runtime.GetDxgiProxy());
 }
 
-// These need a process with no live runtime, but other tests leave InjectorRuntime::Instance() alive
-// in the shared test process. EXPECT_EXIT runs each body in a fresh child process instead; the child
-// reports each failed check on stderr and exits with the number of failures.
 #define FS25VR_CHILD_CHECK(cond) \
     do { if (!(cond)) { std::fprintf(stderr, "check failed: %s\n", #cond); failures++; } } while (0)
 
-// Takes the place of user32's ClipCursor in the child process below (hooked with a FunctionDetour that never
-// calls the original), so the no-runtime fallback of the ClipCursor hook is covered without a call that could
-// trap the developer's own mouse.
 static int s_childClipCalls = 0;
 static bool s_childClipWasRelease = false;
 __declspec(noinline) static BOOL WINAPI ChildClipCursorStandIn(const RECT* rect) {
@@ -1747,7 +1672,6 @@ static int HookEntryPointsFailSafeChild() {
     FS25VR_CHILD_CHECK(DxgiProxy::Intercept_OutputGetDesc1(nullptr, nullptr) == E_FAIL);
     FS25VR_CHILD_CHECK(LuauInterceptor::DetourEntryPoint(nullptr) == 0);
 
-    // The Win32 hooks fall through to the real, undetoured functions.
     HWND wnd = CreateWindowA("STATIC", "NoRuntimeWnd", WS_OVERLAPPEDWINDOW, 10, 10, 640, 480, nullptr, nullptr, nullptr, nullptr);
     FS25VR_CHILD_CHECK(wnd != nullptr);
     if (wnd) {
@@ -1758,7 +1682,6 @@ static int HookEntryPointsFailSafeChild() {
         DestroyWindow(wnd);
     }
 
-    // ClipCursor too, with user32's own replaced by a stand-in: the fall-through must reach it, and only it.
     FunctionDetour clipCursor;
     void* pfnClipCursor = reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("user32.dll"), "ClipCursor"));
     FS25VR_CHILD_CHECK(pfnClipCursor != nullptr);
@@ -1814,8 +1737,6 @@ TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
     EXPECT_FALSE(proxy.IsFactoryAttached());
 }
 
-// A factory that wraps the system's and passes every call on to it, the way a dxgi.dll in the game folder
-// (ReShade's) hands the game a factory of its own.
 class WrappingFactory final : public IDXGIFactory2 {
 public:
     explicit WrappingFactory(ComPtr<IDXGIFactory2> inner) : m_inner(std::move(inner)) {}
@@ -1832,7 +1753,7 @@ public:
         return E_NOINTERFACE;
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refs; }
-    ULONG STDMETHODCALLTYPE Release() override { return --m_refs; }  // lives on the test's stack
+    ULONG STDMETHODCALLTYPE Release() override { return --m_refs; }
 
     HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID n, UINT s, const void* d) override { return m_inner->SetPrivateData(n, s, d); }
     HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID n, const IUnknown* u) override { return m_inner->SetPrivateDataInterface(n, u); }
@@ -1939,7 +1860,6 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockSwapChain3QI(IUnknown* self, 
     return E_NOINTERFACE;
 }
 
-// Reports every colour space as presentable, as a swap chain on an HDR display does.
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockCheckColorSpaceSupport(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE, UINT* pSupport) {
     volatile UINT present = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
     if (pSupport) *pSupport = present;
@@ -1965,7 +1885,6 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockOutput6QI(IUnknown* self, REF
     return E_NOINTERFACE;
 }
 
-// An HDR10 display.
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockOutputGetDesc1(IDXGIOutput6*, DXGI_OUTPUT_DESC1* pDesc) {
     volatile int colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
     if (pDesc) {
@@ -1986,7 +1905,7 @@ TEST(DxgiProxyTest, IsHdrColorSpaceCoversHdr10ScRgbAndHlgOnly) {
 
 TEST(DxgiProxyTest, SwapChainReportsHdrColorSpacesUnsupportedOnlyWhileVrIsActive) {
     s_mockSetColorSpace1Calls = 0;
-    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
@@ -2021,12 +1940,10 @@ TEST(DxgiProxyTest, SwapChainReportsHdrColorSpacesUnsupportedOnlyWhileVrIsActive
     EXPECT_EQ(pfnCheck(sc3, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, &support), S_OK);
     EXPECT_EQ(support, static_cast<UINT>(DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT));
 
-    // SetColorSpace1 is only logged; the game's choice always reaches the real swap chain.
     EXPECT_EQ(pfnSet(sc3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020), S_OK);
     EXPECT_EQ(s_mockSetColorSpace1Calls, 1);
     EXPECT_EQ(s_mockLastColorSpace, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
 
-    // Out of VR (Pass-Through Mode) the display's real capabilities come through.
     EXPECT_FALSE(openXrManager->EnsureBackBufferFormatSupported(DXGI_FORMAT_R10G10B10A2_UNORM));
     ASSERT_FALSE(proxy.IsActive());
     EXPECT_EQ(pfnCheck(sc3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, &support), S_OK);
@@ -2037,7 +1954,7 @@ TEST(DxgiProxyTest, SwapChainReportsHdrColorSpacesUnsupportedOnlyWhileVrIsActive
 }
 
 TEST(DxgiProxyTest, DisplayOutputReportsSdrOnlyWhileVrIsActive) {
-    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
@@ -2083,7 +2000,6 @@ TEST(DxgiProxyTest, OnPresentPacesAfrFromTheFirstFrame) {
     vrBridge->SetRenderingMode(VRRenderingMode::AFR);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // First frame (parity 0): copies eye 0 and advances parity to 1
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
@@ -2091,7 +2007,6 @@ TEST(DxgiProxyTest, OnPresentPacesAfrFromTheFirstFrame) {
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
     EXPECT_EQ(vrBridge->GetFrameIndex(), 1u);
 
-    // Second frame (parity 1): copies eye 1, submits pair, advances parity to 0
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_FALSE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
@@ -2114,7 +2029,6 @@ TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAcrossAfrPresentation) {
     vrBridge->PerformHandshake();
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // AFR pairs submit without call order error from the very first frame
     proxy.OnPresent(nullptr, 0, 0);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
@@ -2238,7 +2152,6 @@ __declspec(noinline) void STDMETHODCALLTYPE MockExecuteCommandLists(ID3D12Comman
 }
 
 TEST(DxgiProxyTest, ResolvingTheD3D12QueueInstallsNoCommandQueueHooks) {
-    // ADR-0017: the Injector installs only DXGI hooks; the game's command queue is never detoured.
     constexpr size_t kExecuteCommandListsSlot = 10;
     MockD3D12Environment env;
     env.queueVTable[kExecuteCommandListsSlot] = reinterpret_cast<void*>(&MockExecuteCommandLists);
@@ -2298,14 +2211,13 @@ TEST(DxgiProxyTest, ConfiguresBackbufferMatchedOpenXrEyeSwapchainDimensionsOnPre
     scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
-    scVTable[12] = reinterpret_cast<void*>(&MockGetDesc); // Returns 1920x1080
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDesc);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
     proxy.OnPresent(pSwapChain, 0, 0);
 
-    // Eye swapchains should match backbuffer dimensions (1920x1080) for 1:1 GPU copy
     EXPECT_TRUE(openXrManager->HasEyeSwapchains());
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 1920u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 1080u);
@@ -2337,14 +2249,13 @@ TEST(DxgiProxyTest, FallsBackToRecommendedDimensionsWhenBackbufferDimensionsUnav
     scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
-    scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions); // Returns 0x0
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
     proxy.OnPresent(pSwapChain, 0, 0);
 
-    // When backbuffer dimensions are 0, fall back to OpenXR recommended dimensions
     EXPECT_TRUE(openXrManager->HasEyeSwapchains());
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 2064u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 2208u);
@@ -2376,14 +2287,13 @@ TEST(DxgiProxyTest, FallsBackToDefaultDimensionsWhenBothBackbufferAndRecommended
     scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
-    scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions); // Returns 0x0
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
     proxy.OnPresent(pSwapChain, 0, 0);
 
-    // Default fallback is 1920x1080
     EXPECT_TRUE(openXrManager->HasEyeSwapchains());
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 1920u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 1080u);
@@ -2438,7 +2348,6 @@ TEST(DxgiProxyTest, OnPresentSubmitsQuadContinuouslyWithoutAfrPacing) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // 4 frames in menu mode -> 4 quad submissions, frame parity never advances to 1
     for (int i = 0; i < 4; ++i) {
         proxy.OnPresent(nullptr, 0, 0);
         EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), static_cast<uint64_t>(i + 1));
@@ -2458,19 +2367,16 @@ TEST(DxgiProxyTest, OnPresentPollsEventsPausesVrWhileStoppedAndResumesOnReady) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // READY is consumed by the first present, which then submits a quad frame.
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_TRUE(openXrManager->IsSessionRunning());
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
 
-    // STOPPING: no VR submissions, but the game keeps presenting to the mirror window.
     mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_FALSE(openXrManager->IsSessionRunning());
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
 
-    // READY again: VR resumes.
     mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_TRUE(openXrManager->IsSessionRunning());
@@ -2488,7 +2394,6 @@ TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionIsPaused) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Before READY nothing calls xrWaitFrame, so the game's vsync must stay in effect.
     EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
 
     proxy.OnPresent(nullptr, 1, 0);
@@ -2511,7 +2416,6 @@ TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionRunsWithoutEyeSwapchains) {
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
     ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
-    // CreateEyeSwapchains is deliberately skipped: it failed, so OnPresent never calls xrWaitFrame.
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
@@ -2521,7 +2425,6 @@ TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionRunsWithoutEyeSwapchains) {
     ASSERT_FALSE(openXrManager->HasEyeSwapchains());
     EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
 
-    // Once eye swapchains exist, xrWaitFrame paces frames again.
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
     EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
 }
@@ -2539,14 +2442,12 @@ TEST(DxgiProxyTest, AfrResumesWithLeftEyeAfterSessionPause) {
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::AFR);
 
-    // Pause right after the left eye of a pair.
     proxy.OnPresent(nullptr, 0, 0);
     ASSERT_EQ(vrBridge->GetFrameParity(), 1u);
     mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Resume: the first frame is a fresh left eye, not the right half of the abandoned pair.
     mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
@@ -2569,12 +2470,11 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchesWhileSessionIsPaused) {
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
-    proxy.OnPresent(nullptr, 0, 0);  // consumes READY
+    proxy.OnPresent(nullptr, 0, 0);
     mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     proxy.OnPresent(nullptr, 0, 0);
     ASSERT_FALSE(openXrManager->IsSessionRunning());
 
-    // Headset asleep: no eye pair will be submitted, so the change must not wait for one.
     vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
@@ -2619,7 +2519,6 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchesWhenNoEyeSwapchainsExist) {
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
-    // No eye pair can ever be in flight, so the queued change must not wait for a pair boundary.
     vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
@@ -2639,7 +2538,6 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchesWhenDroppingToPassThrough) {
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
-    // Left eye of a pair is in flight, then the mode is queued and the runtime ends the session.
     proxy.OnPresent(nullptr, 0, 0);
     ASSERT_EQ(vrBridge->GetSubPassIndex(), 1u);
     vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
@@ -2682,17 +2580,14 @@ TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshak
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // 1. Menu mode: 2 frames submit 2 quad layers
     proxy.OnPresent(nullptr, 0, 0);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // 2. Player enters map: Companion mod handshakes
     vrBridge->PerformHandshake();
     EXPECT_TRUE(vrBridge->IsCompanionActive());
 
-    // In-game AFR: frame 0 copies left, frame 1 copies right and submits stereo pair
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
@@ -2702,7 +2597,6 @@ TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshak
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // 3. Player exits back to menu: Map unloads
     vrBridge->SetCompanionActive(false);
     EXPECT_FALSE(vrBridge->IsCompanionActive());
 
@@ -2722,12 +2616,10 @@ TEST(DxgiProxyTest, DynamicallySwitchesBetweenProjectionAndQuadWhenInGameMenuTog
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Active companion handshake
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
     EXPECT_FALSE(vrBridge->IsMenuVisible());
 
-    // 1. Active gameplay: 2 frames -> 1 stereo pair
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
@@ -2738,12 +2630,10 @@ TEST(DxgiProxyTest, DynamicallySwitchesBetweenProjectionAndQuadWhenInGameMenuTog
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // 2. Player opens in-game pause menu / shop
     vrBridge->SetMenuVisible(true);
     EXPECT_TRUE(vrBridge->IsMenuVisible());
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Next 3 frames in menu should each submit a floating quad layer immediately
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
@@ -2756,18 +2646,15 @@ TEST(DxgiProxyTest, DynamicallySwitchesBetweenProjectionAndQuadWhenInGameMenuTog
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
-    // 3. Player closes in-game menu: return to active gameplay
     vrBridge->SetMenuVisible(false);
     EXPECT_FALSE(vrBridge->IsMenuVisible());
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Frame 0 of resumed gameplay: left eye
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
 
-    // Frame 1 of resumed gameplay: right eye and pair submit
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
@@ -2788,27 +2675,22 @@ TEST(DxgiProxyTest, MidPairMenuTransitionDoesNotDeadlockSwapchainsOrLeakFrames) 
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
 
-    // Frame 0: render left eye in gameplay
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
 
-    // Player opens menu before frame 1 renders right eye
     vrBridge->SetMenuVisible(true);
     EXPECT_TRUE(vrBridge->IsMenuVisible());
 
-    // Presentation must handle switching immediately to quad without deadlocking swapchain
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // And dismiss menu
     vrBridge->SetMenuVisible(false);
     EXPECT_FALSE(vrBridge->IsMenuVisible());
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Resumed gameplay completes a clean pair
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
     proxy.OnPresent(nullptr, 0, 0);
@@ -2828,13 +2710,11 @@ TEST(DxgiProxyTest, TwoDViewModeSwitchesPresentationBetweenFramePairsAndQuadLaye
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Active companion handshake
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
     EXPECT_FALSE(vrBridge->IsMenuVisible());
     EXPECT_FALSE(vrBridge->Is2DViewActive());
 
-    // 1. Active 3D gameplay: 2 frames -> 1 stereo pair
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
@@ -2845,12 +2725,10 @@ TEST(DxgiProxyTest, TwoDViewModeSwitchesPresentationBetweenFramePairsAndQuadLaye
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // 2. Player toggles 2D Floating Window View mode on
     vrBridge->Set2DViewActive(true);
     EXPECT_TRUE(vrBridge->Is2DViewActive());
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Next 3 frames in 2D Floating Window Mode should each submit a floating quad layer immediately
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
@@ -2863,18 +2741,15 @@ TEST(DxgiProxyTest, TwoDViewModeSwitchesPresentationBetweenFramePairsAndQuadLaye
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
-    // 3. Player toggles 2D Floating Window View mode off: return to active 3D gameplay
     vrBridge->Set2DViewActive(false);
     EXPECT_FALSE(vrBridge->Is2DViewActive());
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Frame 0 of resumed 3D gameplay: left eye
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
 
-    // Frame 1 of resumed 3D gameplay: right eye and pair submit
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
@@ -2895,27 +2770,22 @@ TEST(DxgiProxyTest, MidPair2DViewTransitionDoesNotDeadlockSwapchainsOrLeakFrames
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
 
-    // Frame 0: render left eye in gameplay
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
 
-    // Player switches to 2D Floating Window Mode before frame 1 renders right eye
     vrBridge->Set2DViewActive(true);
     EXPECT_TRUE(vrBridge->Is2DViewActive());
 
-    // Presentation must handle switching immediately to quad without deadlocking swapchain
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // And toggle back to 3D VR mode
     vrBridge->Set2DViewActive(false);
     EXPECT_FALSE(vrBridge->Is2DViewActive());
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
-    // Resumed gameplay completes a clean pair
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
     proxy.OnPresent(nullptr, 0, 0);
@@ -2938,19 +2808,16 @@ TEST(DxgiProxyTest, TransitionInto2DFloatingWindowModeTriggersQuadAlignment) {
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
 
-    // Complete 1 frame pair in 3D VR
     proxy.OnPresent(nullptr, 0, 0);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
-    // Set head pose with offset
     HeadPose simPose;
     simPose.position = Vector3(2.0f, 1.7f, 3.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 
-    // Trigger VR View Toggle Action to activate 2D Floating Window Mode
     vrBridge->Set2DViewActive(true);
     proxy.OnPresent(nullptr, 0, 0);
 
@@ -2975,27 +2842,23 @@ TEST(DxgiProxyTest, TwoDViewModePersistentAcrossInGameMenuTransitions) {
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
 
-    // Activate 2D Floating Window Mode
     vrBridge->Set2DViewActive(true);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
 
-    // Open in-game menu while in 2D Floating Window Mode
     vrBridge->SetMenuVisible(true);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
 
-    // Close in-game menu: 2D Floating Window Mode remains sticky/active
     vrBridge->SetMenuVisible(false);
     EXPECT_TRUE(vrBridge->Is2DViewActive());
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    // Only when 2D Floating Window Mode is explicitly disabled does it return to 3D VR
     vrBridge->Set2DViewActive(false);
-    proxy.OnPresent(nullptr, 0, 0); // Eye 0
-    proxy.OnPresent(nullptr, 0, 0); // Eye 1
+    proxy.OnPresent(nullptr, 0, 0);
+    proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 }
@@ -3011,20 +2874,18 @@ TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Set head pose with offset and yaw
     HeadPose simPose;
     simPose.position = Vector3(1.0f, 1.6f, -2.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 
-    // Initial frame in pre-game menu: should align menu quad to simPose
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_TRUE(openXrManager->HasMenuQuadPose());
     XrPosef quadPose = openXrManager->GetLastSubmittedQuadLayer().pose;
     EXPECT_NEAR(quadPose.position.x, 1.0f, 0.001f);
     EXPECT_NEAR(quadPose.position.y, 1.6f, 0.001f);
-    EXPECT_NEAR(quadPose.position.z, -3.5f, 0.001f); // -2.0 - 1.5 = -3.5
+    EXPECT_NEAR(quadPose.position.z, -3.5f, 0.001f);
 }
 
 TEST(DxgiProxyTest, OnPresentInitializesCursorSwapchainInMenuMode) {
@@ -3040,7 +2901,6 @@ TEST(DxgiProxyTest, OnPresentInitializesCursorSwapchainInMenuMode) {
 
     EXPECT_FALSE(openXrManager->HasCursorSwapchain());
 
-    // Present in menu mode (pre-game menu)
     proxy.OnPresent(nullptr, 0, 0);
 
     EXPECT_TRUE(openXrManager->HasCursorSwapchain());
@@ -3057,7 +2917,6 @@ TEST(DxgiProxyTest, UpdateMenuCursorStateHandlesNullHwndSafely) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Should not crash with null swapchain / null HWND
     EXPECT_NO_THROW(proxy.GetWindowController().UpdateMenuCursorState(nullptr, openXrManager.get()));
     EXPECT_FALSE(openXrManager->GetMenuCursorState().visible);
 }
@@ -3074,13 +2933,11 @@ TEST(DxgiProxyTest, ScreenToNormalizedClientNormalizesAndClipsBounds) {
     ASSERT_TRUE(testWnd != nullptr);
 
     float normX = -1.0f, normY = -1.0f;
-    // Point inside window (client center: screen x=200, y=200)
     POINT centerPt{ 200, 200 };
     EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, centerPt, normX, normY));
     EXPECT_NEAR(normX, 0.5f, 0.05f);
     EXPECT_NEAR(normY, 0.5f, 0.05f);
 
-    // Point outside client bounds (screen x=50, y=50)
     POINT outsidePt{ 50, 50 };
     EXPECT_FALSE(MirrorWindowController::ScreenToNormalizedClient(testWnd, outsidePt, normX, normY));
 
@@ -3098,14 +2955,11 @@ TEST(DxgiProxyTest, OnPresentSubmitsCursorQuadWhenCursorShowing) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // Initial frame creates cursor swapchain
     proxy.OnPresent(nullptr, 0, 0);
     ASSERT_TRUE(openXrManager->HasCursorSwapchain());
 
-    // Explicitly set simulated cursor active state on OpenXrManager
     openXrManager->SetMenuCursorState({ true, 0.5f, 0.5f, MenuCursorState::kDefaultCursorSize });
 
-    // Next menu present should submit 2 quad layers
     proxy.OnPresent(nullptr, 0, 0);
     ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 2u);
 
@@ -3116,7 +2970,6 @@ TEST(DxgiProxyTest, OnPresentSubmitsCursorQuadWhenCursorShowing) {
 }
 
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
-    // 1080p borderless
     RECT work1080{ 0, 0, 1920, 1080 };
     RECT res1080 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1080, WS_POPUP, 0, false);
     EXPECT_EQ(res1080.left, 0);
@@ -3124,7 +2977,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
     EXPECT_EQ(res1080.right, 1920);
     EXPECT_EQ(res1080.bottom, 1080);
 
-    // 1440p borderless
     RECT work1440{ 0, 0, 2560, 1440 };
     RECT res1440 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1440, WS_POPUP, 0, false);
     EXPECT_EQ(res1440.left, 0);
@@ -3132,7 +2984,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
     EXPECT_EQ(res1440.right, 2560);
     EXPECT_EQ(res1440.bottom, 1440);
 
-    // 4K borderless
     RECT work4k{ 0, 0, 3840, 2160 };
     RECT res4k = MirrorWindowController::ComputeClampedMirrorWindowRect(work4k, WS_POPUP, 0, false);
     EXPECT_EQ(res4k.left, 0);
@@ -3140,7 +2991,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
     EXPECT_EQ(res4k.right, 3840);
     EXPECT_EQ(res4k.bottom, 2160);
 
-    // 720p borderless
     RECT work720{ 0, 0, 1280, 720 };
     RECT res720 = MirrorWindowController::ComputeClampedMirrorWindowRect(work720, WS_POPUP, 0, false);
     EXPECT_EQ(res720.left, 0);
@@ -3156,9 +3006,9 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBorders
     int frameH = frameRect.bottom - frameRect.top;
 
     std::vector<RECT> workAreas = {
-        { 0, 0, 1920, 1040 }, // 1080p display with 40px taskbar
-        { 0, 0, 2560, 1400 }, // 1440p display with 40px taskbar
-        { 0, 0, 3840, 2100 }  // 4K display with 60px taskbar
+        { 0, 0, 1920, 1040 },
+        { 0, 0, 2560, 1400 },
+        { 0, 0, 3840, 2100 }
     };
 
     for (const auto& workArea : workAreas) {
@@ -3168,7 +3018,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBorders
         int outerW = res.right - res.left;
         int outerH = res.bottom - res.top;
 
-        // Outer window must fit strictly within monitor work area
         EXPECT_GE(res.left, workArea.left);
         EXPECT_GE(res.top, workArea.top);
         EXPECT_LE(res.right, workArea.right);
@@ -3176,11 +3025,9 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBorders
         EXPECT_LE(outerW, workW);
         EXPECT_LE(outerH, workH);
 
-        // Window must be centered within workArea
         EXPECT_EQ(res.left, workArea.left + (workW - outerW) / 2);
         EXPECT_EQ(res.top, workArea.top + (workH - outerH) / 2);
 
-        // Client area must strictly maintain 16:9 aspect ratio
         int clientW = outerW - frameW;
         int clientH = outerH - frameH;
         EXPECT_GT(clientW, 0);
@@ -3190,7 +3037,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBorders
 }
 
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDisplays) {
-    // 21:9 2560x1080 borderless
     RECT work2560x1080{ 0, 0, 2560, 1080 };
     RECT res2560 = MirrorWindowController::ComputeClampedMirrorWindowRect(work2560x1080, WS_POPUP, 0, false);
     EXPECT_EQ(res2560.left, 320);
@@ -3200,7 +3046,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDis
     EXPECT_EQ(res2560.right - res2560.left, 1920);
     EXPECT_EQ(res2560.bottom - res2560.top, 1080);
 
-    // 21:9 3440x1440 borderless
     RECT work3440x1440{ 0, 0, 3440, 1440 };
     RECT res3440 = MirrorWindowController::ComputeClampedMirrorWindowRect(work3440x1440, WS_POPUP, 0, false);
     EXPECT_EQ(res3440.left, 440);
@@ -3210,7 +3055,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDis
     EXPECT_EQ(res3440.right - res3440.left, 2560);
     EXPECT_EQ(res3440.bottom - res3440.top, 1440);
 
-    // 32:9 5120x1440 super-ultrawide borderless
     RECT work5120x1440{ 0, 0, 5120, 1440 };
     RECT res5120 = MirrorWindowController::ComputeClampedMirrorWindowRect(work5120x1440, WS_POPUP, 0, false);
     EXPECT_EQ(res5120.left, 1280);
@@ -3222,27 +3066,24 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDis
 }
 
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
-    // 9:16 1080x1920 borderless
     RECT work1080x1920{ 0, 0, 1080, 1920 };
     RECT res1080 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1080x1920, WS_POPUP, 0, false);
     EXPECT_EQ(res1080.left, 0);
     EXPECT_EQ(res1080.right, 1080);
-    int expectedH1080 = (1080 * 9) / 16; // 607
+    int expectedH1080 = (1080 * 9) / 16;
     EXPECT_EQ(res1080.bottom - res1080.top, expectedH1080);
     EXPECT_EQ(res1080.top, (1920 - expectedH1080) / 2);
     EXPECT_EQ(res1080.bottom, res1080.top + expectedH1080);
 
-    // 9:16 1440x2560 borderless
     RECT work1440x2560{ 0, 0, 1440, 2560 };
     RECT res1440 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1440x2560, WS_POPUP, 0, false);
     EXPECT_EQ(res1440.left, 0);
     EXPECT_EQ(res1440.right, 1440);
-    int expectedH1440 = (1440 * 9) / 16; // 810
+    int expectedH1440 = (1440 * 9) / 16;
     EXPECT_EQ(res1440.bottom - res1440.top, expectedH1440);
     EXPECT_EQ(res1440.top, (2560 - expectedH1440) / 2);
     EXPECT_EQ(res1440.bottom, res1440.top + expectedH1440);
 
-    // Windowed portrait display with borders
     RECT frameRect{ 0, 0, 0, 0 };
     AdjustWindowRectEx(&frameRect, WS_OVERLAPPEDWINDOW, FALSE, 0);
     int frameW = frameRect.right - frameRect.left;
@@ -3268,7 +3109,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
 }
 
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
-    // Secondary 1080p monitor positioned to the right of primary
     RECT workRight{ 1920, 0, 3840, 1080 };
     RECT resRight = MirrorWindowController::ComputeClampedMirrorWindowRect(workRight, WS_POPUP, 0, false);
     EXPECT_EQ(resRight.left, 1920);
@@ -3276,7 +3116,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
     EXPECT_EQ(resRight.right, 3840);
     EXPECT_EQ(resRight.bottom, 1080);
 
-    // Secondary 1440p monitor positioned to the left and shifted down
     RECT workLeft{ -2560, 100, 0, 1540 };
     RECT resLeft = MirrorWindowController::ComputeClampedMirrorWindowRect(workLeft, WS_POPUP, 0, false);
     EXPECT_EQ(resLeft.left, -2560);
@@ -3284,7 +3123,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
     EXPECT_EQ(resLeft.right, 0);
     EXPECT_EQ(resLeft.bottom, 1540);
 
-    // Secondary ultrawide 21:9 monitor on negative coordinates
     RECT workLeftUltrawide{ -3440, 0, 0, 1440 };
     RECT resLeftUW = MirrorWindowController::ComputeClampedMirrorWindowRect(workLeftUltrawide, WS_POPUP, 0, false);
     EXPECT_EQ(resLeftUW.left, -3000);
@@ -3296,7 +3134,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
 }
 
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
-    // Zero or inverted work area
     RECT zeroWork{ 100, 100, 100, 100 };
     RECT resZero = MirrorWindowController::ComputeClampedMirrorWindowRect(zeroWork, WS_POPUP, 0, false);
     EXPECT_EQ(resZero.left, 100);
@@ -3307,7 +3144,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
     EXPECT_EQ(resInverted.left, 200);
     EXPECT_EQ(resInverted.right, 100);
 
-    // Work area smaller than non-client frame borders
     RECT tinyWork{ 0, 0, 10, 10 };
     RECT resTiny = MirrorWindowController::ComputeClampedMirrorWindowRect(tinyWork, WS_OVERLAPPEDWINDOW, 0, false);
     EXPECT_EQ(resTiny.left, 0);
@@ -3315,7 +3151,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
     EXPECT_EQ(resTiny.right, 10);
     EXPECT_EQ(resTiny.bottom, 10);
 
-    // HWND overload: null and invalid handles return zero RECT
     RECT nullRes = MirrorWindowController::ComputeClampedMirrorWindowRect(static_cast<HWND>(nullptr));
     EXPECT_EQ(nullRes.left, 0);
     EXPECT_EQ(nullRes.top, 0);
@@ -3329,7 +3164,6 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
     EXPECT_EQ(invalidRes.right, 0);
     EXPECT_EQ(invalidRes.bottom, 0);
 
-    // HWND overload: real window
     HWND testWnd = CreateWindowA("STATIC", "ClampedMirrorTest", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
 
@@ -3358,7 +3192,6 @@ TEST(DxgiProxyTest, WindowSubclassAttachesInActiveVrModeAndRemainsInertInPassThr
     HWND testWnd = CreateWindowA("STATIC", "SubclassTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
 
-    // 1. Pass-Through Mode: must remain completely inert
     {
         auto mockFailingDispatch = std::make_shared<MockFailingOpenXrDispatch>();
         auto ptOpenXrManager = std::make_shared<OpenXrManager>(mockFailingDispatch);
@@ -3373,7 +3206,6 @@ TEST(DxgiProxyTest, WindowSubclassAttachesInActiveVrModeAndRemainsInertInPassThr
         EXPECT_FALSE(ptProxy.GetWindowController().AttachWindowSubclass(testWnd));
     }
 
-    // 2. Active VR Mode: attaches subclass cleanly
     {
         auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
         auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
@@ -3413,7 +3245,6 @@ TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
     ASSERT_GT(maxW, 0);
     ASSERT_GT(maxH, 0);
 
-    // 1. Requested dimensions exceed calculated bounds (e.g. 5000x4000 or 4K on 1440p)
     WINDOWPOS wpOversized{};
     wpOversized.hwnd = testWnd;
     wpOversized.x = 250;
@@ -3425,10 +3256,9 @@ TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
 
     EXPECT_EQ(wpOversized.cx, maxW);
     EXPECT_EQ(wpOversized.cy, maxH);
-    EXPECT_EQ(wpOversized.x, 250); // Preserves user movement coordinates
+    EXPECT_EQ(wpOversized.x, 250);
     EXPECT_EQ(wpOversized.y, 350);
 
-    // 2. Requested dimensions smaller than bounds are preserved
     WINDOWPOS wpSmall{};
     wpSmall.hwnd = testWnd;
     wpSmall.cx = maxW / 2;
@@ -3439,7 +3269,6 @@ TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
     EXPECT_EQ(wpSmall.cx, maxW / 2);
     EXPECT_EQ(wpSmall.cy, maxH / 2);
 
-    // 3. Messages with SWP_NOSIZE do not alter cx or cy
     WINDOWPOS wpNoSize{};
     wpNoSize.hwnd = testWnd;
     wpNoSize.cx = 9999;
@@ -3474,7 +3303,6 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockCreateSwapChainForHwnd(
     return S_OK;
 }
 
-// A factory whose CreateSwapChainForHwnd succeeds, so the hook has an original to call.
 struct MockFactory2 {
     std::vector<void*> vtable;
     MockComObject object;
@@ -3492,7 +3320,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
     HWND testWnd = CreateWindowA("STATIC", "InitialClampTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
 
-    // 1. Active VR Mode: applies pre-presentation clamp immediately
     {
         auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
         auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
@@ -3522,7 +3349,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
     }
     DestroyWindow(testWnd);
 
-    // 2. Pass-Through Mode: remains inert, leaving window at initial size
     HWND ptWnd = CreateWindowA("STATIC", "PassThroughClampTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 800, 600, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(ptWnd != nullptr);
     {
@@ -3552,7 +3378,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
 }
 
 TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
-    // 1. WM_NCDESTROY automatically detaches subclass
     HWND testWnd1 = CreateWindowA("STATIC", "NcDestroyTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd1 != nullptr);
     {
@@ -3570,7 +3395,6 @@ TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
         EXPECT_EQ(activeProxy.GetWindowController().GetGameHwnd(), nullptr);
     }
 
-    // 2. DetachAll cleanly unhooks subclass before window destruction
     HWND testWnd2 = CreateWindowA("STATIC", "DetachAllTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd2 != nullptr);
     {
@@ -3591,7 +3415,7 @@ TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
 }
 
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLeavesSwapChainUntouchedWhenFormatUnsupported) {
-    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
@@ -3616,7 +3440,7 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLeavesSwapChainUntouchedWhenF
 }
 
 TEST(DxgiProxyTest, InterceptCreateSwapChainLeavesSwapChainUntouchedWhenFormatUnsupported) {
-    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
@@ -3636,7 +3460,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainLeavesSwapChainUntouchedWhenFormatUn
 }
 
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiveVrMode) {
-    // 1. Active VR Mode: mutates pDesc->Scaling to DXGI_SCALING_STRETCH
     {
         auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
         auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
@@ -3661,7 +3484,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         EXPECT_TRUE(fullscreenDesc.Windowed == TRUE);
     }
 
-    // 2. Pass-Through Mode: leaves pDesc->Scaling unchanged
     {
         auto mockFailingDispatch = std::make_shared<MockFailingOpenXrDispatch>();
         auto ptOpenXrManager = std::make_shared<OpenXrManager>(mockFailingDispatch);
@@ -3682,7 +3504,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         EXPECT_EQ(desc.Scaling, DXGI_SCALING_NONE);
     }
 
-    // 3. Null pDesc handled gracefully
     {
         auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
         auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
@@ -3706,7 +3527,6 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndReportsFailureWhenNoOriginalI
     EXPECT_EQ(swapChain, nullptr);
 }
 
-// Redirects the game log (Logger) to a temp file while a test runs and reads it back.
 namespace {
 class LogCapture {
 public:
@@ -3725,9 +3545,7 @@ public:
 private:
     std::filesystem::path m_path;
 };
-} // namespace
-
-// Swapchain descriptor logging: the log is the only record of how the game asked for its swapchain.
+}
 
 TEST(DxgiProxyTest, InterceptCreateSwapChainLogsRequestedAndPassedOnDescriptor) {
     auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
@@ -3802,7 +3620,6 @@ TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
     DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
 
-    // Initial clamp applies and subclasses the window to fit the monitor work area
     EXPECT_TRUE(activeProxy.GetWindowController().ApplyInitialWindowClamp(testWnd));
     activeProxy.GetWindowController().SetGameHwnd(testWnd);
     EXPECT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
@@ -3814,7 +3631,6 @@ TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     ASSERT_GT(clientWidth, 0);
     ASSERT_GT(clientHeight, 0);
 
-    // Convert client corner points to screen coordinates
     POINT topLeft{ 0, 0 };
     POINT topRight{ clientWidth, 0 };
     POINT bottomLeft{ 0, clientHeight };
@@ -3827,7 +3643,6 @@ TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     ASSERT_TRUE(ClientToScreen(testWnd, &bottomRight));
     ASSERT_TRUE(ClientToScreen(testWnd, &centerPoint));
 
-    // Verify that the clamped Desktop Mirror Window client corners lie within the active monitor work area
     HMONITOR hMonitor = MonitorFromWindow(testWnd, MONITOR_DEFAULTTONEAREST);
     ASSERT_TRUE(hMonitor != nullptr);
     MONITORINFO monitorInfo{ sizeof(MONITORINFO) };
@@ -3837,104 +3652,83 @@ TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     EXPECT_LE(bottomRight.x, monitorInfo.rcWork.right);
     EXPECT_LE(bottomRight.y, monitorInfo.rcWork.bottom);
 
-    // Map screen points to normalized client coordinates
     float normX = 0.0f, normY = 0.0f;
 
-    // Top-Left corner maps to (0.0, 0.0)
     EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, topLeft, normX, normY));
     EXPECT_FLOAT_EQ(normX, 0.0f);
     EXPECT_FLOAT_EQ(normY, 0.0f);
 
-    // Top-Right corner maps to (1.0, 0.0)
     EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, topRight, normX, normY));
     EXPECT_FLOAT_EQ(normX, 1.0f);
     EXPECT_FLOAT_EQ(normY, 0.0f);
 
-    // Bottom-Left corner maps to (0.0, 1.0)
     EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, bottomLeft, normX, normY));
     EXPECT_FLOAT_EQ(normX, 0.0f);
     EXPECT_FLOAT_EQ(normY, 1.0f);
 
-    // Bottom-Right corner maps to (1.0, 1.0)
     EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, bottomRight, normX, normY));
     EXPECT_FLOAT_EQ(normX, 1.0f);
     EXPECT_FLOAT_EQ(normY, 1.0f);
 
-    // Center maps to (0.5, 0.5)
     EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, centerPoint, normX, normY));
     EXPECT_NEAR(normX, 0.5f, 0.005f);
     EXPECT_NEAR(normY, 0.5f, 0.005f);
 
-    // Contrast with the 66% clipping issue on an unclamped window:
-    // If the window were unclamped at 3840x2160 on a 2560x1440 display,
-    // the OS clamps GetCursorPos to monitor boundaries (max screen X = 2560, max screen Y = 1440).
     int unclampedW = 3840;
     int unclampedH = 2160;
     float unclampedMaxNormX = 2560.0f / static_cast<float>(unclampedW);
     float unclampedMaxNormY = 1440.0f / static_cast<float>(unclampedH);
     EXPECT_NEAR(unclampedMaxNormX, 0.6667f, 0.001f);
     EXPECT_NEAR(unclampedMaxNormY, 0.6667f, 0.001f);
-    // With resolution decoupling and Desktop Mirror Window clamping, the full [0.0, 1.0] range is restored.
 
     DestroyWindow(testWnd);
 }
 
 TEST(DxgiProxyTest, NormalizedMouseCoordinatesReachAbsoluteMenuQuadBoundariesInVr) {
-    // Menu quad centered in front of user
     XrPosef menuQuadPose{};
     menuQuadPose.position = { 0.0f, 0.0f, -1.2f };
     menuQuadPose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-    XrExtent2Df menuQuadSize{ 1.6f, 0.9f }; // 16:9 aspect ratio
+    XrExtent2Df menuQuadSize{ 1.6f, 0.9f };
     float cursorSize = 0.04f;
 
-    // 1. Clamped Desktop Mirror Window provides full [0.0, 1.0] normalized coordinate range
     float minNormX = 0.0f, maxNormX = 1.0f;
     float minNormY = 0.0f, maxNormY = 1.0f;
 
-    // Top-Left corner: (0.0, 0.0) -> absolute top-left quad boundary
     XrPosef poseTopLeft = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, minNormX, minNormY, cursorSize, cursorSize);
     float tipTopLeftX = poseTopLeft.position.x - 0.5f * cursorSize;
     float tipTopLeftY = poseTopLeft.position.y + 0.5f * cursorSize;
     EXPECT_NEAR(tipTopLeftX, -menuQuadSize.width / 2.0f, 1e-4f);
     EXPECT_NEAR(tipTopLeftY, menuQuadSize.height / 2.0f, 1e-4f);
 
-    // Top-Right corner: (1.0, 0.0) -> absolute top-right quad boundary
     XrPosef poseTopRight = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, maxNormX, minNormY, cursorSize, cursorSize);
     float tipTopRightX = poseTopRight.position.x - 0.5f * cursorSize;
     float tipTopRightY = poseTopRight.position.y + 0.5f * cursorSize;
     EXPECT_NEAR(tipTopRightX, menuQuadSize.width / 2.0f, 1e-4f);
     EXPECT_NEAR(tipTopRightY, menuQuadSize.height / 2.0f, 1e-4f);
 
-    // Bottom-Left corner: (0.0, 1.0) -> absolute bottom-left quad boundary
     XrPosef poseBottomLeft = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, minNormX, maxNormY, cursorSize, cursorSize);
     float tipBottomLeftX = poseBottomLeft.position.x - 0.5f * cursorSize;
     float tipBottomLeftY = poseBottomLeft.position.y + 0.5f * cursorSize;
     EXPECT_NEAR(tipBottomLeftX, -menuQuadSize.width / 2.0f, 1e-4f);
     EXPECT_NEAR(tipBottomLeftY, -menuQuadSize.height / 2.0f, 1e-4f);
 
-    // Bottom-Right corner: (1.0, 1.0) -> absolute bottom-right quad boundary
     XrPosef poseBottomRight = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, maxNormX, maxNormY, cursorSize, cursorSize);
     float tipBottomRightX = poseBottomRight.position.x - 0.5f * cursorSize;
     float tipBottomRightY = poseBottomRight.position.y + 0.5f * cursorSize;
     EXPECT_NEAR(tipBottomRightX, menuQuadSize.width / 2.0f, 1e-4f);
     EXPECT_NEAR(tipBottomRightY, -menuQuadSize.height / 2.0f, 1e-4f);
 
-    // Total span reaches 100% of menu quad dimensions
     EXPECT_NEAR(tipTopRightX - tipTopLeftX, menuQuadSize.width, 1e-4f);
     EXPECT_NEAR(tipTopLeftY - tipBottomLeftY, menuQuadSize.height, 1e-4f);
 
-    // 2. Contrast with the 66% clipping issue before resolution decoupling:
-    // Without resolution decoupling, normalized cursor coords were clipped at ~0.6667
     float clippedNormX = 2560.0f / 3840.0f; // ~0.6667
     float clippedNormY = 1440.0f / 2160.0f; // ~0.6667
     XrPosef poseClipped = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, clippedNormX, clippedNormY, cursorSize, cursorSize);
     float tipClippedX = poseClipped.position.x - 0.5f * cursorSize;
     float tipClippedY = poseClipped.position.y + 0.5f * cursorSize;
 
-    // Rightmost reach was only ~0.267m instead of 0.800m (width/2)
     EXPECT_LT(tipClippedX, menuQuadSize.width / 4.0f);
-    // Bottommost reach was only ~-0.150m instead of -0.450m (-height/2)
     EXPECT_GT(tipClippedY, -menuQuadSize.height / 4.0f);
 }
 
@@ -3950,25 +3744,21 @@ TEST(DxgiProxyTest, OnPresentEnforcesClampedMirrorWindowDimensionsWhenOversized)
     DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
     activeProxy.GetWindowController().SetGameHwnd(testWnd);
 
-    // Initial state: window was deliberately set oversized (e.g. 5000x4000) at (80, 90)
     SetWindowPos(testWnd, nullptr, 80, 90, 5000, 4000, SWP_NOZORDER | SWP_NOACTIVATE);
 
     RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
     int maxW = expectedClamped.right - expectedClamped.left;
     int maxH = expectedClamped.bottom - expectedClamped.top;
 
-    // Simulate frame present
     activeProxy.OnPresent(nullptr, 0, 0);
 
     RECT curRect{};
     GetWindowRect(testWnd, &curRect);
     EXPECT_EQ(curRect.right - curRect.left, maxW);
     EXPECT_EQ(curRect.bottom - curRect.top, maxH);
-    // SWP_NOMOVE ensures window placement is preserved so user can drag/move freely
     EXPECT_EQ(curRect.left, 80);
     EXPECT_EQ(curRect.top, 90);
 
-    // User moves the window to (200, 250); subsequent frames must preserve new position
     SetWindowPos(testWnd, nullptr, 200, 250, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     activeProxy.OnPresent(nullptr, 0, 0);
 
@@ -4028,25 +3818,19 @@ TEST(DxgiProxyTest, SubclassSuppressesEnforcementDuringModalMoveAndSize) {
     DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
     activeProxy.GetWindowController().SetGameHwnd(testWnd);
 
-    // Initial state: not in size/move
     EXPECT_FALSE(activeProxy.GetWindowController().IsInSizeMove());
 
-    // Initial clamp
     activeProxy.OnPresent(nullptr, 0, 0);
 
-    // User starts dragging/moving window (WM_ENTERSIZEMOVE)
     SendMessageA(testWnd, WM_ENTERSIZEMOVE, 0, 0);
     EXPECT_TRUE(activeProxy.GetWindowController().IsInSizeMove());
 
-    // OnPresent returns immediately during modal move/size and does not alter window
     activeProxy.OnPresent(nullptr, 0, 0);
     EXPECT_TRUE(activeProxy.GetWindowController().IsInSizeMove());
 
-    // User finishes dragging/moving window (WM_EXITSIZEMOVE)
     SendMessageA(testWnd, WM_EXITSIZEMOVE, 0, 0);
     EXPECT_FALSE(activeProxy.GetWindowController().IsInSizeMove());
 
-    // Next frame present enforces clamping cleanly
     activeProxy.OnPresent(nullptr, 0, 0);
     RECT postDragRect{};
     GetWindowRect(testWnd, &postDragRect);
@@ -4095,7 +3879,7 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockResizeBuffersImpl(IDXGISwapCh
     return S_OK;
 }
 
-} // anonymous namespace
+}
 
 TEST(DxgiProxyTest, SubclassPreservesTargetRenderResolutionOnWmSizeAndWindowPosChanged) {
     HWND testWnd = CreateWindowA("STATIC", "ResDecoupleSizeWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
@@ -4113,15 +3897,12 @@ TEST(DxgiProxyTest, SubclassPreservesTargetRenderResolutionOnWmSizeAndWindowPosC
     activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
-    // Send a WM_SIZE with smaller physical dimensions (e.g. 1920x1080)
     SendMessageA(testWnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(1920, 1080));
 
-    // The subclass must intercept WM_SIZE and deliver the target render resolution (3840x2160)
     EXPECT_EQ(observer.lastWidth, 3840);
     EXPECT_EQ(observer.lastHeight, 2160);
     EXPECT_EQ(observer.wmSizeCount, 1);
 
-    // Send WM_WINDOWPOSCHANGED; it must forward WM_SIZE with the target render resolution
     WINDOWPOS wp{};
     wp.hwnd = testWnd;
     wp.cx = 1920;
@@ -4156,7 +3937,6 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     EXPECT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
     EXPECT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
-    // When the game queries GetClientRect in active VR, it must see 3840x2160
     RECT clientRc{};
     EXPECT_TRUE(GetClientRect(testWnd, &clientRc));
     EXPECT_EQ(clientRc.left, 0);
@@ -4164,10 +3944,8 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     EXPECT_EQ(clientRc.right, 3840);
     EXPECT_EQ(clientRc.bottom, 2160);
 
-    // Physical window client width/height
     RECT unSubclassedRc{};
     {
-        // When queried outside active VR or on another window, original dimensions are returned
         HWND otherWnd = CreateWindowA("STATIC", "OtherWnd", WS_OVERLAPPEDWINDOW, 0, 0, 400, 300, nullptr, nullptr, nullptr, nullptr);
         ASSERT_TRUE(otherWnd != nullptr);
         RECT otherRc{};
@@ -4176,9 +3954,7 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
         DestroyWindow(otherWnd);
     }
 
-    // Physical window client dimensions
     RECT realPhysRc{};
-    // Detach temporarily to inspect physical size
     activeProxy.GetWindowController().DetachWindowSubclass();
     EXPECT_TRUE(GetClientRect(testWnd, &realPhysRc));
     int physW = realPhysRc.right - realPhysRc.left;
@@ -4186,17 +3962,14 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     ASSERT_GT(physW, 0);
     ASSERT_GT(physH, 0);
 
-    // Reattach subclass and detours
     EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
-    // ScreenToClient maps bottom-right of the physical window to target render extent (3840, 2160)
     POINT ptBottomRight{ physW, physH };
     EXPECT_TRUE(ClientToScreen(testWnd, &ptBottomRight));
     EXPECT_TRUE(ScreenToClient(testWnd, &ptBottomRight));
     EXPECT_NEAR(ptBottomRight.x, 3840, 1);
     EXPECT_NEAR(ptBottomRight.y, 2160, 1);
 
-    // ScreenToNormalizedClient still produces normalized [0.0, 1.0] coordinates
     POINT screenPt{ physW, physH };
     EXPECT_TRUE(ClientToScreen(testWnd, &screenPt));
     float normX = 0.0f, normY = 0.0f;
@@ -4210,7 +3983,6 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     EXPECT_FALSE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
     EXPECT_FALSE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
-    // After detach, GetClientRect returns physical dimensions again
     RECT restoredRc{};
     EXPECT_TRUE(GetClientRect(testWnd, &restoredRc));
     EXPECT_EQ(restoredRc.right, physW);
@@ -4220,9 +3992,6 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
 }
 
 TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) {
-    // Replicate Desktop Mirror Window geometry (clamped on ultrawide/4K display).
-    // The window must lie fully on screen (CI runners are 1024x768) or the OS clamps
-    // ClipCursor to the desktop and the hooked clip rect can't be verified exactly.
     HWND testWnd = CreateWindowA("STATIC", "MouseLookCenterWnd", WS_OVERLAPPEDWINDOW,
         GetSystemMetrics(SM_XVIRTUALSCREEN) + 50, GetSystemMetrics(SM_YVIRTUALSCREEN) + 50, 800, 600,
         nullptr, nullptr, nullptr, nullptr);
@@ -4233,7 +4002,6 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    // The hooked calls below reach a fake desktop: the real cursor is never moved or clipped.
     auto cursorPort = std::make_shared<FakeDesktopCursorPort>();
     auto activeProxyRuntime = MakeRuntime(activeOpenXrManager, nullptr, cursorPort);
     DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
@@ -4242,7 +4010,6 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     ASSERT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
     ASSERT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
-    // Query physical client rect using InternalWindowQueryScope
     RECT physRc{};
     {
         activeProxy.GetWindowController().DetachWindowSubclass();
@@ -4258,8 +4025,6 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     int expectedPhysCenterX = physTopLeft.x + physW / 2;
     int expectedPhysCenterY = physTopLeft.y + physH / 2;
 
-    // 1. Verify virtual cursor positioning calculation:
-    // ScaleVirtualCursorToPhysical accurately transforms virtual center (1920, 1080) to physical center
     POINT warpVirtualCenter{ physTopLeft.x + 1920, physTopLeft.y + 1080 };
     int computedPhysX = 0;
     int computedPhysY = 0;
@@ -4267,12 +4032,10 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     EXPECT_NEAR(computedPhysX, expectedPhysCenterX, 1);
     EXPECT_NEAR(computedPhysY, expectedPhysCenterY, 1);
 
-    // Specifically verify it does NOT set x to physTopLeft.x + 1920 (which would be near/past right window edge)
     if (physW < 3800) {
         EXPECT_NE(computedPhysX, physTopLeft.x + 1920);
     }
 
-    // 2. Verify virtual clip rectangle constraining calculation:
     RECT virtualClipRc{ physTopLeft.x, physTopLeft.y, physTopLeft.x + 3840, physTopLeft.y + 2160 };
     RECT constrainedClipRc{};
     EXPECT_TRUE(activeProxy.GetWindowController().ConstrainVirtualClipRectToPhysical(testWnd, &virtualClipRc, constrainedClipRc));
@@ -4281,7 +4044,6 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     EXPECT_EQ(constrainedClipRc.right, physTopLeft.x + physW);
     EXPECT_EQ(constrainedClipRc.bottom, physTopLeft.y + physH);
 
-    // 3. Verify hooked Win32 API invocations, as the fake desktop received them
     EXPECT_TRUE(SetCursorPos(warpVirtualCenter.x, warpVirtualCenter.y));
     EXPECT_NEAR(cursorPort->cursor.x, expectedPhysCenterX, 1);
     EXPECT_NEAR(cursorPort->cursor.y, expectedPhysCenterY, 1);
@@ -4295,9 +4057,6 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     EXPECT_TRUE(ClipCursor(nullptr));
     EXPECT_FALSE(cursorPort->clip.has_value());
 
-    // 4. Bidirectional delta parity:
-    // When the mouse is at physical center and user moves delta right or left,
-    // ScreenToClient maps back symmetrically around 1920.
     POINT moveRightScreen{ expectedPhysCenterX + 20, expectedPhysCenterY };
     EXPECT_TRUE(ScreenToClient(testWnd, &moveRightScreen));
     int rightDelta = moveRightScreen.x - 1920;
@@ -4332,7 +4091,6 @@ TEST(DxgiProxyTest, SubclassScalesMouseMessagesAcrossFullTargetResolution) {
     activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
-    // Get physical dimensions
     activeProxy.GetWindowController().DetachWindowSubclass();
     RECT physRc{};
     GetClientRect(testWnd, &physRc);
@@ -4340,17 +4098,14 @@ TEST(DxgiProxyTest, SubclassScalesMouseMessagesAcrossFullTargetResolution) {
     int physH = physRc.bottom - physRc.top;
     EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
-    // Send mouse move at (physW, physH) (bottom-right of physical window)
     SendMessageA(testWnd, WM_MOUSEMOVE, 0, MAKELPARAM(static_cast<WORD>(physW), static_cast<WORD>(physH)));
     EXPECT_EQ(observer.lastMouseX, 3840);
     EXPECT_EQ(observer.lastMouseY, 2160);
 
-    // Send mouse button down at center (physW / 2, physH / 2)
     SendMessageA(testWnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(static_cast<WORD>(physW / 2), static_cast<WORD>(physH / 2)));
     EXPECT_NEAR(observer.lastMouseX, 1920, 2);
     EXPECT_NEAR(observer.lastMouseY, 1080, 2);
 
-    // Send mouse move at (0, 0)
     SendMessageA(testWnd, WM_MOUSEMOVE, 0, MAKELPARAM(0, 0));
     EXPECT_EQ(observer.lastMouseX, 0);
     EXPECT_EQ(observer.lastMouseY, 0);
@@ -4386,7 +4141,6 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
     EXPECT_TRUE(activeProxy.AttachSwapChain(pSwapChain));
     EXPECT_TRUE(activeProxy.IsDetourResizeBuffersInstalled());
 
-    // When the game attempts to downsize buffers to 1920x1080, our detour enforces 3840x2160
     s_lastResizeBuffersWidth = 0;
     s_lastResizeBuffersHeight = 0;
     pSwapChain->ResizeBuffers(2, 1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
@@ -4394,7 +4148,6 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
     EXPECT_EQ(s_lastResizeBuffersWidth, 3840u);
     EXPECT_EQ(s_lastResizeBuffersHeight, 2160u);
 
-    // When the game passes 0x0 (which DXGI normally derives from window client rect)
     s_lastResizeBuffersWidth = 0;
     s_lastResizeBuffersHeight = 0;
     pSwapChain->ResizeBuffers(2, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
@@ -4406,8 +4159,6 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
     EXPECT_FALSE(activeProxy.IsDetourResizeBuffersInstalled());
 }
 
-// Desktop Mirror Window title (#196): while the mirror is off the game window's title says so and names
-// the command that restores it. These tests use a real window and read the title back.
 namespace {
 std::wstring WindowTitle(HWND hWnd) {
     int length = GetWindowTextLengthW(hWnd);
@@ -4417,7 +4168,6 @@ std::wstring WindowTitle(HWND hWnd) {
     return title;
 }
 
-// A real top-level test window with a known title, handed to the proxy as the game window.
 struct MirrorTitleWindow {
     explicit MirrorTitleWindow(MirrorPresentRig& rig, const char* title = "Farming Simulator 25") {
         hWnd = CreateWindowA("STATIC", title, WS_OVERLAPPEDWINDOW, 0, 0, 640, 360, nullptr, nullptr, nullptr, nullptr);
@@ -4435,7 +4185,7 @@ bool TitleSaysMirrorIsOff(const std::wstring& title) {
     return title.find(L"desktop mirror is off") != std::wstring::npos &&
            title.find(L"vrDesktopMirror on") != std::wstring::npos;
 }
-} // namespace
+}
 
 TEST(DxgiProxyTest, DesktopMirrorOffSetsATitleThatNamesTheCommandToRestoreIt) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
@@ -4450,8 +4200,6 @@ TEST(DxgiProxyTest, DesktopMirrorOffSetsATitleThatNamesTheCommandToRestoreIt) {
     EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
 }
 
-// #195 and #196 together: the frame that switches the mirror off sets the title and is also the one black
-// real Present; every Present after it is suppressed and the title stays.
 TEST(DxgiProxyTest, DesktopMirrorGoingOffSetsTheTitleAndPresentsExactlyOnceThenNone) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     MirrorTitleWindow window(rig);
@@ -4459,7 +4207,7 @@ TEST(DxgiProxyTest, DesktopMirrorGoingOffSetsTheTitleAndPresentsExactlyOnceThenN
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
 
     rig.vrBridge->SetDesktopMirrorEnabled(false);
-    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_EQ(rig.Present(), 1);
     EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title not set on the black frame";
     for (int i = 0; i < 4; ++i) {
         EXPECT_EQ(rig.Present(), 0);
@@ -4474,7 +4222,6 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsUntouchedWhileTheMirrorIsOn) {
         rig.Present();
         EXPECT_EQ(window.Title(), L"Farming Simulator 25");
     }
-    // The game changes its own title while the mirror shows: the Injector leaves that alone.
     SetWindowTextA(window.hWnd, "Farming Simulator 25 - map");
     rig.Present();
     EXPECT_EQ(window.Title(), L"Farming Simulator 25 - map");
@@ -4507,8 +4254,8 @@ TEST(DxgiProxyTest, DesktopMirrorTitleBehavesTheSameInSequentialDualPassAndMenuF
     MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
     MirrorTitleWindow window(rig);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
-    rig.Present();  // sub-pass 0
-    rig.Present();  // sub-pass 1
+    rig.Present();
+    rig.Present();
     EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
     rig.vrBridge->SetMenuVisible(true);
     rig.Present();
@@ -4546,7 +4293,7 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhileTheHeadsetIsAsleepAndLogsWh
     rig.Present();
     ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);  // asleep: the session keeps running
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
     rig.Present();
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
     EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (headset not in use)"), std::string::npos)
@@ -4577,7 +4324,6 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheHandshakeIsLost) {
     rig.Present();
     ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
 
-    // The savegame unloads: the Companion Mod's handshake is gone.
     rig.vrBridge->SetCompanionActive(false);
     rig.Present();
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
@@ -4595,7 +4341,7 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheInjectorDetaches) {
 }
 
 TEST(DxgiProxyTest, DesktopMirrorTitleIsNotChangedWhileTheMirrorShowsByItself) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     MirrorTitleWindow window(rig);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
     rig.Present();
@@ -4608,7 +4354,6 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsNotChangedWhileTheMirrorShowsByItself) {
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
 }
 
-// The game window can be unknown when the mirror goes off (it arrives with a later swapchain).
 TEST(DxgiProxyTest, DesktopMirrorOffTitleIsSetWhenTheGameWindowIsKnownOnlyAfterTheMirrorWentOff) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.vrBridge->SetDesktopMirrorEnabled(false);
@@ -4625,7 +4370,6 @@ TEST(DxgiProxyTest, DesktopMirrorOffTitleIsSetWhenTheGameWindowIsKnownOnlyAfterT
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
 }
 
-// The controller restores the old window's title when the game window changes; the mirror is still off.
 TEST(DxgiProxyTest, DesktopMirrorOffTitleMovesToTheNewGameWindowWhenTheWindowChangesWhileOff) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     MirrorTitleWindow oldWindow(rig, "Old Window");
@@ -4651,7 +4395,7 @@ size_t CountOf(const std::string& text, const std::string& needle) {
     for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++count;
     return count;
 }
-} // namespace
+}
 
 TEST(DxgiProxyTest, DesktopMirrorTransitionsAreLoggedOncePerChange) {
     LogCapture capture("fs25vr_desktop_mirror_title_test.log");
@@ -4706,19 +4450,15 @@ TEST(DxgiProxyTest, DesktopMirrorComingBackByItselfLogsTheReason) {
     }
 }
 
-// Mouse Confinement (#214, #216): while the headset is in use and the game window has focus, the Desk Mouse
-// is kept on the game picture. These tests drive the game's Present and the game's own ClipCursor calls and
-// assert the clip and the cursor the fake desktop holds.
 namespace {
-// The game window has focus and the Desk Mouse is on the picture, as in a headset session at the desk.
 void GiveTheGameWindowFocus(MirrorPresentRig& rig) {
     rig.cursorPort->foreground = rig.gameWindow;
     rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
 }
-} // namespace
+}
 
 TEST(DxgiProxyTest, MouseConfinementHoldsToTheClientAreaInTheMainMenu) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);  // no handshake: the main menu
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     GiveTheGameWindowFocus(rig);
 
     rig.Present();
@@ -4726,7 +4466,6 @@ TEST(DxgiProxyTest, MouseConfinementHoldsToTheClientAreaInTheMainMenu) {
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 }
 
-// What is showing makes no difference, nor does the Present path the frame takes.
 TEST(DxgiProxyTest, MouseConfinementHoldsWhateverIsShowingOnEveryPresentPath) {
     struct Scenario {
         const char* name;
@@ -4753,7 +4492,7 @@ TEST(DxgiProxyTest, MouseConfinementHoldsWhateverIsShowingOnEveryPresentPath) {
         rig.Present();
         EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
         rig.cursorPort->clip.reset();
-        rig.Present();  // both sub-passes of a Sequential Dual Pass frame count
+        rig.Present();
         EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
     }
 }
@@ -4765,7 +4504,7 @@ TEST(DxgiProxyTest, MouseConfinementKeepsTheDeskMouseOnThePictureWhenTheGameRele
     rig.Present();
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
 
-    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go in a menu
+    EXPECT_TRUE(ClipCursor(nullptr));
 
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 }
@@ -4782,7 +4521,7 @@ TEST(DxgiProxyTest, MouseConfinementRestoresAClipClearedFromOutsideAndDoesNotSet
     rig.Present();
     EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls) << "a clip that is already right was set again";
 
-    rig.cursorPort->clip.reset();  // Windows or another program clears it
+    rig.cursorPort->clip.reset();
     rig.Present();
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
     EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls + 1);
@@ -4795,7 +4534,7 @@ TEST(DxgiProxyTest, MouseConfinementLetsGoWhileAnotherWindowIsInTheForegroundAnd
     rig.Present();
     ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 
-    rig.cursorPort->foreground = GetDesktopWindow();  // Alt+Tab, the Win key, a UAC prompt
+    rig.cursorPort->foreground = GetDesktopWindow();
     rig.Present();
     EXPECT_FALSE(rig.cursorPort->clip.has_value());
 
@@ -4831,7 +4570,7 @@ TEST(DxgiProxyTest, MouseConfinementLeavesNoClipOnceTheGameHasReleasedItsOwnAfte
     MirrorPresentRig rig(VRRenderingMode::AFR);
     GiveTheGameWindowFocus(rig);
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
-    EXPECT_TRUE(ClipCursor(&rig.clientArea));  // mouse-look
+    EXPECT_TRUE(ClipCursor(&rig.clientArea));
     rig.Present();
     const int setClipCalls = rig.cursorPort->setClipCalls;
 
@@ -4840,7 +4579,7 @@ TEST(DxgiProxyTest, MouseConfinementLeavesNoClipOnceTheGameHasReleasedItsOwnAfte
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea)) << "the game's own clip is not the Injector's to release";
     EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls);
 
-    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go on focus loss, as it does itself
+    EXPECT_TRUE(ClipCursor(nullptr));
     EXPECT_FALSE(rig.cursorPort->clip.has_value());
 }
 
@@ -4848,14 +4587,14 @@ TEST(DxgiProxyTest, MouseConfinementLettingGoDuringGameplayPutsBackTheGamesOwnRe
     MirrorPresentRig rig(VRRenderingMode::AFR);
     GiveTheGameWindowFocus(rig);
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
-    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);  // no Resolution Decoupling: the rectangle is the game's own
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
     RECT gameRect = rig.clientArea;
     InflateRect(&gameRect, -100, -100);
     EXPECT_TRUE(ClipCursor(&gameRect));
     rig.Present();
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset goes to sleep
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
 
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
@@ -4883,13 +4622,13 @@ TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheSessionIsNotRunningAndHoldsAga
     rig.Present();
     ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset is off or asleep
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
     EXPECT_FALSE(rig.cursorPort->clip.has_value());
     rig.Present();
     EXPECT_FALSE(rig.cursorPort->clip.has_value());
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // the headset is back on
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     rig.Present();
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
@@ -4901,7 +4640,7 @@ TEST(DxgiProxyTest, MouseConfinementKeepsHoldingWhileTheRuntimeDashboardHasTheFo
     GiveTheGameWindowFocus(rig);
     rig.Present();
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // running, but not focused
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
     rig.cursorPort->clip.reset();
     rig.Present();
     ASSERT_FALSE(rig.openXrManager->IsSessionFocused());
@@ -4924,7 +4663,6 @@ TEST(DxgiProxyTest, MouseConfinementFollowsTheWindowWhenItMovesOrResizes) {
     rig.Present();
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, movedArea));
 
-    // Resized to a client area of 640x480 (the frame stays the same).
     RECT frame{ 0, 0, 640, 480 };
     AdjustWindowRectEx(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0);
     ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
@@ -4980,7 +4718,7 @@ TEST(DxgiProxyTest, MouseConfinementIsReleasedWhenTheControllerDetaches) {
     rig.Present();
     ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 
-    rig.runtime->GetDxgiProxy().DetachAll();  // leaving VR
+    rig.runtime->GetDxgiProxy().DetachAll();
 
     EXPECT_FALSE(rig.cursorPort->clip.has_value());
 }
@@ -4992,7 +4730,7 @@ TEST(DxgiProxyTest, MouseConfinementLogsEachStartAndStopOnceWithItsReason) {
     const std::string holds = "Mouse Confinement holds the Desk Mouse to the game picture (";
     const std::string releases = "Mouse Confinement released the Desk Mouse (";
 
-    rig.Present();  // the game window does not have focus yet
+    rig.Present();
     EXPECT_EQ(capture.Text().find("Mouse Confinement"), std::string::npos) << capture.Text();
 
     GiveTheGameWindowFocus(rig);
@@ -5022,16 +4760,14 @@ TEST(DxgiProxyTest, MouseConfinementLogsEachStartAndStopOnceWithItsReason) {
     EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 6u) << capture.Text();
 }
 
-// Centre the Desk Mouse (#217): holding starts with the cursor off the picture, it comes to the middle.
 namespace {
 POINT PictureCentre(const RECT& picture) {
     return { (picture.left + picture.right) / 2, (picture.top + picture.bottom) / 2 };
 }
-// A spot on the desktop that is not on the game picture (the test window is inset from the top left).
 POINT OffThePicture(const RECT& picture) {
     return { picture.left - 20, picture.top - 20 };
 }
-} // namespace
+}
 
 TEST(DxgiProxyTest, MouseConfinementStartingToHoldWithTheDeskMouseOffThePictureBringsItToTheMiddle) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
@@ -5050,7 +4786,7 @@ TEST(DxgiProxyTest, MouseConfinementStartingToHoldWithTheDeskMouseOnThePictureLe
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.vrBridge->SetMenuVisible(true);
     rig.cursorPort->foreground = rig.gameWindow;
-    const POINT spot{ rig.clientArea.left + 10, rig.clientArea.bottom - 10 };  // on the picture, near its corner
+    const POINT spot{ rig.clientArea.left + 10, rig.clientArea.bottom - 10 };
     rig.cursorPort->cursor = spot;
 
     rig.Present();
@@ -5067,8 +4803,6 @@ TEST(DxgiProxyTest, MouseConfinementNeverMovesTheDeskMouseWhileItKeepsHolding) {
     rig.Present();
     ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 
-    // Something puts the cursor off the picture and clears the clip mid-hold: the clip is set again,
-    // the cursor is left alone.
     rig.cursorPort->cursor = OffThePicture(rig.clientArea);
     rig.cursorPort->clip.reset();
     for (int i = 0; i < 3; ++i) rig.Present();
@@ -5084,13 +4818,13 @@ TEST(DxgiProxyTest, MouseConfinementBringsAnOutsideDeskMouseToTheMiddleWhenTheGa
     rig.vrBridge->SetMenuVisible(true);
     GiveTheGameWindowFocus(rig);
     rig.Present();
-    rig.cursorPort->foreground = GetDesktopWindow();  // Alt+Tab away
+    rig.cursorPort->foreground = GetDesktopWindow();
     rig.Present();
-    rig.cursorPort->cursor = OffThePicture(rig.clientArea);  // the player works on another monitor
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
     rig.Present();
     ASSERT_EQ(rig.cursorPort->setCursorPosCalls, 0) << "moved while the game window had no focus";
 
-    rig.cursorPort->foreground = rig.gameWindow;  // Alt+Tab back
+    rig.cursorPort->foreground = rig.gameWindow;
     rig.Present();
 
     EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
@@ -5103,13 +4837,13 @@ TEST(DxgiProxyTest, MouseConfinementBringsAnOutsideDeskMouseToTheMiddleWhenTheSe
     rig.vrBridge->SetMenuVisible(true);
     GiveTheGameWindowFocus(rig);
     rig.Present();
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset goes to sleep
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
     rig.cursorPort->cursor = OffThePicture(rig.clientArea);
     rig.Present();
     ASSERT_EQ(rig.cursorPort->setCursorPosCalls, 0) << "moved while the session was not running";
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // the headset wakes up
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     rig.Present();
 
@@ -5137,14 +4871,11 @@ TEST(DxgiProxyTest, MouseConfinementBringsTheDeskMouseToThePhysicalMiddleWhenThe
 
     rig.Present();
 
-    // The port is the original SetCursorPos: the point is the window's real middle, not the render-size one.
     EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
     EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
     EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
 }
 
-// The vrMouseConfinement setting (#218): the VRBridge flag, read on every Present once the Companion Mod
-// has done its handshake (a savegame has loaded).
 TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheFlagIsOffAndHoldsAgainWhenItIsBackOn) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.vrBridge->SetMenuVisible(true);
@@ -5181,14 +4912,13 @@ TEST(DxgiProxyTest, MouseConfinementFlagOffDoesNotTurnTheGamesReleaseInAMenuInto
     rig.Present();
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
 
-    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go in a menu
+    EXPECT_TRUE(ClipCursor(nullptr));
 
     EXPECT_FALSE(rig.cursorPort->clip.has_value());
 }
 
-// Before a savegame has loaded there is no Companion Mod to have turned it off: it always holds.
 TEST(DxgiProxyTest, MouseConfinementHoldsWithTheFlagOffWhileThereIsNoCompanionHandshake) {
-    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorPresentRig rig(VRRenderingMode::AFR, false);
     rig.vrBridge->SetMouseConfinementEnabled(false);
     GiveTheGameWindowFocus(rig);
 
@@ -5197,7 +4927,6 @@ TEST(DxgiProxyTest, MouseConfinementHoldsWithTheFlagOffWhileThereIsNoCompanionHa
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 }
 
-// Leaving to the main menu is a map unload: the Companion Mod is gone and the flag goes back on.
 TEST(DxgiProxyTest, MouseConfinementHoldsAgainAfterTheMapUnloadsWithTheFlagOff) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.vrBridge->SetMouseConfinementEnabled(false);
@@ -5207,7 +4936,7 @@ TEST(DxgiProxyTest, MouseConfinementHoldsAgainAfterTheMapUnloadsWithTheFlagOff) 
     ASSERT_FALSE(rig.cursorPort->clip.has_value());
 
     rig.vrBridge->SetCompanionActive(false);
-    rig.vrBridge->SetMouseConfinementEnabled(true);  // what VRBridge.onMapUnload does
+    rig.vrBridge->SetMouseConfinementEnabled(true);
     rig.Present();
 
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
@@ -5218,7 +4947,7 @@ TEST(DxgiProxyTest, MouseConfinementFlagOffStillAppliesTheGamesOwnGameplayRectan
     rig.vrBridge->SetMouseConfinementEnabled(false);
     GiveTheGameWindowFocus(rig);
     ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
-    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);  // no Resolution Decoupling: the rectangle is the game's own
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
     RECT gameRect = rig.clientArea;
     InflateRect(&gameRect, -100, -100);
 
@@ -5237,7 +4966,7 @@ TEST(DxgiProxyTest, MouseConfinementTurnedOffDuringGameplayLeavesTheGamesRectang
     InflateRect(&gameRect, -100, -100);
     EXPECT_TRUE(ClipCursor(&gameRect));
     rig.Present();
-    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));  // holding replaced it with the picture
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
 
     rig.vrBridge->SetMouseConfinementEnabled(false);
     rig.Present();
@@ -5282,8 +5011,6 @@ TEST(DxgiProxyTest, MouseConfinementLogsStartsAndStopsCausedByTheSettingAsByComm
     EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 3u) << capture.Text();
 }
 
-// Focus lost and the flag off together: the log names the setting, and turning it back on while the game
-// window is still not in front says nothing until the focus is back.
 TEST(DxgiProxyTest, MouseConfinementLogsTheSettingWhenTheFlagIsTurnedOffWhileFocusIsAlreadyLost) {
     LogCapture capture("fs25vr_mouse_confinement_test.log");
     MirrorPresentRig rig(VRRenderingMode::AFR);
@@ -5305,8 +5032,6 @@ TEST(DxgiProxyTest, MouseConfinementLogsTheSettingWhenTheFlagIsTurnedOffWhileFoc
         << capture.Text();
 }
 
-// The game's clip put back when Mouse Confinement lets go follows the window (review of #216): the game asked
-// for it where the window was, and the window has moved since.
 namespace {
 void MoveGameWindowBy(MirrorPresentRig& rig, int dx, int dy) {
     RECT windowRect{};
@@ -5314,7 +5039,7 @@ void MoveGameWindowBy(MirrorPresentRig& rig, int dx, int dy) {
     ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, windowRect.left + dx, windowRect.top + dy, 0, 0,
                              SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
 }
-} // namespace
+}
 
 TEST(DxgiProxyTest, MouseConfinementLettingGoAfterTheWindowMovedPutsBackTheGamesRectangleWhereTheWindowIsNow) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
@@ -5326,7 +5051,7 @@ TEST(DxgiProxyTest, MouseConfinementLettingGoAfterTheWindowMovedPutsBackTheGames
     rig.Present();
 
     MoveGameWindowBy(rig, 30, 20);
-    rig.Present();  // holding follows the window
+    rig.Present();
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
 
@@ -5353,7 +5078,6 @@ TEST(DxgiProxyTest, MouseConfinementLettingGoInTheFrameTheWindowMovedPutsBackThe
     EXPECT_TRUE(ClipIs(rig.cursorPort->clip, movedGameRect));
 }
 
-// Mouse Confinement only releases a clip it still holds (review of #216).
 TEST(DxgiProxyTest, MouseConfinementLeavesAClipAnotherProgramSetInPlaceWhenItLetsGo) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.vrBridge->SetMenuVisible(true);
@@ -5363,7 +5087,7 @@ TEST(DxgiProxyTest, MouseConfinementLeavesAClipAnotherProgramSetInPlaceWhenItLet
 
     RECT other = rig.clientArea;
     InflateRect(&other, -50, -50);
-    rig.cursorPort->clip = other;  // another program takes the clip
+    rig.cursorPort->clip = other;
     const int setClipCalls = rig.cursorPort->setClipCalls;
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
@@ -5388,7 +5112,6 @@ TEST(DxgiProxyTest, MouseConfinementLetsGoOfNothingWhenTheClipWasClearedFromOuts
     EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls);
 }
 
-// The start line names the cause that actually ended the last non-holding stretch (review of #216).
 TEST(DxgiProxyTest, MouseConfinementLogsFocusRegainedWhenTheFlagIsTurnedOnWhileFocusIsLost) {
     LogCapture capture("fs25vr_mouse_confinement_test.log");
     MirrorPresentRig rig(VRRenderingMode::AFR);
@@ -5396,11 +5119,11 @@ TEST(DxgiProxyTest, MouseConfinementLogsFocusRegainedWhenTheFlagIsTurnedOnWhileF
     GiveTheGameWindowFocus(rig);
     rig.Present();
 
-    rig.vrBridge->SetMouseConfinementEnabled(false);  // turned off while focused
+    rig.vrBridge->SetMouseConfinementEnabled(false);
     rig.Present();
-    rig.cursorPort->foreground = GetDesktopWindow();  // focus lost
+    rig.cursorPort->foreground = GetDesktopWindow();
     rig.Present();
-    rig.vrBridge->SetMouseConfinementEnabled(true);  // turned on again while unfocused
+    rig.vrBridge->SetMouseConfinementEnabled(true);
     rig.Present();
     rig.cursorPort->foreground = rig.gameWindow;
     rig.Present();
@@ -5417,11 +5140,11 @@ TEST(DxgiProxyTest, MouseConfinementLogsFocusRegainedWhenTheSessionRunsAgainWhil
     GiveTheGameWindowFocus(rig);
     rig.Present();
 
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset sleeps while focused
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
-    rig.cursorPort->foreground = GetDesktopWindow();  // focus lost
+    rig.cursorPort->foreground = GetDesktopWindow();
     rig.Present();
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // wakes up while unfocused
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     rig.Present();
     rig.cursorPort->foreground = rig.gameWindow;
@@ -5439,13 +5162,13 @@ TEST(DxgiProxyTest, MouseConfinementLogsSessionRunningAgainWhenTheSessionIsTheLa
     GiveTheGameWindowFocus(rig);
     rig.Present();
 
-    rig.cursorPort->foreground = GetDesktopWindow();  // focus lost first
+    rig.cursorPort->foreground = GetDesktopWindow();
     rig.Present();
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // then the session stops, still unfocused
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     rig.Present();
-    rig.cursorPort->foreground = rig.gameWindow;  // focus is back while the session is stopped
+    rig.cursorPort->foreground = rig.gameWindow;
     rig.Present();
-    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // and the session runs last
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     rig.Present();
 
@@ -5453,7 +5176,6 @@ TEST(DxgiProxyTest, MouseConfinementLogsSessionRunningAgainWhenTheSessionIsTheLa
     EXPECT_NE(log.find("Mouse Confinement holds the Desk Mouse to the game picture (session running again)"), std::string::npos) << log;
 }
 
-// The Present that starts holding draws the Desk Mouse at the middle of the picture, not where it was (review of #217).
 TEST(DxgiProxyTest, MouseConfinementCentresTheDrawnCursorInTheFrameHoldingStarts) {
     MirrorPresentRig rig(VRRenderingMode::AFR);
     rig.vrBridge->SetMenuVisible(true);
@@ -5468,11 +5190,6 @@ TEST(DxgiProxyTest, MouseConfinementCentresTheDrawnCursorInTheFrameHoldingStarts
     EXPECT_NEAR(cursor.normY, 0.5f, 0.01f);
 }
 
-// Another swap chain in the process (an overlay, a capture tool, a second window) shares the system's DXGI code
-// with the game's, so its calls reach the Injector's hooks too. The hooks act only on the game's swap chain
-// (#264): everything else reaches DXGI exactly as the caller made it. The rig has a game swap chain the proxy
-// attached to and a second one the proxy never saw, both objects of the same class (one vtable), and records what
-// reached the "system" for each.
 namespace {
 
 struct PresentCall {
@@ -5511,7 +5228,7 @@ struct ResizeCall {
     const UINT* creationNodeMask;
     IUnknown* const* presentQueue;
 };
-std::vector<ResizeCall> g_systemResizes;  // ResizeBuffers and ResizeBuffers1, in call order
+std::vector<ResizeCall> g_systemResizes;
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingResizeBuffers(
     IDXGISwapChain* self, UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags) {
@@ -5533,7 +5250,6 @@ struct ColorSpaceCall {
 std::vector<ColorSpaceCall> g_systemColorSpaceChecks;
 std::vector<ColorSpaceCall> g_systemColorSpaceSets;
 
-// Reports every colour space as presentable, as a swap chain on an HDR display does.
 __declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingCheckColorSpaceSupport(
     IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace, UINT* support) {
     g_systemColorSpaceChecks.push_back({ self, colorSpace });
@@ -5559,7 +5275,6 @@ HWND g_windowTheSystemWasAskedFor = nullptr;
 // point it at their own locals, so the rig clears it when it goes, however the test ends.
 std::function<void()> g_onSystemCreation;
 
-// A window a test made; gone when the test ends, however it ends.
 struct TestWindow {
     HWND handle = nullptr;
     explicit TestWindow(const char* title) {
@@ -5575,7 +5290,6 @@ struct GameAndOtherSwapChainRig {
     std::shared_ptr<MockActiveOpenXrDispatch> dispatch = std::make_shared<MockActiveOpenXrDispatch>();
     std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(dispatch);
     std::shared_ptr<VRBridge> vrBridge;
-    // Declared before the runtime so the windows outlive it: the runtime's last DetachAll may still touch them.
     std::vector<std::unique_ptr<TestWindow>> windows;
     std::unique_ptr<InjectorRuntime> runtime;
     std::vector<void*> vtable = std::vector<void*>(41, nullptr);
@@ -5627,7 +5341,6 @@ struct GameAndOtherSwapChainRig {
         runtime->GetDxgiProxy().DetachAll();
     }
 
-    // A window that lives as long as the rig.
     HWND MakeWindow(const char* title) {
         windows.push_back(std::make_unique<TestWindow>(title));
         return windows.back()->handle;
@@ -5660,7 +5373,7 @@ struct GameAndOtherSwapChainRig {
     }
 };
 
-} // namespace
+}
 
 TEST(DxgiProxyTest, ASecondSwapChainsPresentReachesDxgiWithItsOwnArgumentsAndTheInjectorDoesNothingForIt) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR);
@@ -5705,7 +5418,7 @@ TEST(DxgiProxyTest, ASecondSwapChainsPresent1ReachesDxgiWithItsOwnArgumentsAndTh
 TEST(DxgiProxyTest, ASecondSwapChainPresentingBetweenTheGamesAfrFramesLeavesTheEyeOrderAlone) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR);
 
-    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);  // left eye
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
     EXPECT_TRUE(rig.openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
     EXPECT_EQ(rig.Present(rig.other, 1, 0), S_OK);
@@ -5714,11 +5427,11 @@ TEST(DxgiProxyTest, ASecondSwapChainPresentingBetweenTheGamesAfrFramesLeavesTheE
     EXPECT_FALSE(rig.openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);  // right eye
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(rig.Present(rig.other, 1, 0), S_OK);
-    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);  // left eye of the next pair
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
 }
@@ -5726,7 +5439,7 @@ TEST(DxgiProxyTest, ASecondSwapChainPresentingBetweenTheGamesAfrFramesLeavesTheE
 TEST(DxgiProxyTest, ASecondSwapChainPresentingBetweenTheGamesSubPassesLeavesTheEyeOrderAlone) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::SequentialDualPass);
 
-    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);  // sub-pass 0: left eye, no real Present
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
     EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
     EXPECT_TRUE(g_systemPresents.empty());
     EXPECT_EQ(rig.Present(rig.other, 1, 0), S_OK);
@@ -5735,7 +5448,7 @@ TEST(DxgiProxyTest, ASecondSwapChainPresentingBetweenTheGamesSubPassesLeavesTheE
     EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u) << "the game's next sub-pass is still the right eye";
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 0u);
 
-    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);  // sub-pass 1: right eye, pair submitted, real Present
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
     EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
     ASSERT_EQ(g_systemPresents.size(), 2u);
@@ -5749,7 +5462,7 @@ TEST(DxgiProxyTest, ASecondSwapChainsPresentIsStillPassedOnWhileTheDesktopMirror
         rig.Present(rig.game, 1, 0);
     }
     ASSERT_TRUE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
-    const size_t gameRealPresents = g_systemPresents.size();  // the black frame at the switch, then none
+    const size_t gameRealPresents = g_systemPresents.size();
 
     rig.Present(rig.other, 1, 0);
     rig.Present1(rig.other, 1, 0, nullptr);
@@ -5779,7 +5492,6 @@ TEST(DxgiProxyTest, ASecondSwapChainsResizeBuffersKeepsTheSizeItAskedFor) {
     EXPECT_EQ(g_systemResizes[0].flags, 0x20u);
     EXPECT_FALSE(controller.IsWindowClampDirty()) << "the game window's clamp is not the other swap chain's business";
 
-    // The game's own resize still gets the Render Resolution.
     EXPECT_EQ(rig.ResizeBuffers(rig.game, 1280, 720), S_OK);
     ASSERT_EQ(g_systemResizes.size(), 2u);
     EXPECT_EQ(g_systemResizes[1].width, 3840u);
@@ -5815,7 +5527,6 @@ TEST(DxgiProxyTest, ASecondSwapChainsColourSpaceQueriesAndSettingsAreAnsweredByD
     ASSERT_TRUE(rig.runtime->GetDxgiProxy().IsActive());
     LogCapture capture("fs25vr_second_swap_chain_colour_space.log");
 
-    // HDR is hidden from the game while VR is active (control) but not from another swap chain.
     EXPECT_EQ(rig.CheckColorSpaceSupport(rig.game, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020), 0u);
     EXPECT_EQ(rig.CheckColorSpaceSupport(rig.other, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
               static_cast<UINT>(DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT));
@@ -5851,7 +5562,6 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingCreateSwapChain(
     return S_OK;
 }
 
-// A factory the proxy hooked, whose creations hand out the swap chain a test chooses.
 struct CreatingFactory {
     MockFactory2 factory;
     explicit CreatingFactory(DxgiProxy& proxy) {
@@ -5859,7 +5569,6 @@ struct CreatingFactory {
         factory.vtable[kCreateSwapChainForHwndVTableSlot] = reinterpret_cast<void*>(&RecordingCreateSwapChainForHwnd);
         EXPECT_TRUE(proxy.AttachFactory(factory.Get()));
     }
-    // The game creates a swap chain for `window`; the system hands out `created`.
     void CreateForHwnd(IDXGISwapChain* created, HWND window) {
         g_swapChainTheSystemCreates = created;
         IDXGISwapChain1* out = nullptr;
@@ -5871,14 +5580,14 @@ struct CreatingFactory {
         g_swapChainTheSystemCreates = created;
         DXGI_SWAP_CHAIN_DESC desc{};
         desc.OutputWindow = window;
-        desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;  // one the headset takes, or the Injector falls back to Pass-Through
+        desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         IDXGISwapChain* out = nullptr;
         EXPECT_EQ(DxgiProxy::Intercept_CreateSwapChain(factory.Get(), nullptr, &desc, &out), S_OK);
         EXPECT_EQ(out, created);
     }
 };
 
-} // namespace
+}
 
 TEST(DxgiProxyTest, TheSwapChainTheGameCreatesForItsWindowIsTheGamesAndAnotherWindowsIsNot) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
@@ -5931,9 +5640,6 @@ TEST(DxgiProxyTest, ASwapChainCreatedLaterForTheGameWindowReplacesTheGamesSwapCh
 }
 
 TEST(DxgiProxyTest, TheFirstSwapChainCreatedThroughTheHookedFactoryIsTakenForTheGamesWhoeverCreatesIt) {
-    // Pins an assumption, not a wish: nothing tells the proxy the game's window before the game's first creation (the
-    // window is learnt from the creations and the game's own Present), so the first one is the game's, as it was
-    // before the hooks distinguished swap chains. An overlay creating its swap chain first would be mistaken for it.
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
     HWND firstWindow = rig.MakeWindow("FirstCreationWnd");
     CreatingFactory creating(rig.runtime->GetDxgiProxy());
@@ -5949,10 +5655,9 @@ TEST(DxgiProxyTest, TheFirstSwapChainCreatedThroughTheHookedFactoryIsTakenForThe
 
 namespace {
 
-// A swap chain that counts its references, as a real one does.
 struct CountingSwapChain {
     void** vtable;
-    long references = 1;  // the creator's
+    long references = 1;
 };
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE CountingQueryInterface(IUnknown* self, REFIID riid, void** ppv) {
@@ -5973,7 +5678,7 @@ __declspec(noinline) ULONG STDMETHODCALLTYPE CountingRelease(IUnknown* self) {
     return --reinterpret_cast<CountingSwapChain*>(self)->references;
 }
 
-} // namespace
+}
 
 TEST(DxgiProxyTest, TheProxyHoldsNoReferenceToTheGamesSwapChain) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
@@ -5991,8 +5696,6 @@ TEST(DxgiProxyTest, TheProxyHoldsNoReferenceToTheGamesSwapChain) {
 }
 
 TEST(DxgiProxyTest, TheGamesSwapChainIsTheSystemObjectTheHooksAreCalledWithNotAWrapperAroundIt) {
-    // Behind a wrapper such as ReShade's the game holds the wrapper and the wrapper calls the system's swap chain, so
-    // the hooks see only the system object the creation handed out (ADR-0038).
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
     HWND gameWindow = rig.MakeWindow("SecondSwapChainGameWnd4");
     CreatingFactory creating(rig.runtime->GetDxgiProxy());
@@ -6010,14 +5713,11 @@ TEST(DxgiProxyTest, TheGamesSwapChainIsTheSystemObjectTheHooksAreCalledWithNotAW
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u) << "only the system object the hooks were handed is the game's";
 }
 
-// A replaced swap chain (#265). A swap chain here owns one back buffer that counts its references: it starts with the
-// swap chain's own, and every GetBuffer adds one, as a real one does. So the count shows whether the Injector still
-// holds the buffer it cached from a Present.
 namespace {
 
 struct BufferedSwapChain {
     void** vtable;
-    CountingSwapChain buffer{ nullptr, 1 };  // the back buffer: its vtable is set by the constructor
+    CountingSwapChain buffer{ nullptr, 1 };
     int getBufferCalls = 0;
     std::vector<void*> bufferVTable = std::vector<void*>(3, nullptr);
     std::vector<void*> ownVTable;
@@ -6041,7 +5741,7 @@ struct BufferedSwapChain {
     }
 };
 
-} // namespace
+}
 
 TEST(DxgiProxyTest, TheOldSwapChainsBackBuffersAreReleasedBeforeTheCreationForTheGameWindowIsPassedOn) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
@@ -6112,18 +5812,18 @@ TEST(DxgiProxyTest, AfterAReplacementAfrCarriesOnWithTheNewSwapChainsBuffersAndS
     BufferedSwapChain oldChain(rig.vtable);
     BufferedSwapChain newChain(rig.vtable);
     creating.CreateForHwnd(oldChain.Get(), gameWindow);
-    rig.Present(oldChain.Get(), 1, 0);  // left eye of a pair
+    rig.Present(oldChain.Get(), 1, 0);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
 
     creating.CreateForHwnd(newChain.Get(), gameWindow);
 
-    rig.Present(newChain.Get(), 1, 0);  // the pair's right eye, from the new swap chain
+    rig.Present(newChain.Get(), 1, 0);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(newChain.getBufferCalls, 1) << "the new swap chain's own back buffer is what is copied";
     EXPECT_EQ(newChain.buffer.references, 2);
-    rig.Present(newChain.Get(), 1, 0);  // left eye of the next pair
-    rig.Present(newChain.Get(), 1, 0);  // right eye
+    rig.Present(newChain.Get(), 1, 0);
+    rig.Present(newChain.Get(), 1, 0);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
     EXPECT_EQ(oldChain.buffer.references, 1) << "nothing of the old swap chain is kept";
     EXPECT_EQ(oldChain.getBufferCalls, 1);
@@ -6138,12 +5838,12 @@ TEST(DxgiProxyTest, AfterAReplacementSequentialDualPassCarriesOnWithTheNewSwapCh
     BufferedSwapChain oldChain(rig.vtable);
     BufferedSwapChain newChain(rig.vtable);
     creating.CreateForHwnd(oldChain.Get(), gameWindow);
-    rig.Present(oldChain.Get(), 1, 0);  // sub-pass 0: left eye
+    rig.Present(oldChain.Get(), 1, 0);
     EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
 
     creating.CreateForHwnd(newChain.Get(), gameWindow);
 
-    rig.Present(newChain.Get(), 1, 0);  // sub-pass 1: right eye, pair submitted, real Present
+    rig.Present(newChain.Get(), 1, 0);
     EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
     ASSERT_EQ(g_systemPresents.size(), 1u);
@@ -6156,7 +5856,6 @@ TEST(DxgiProxyTest, AfterAReplacementSequentialDualPassCarriesOnWithTheNewSwapCh
 }
 
 TEST(DxgiProxyTest, ASwapChainCreatedAtTheOldOnesAddressDoesNotInheritTheOldBackBuffers) {
-    // The game destroys its swap chain and creates the next one; the allocator may hand out the same address.
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
     HWND gameWindow = rig.MakeWindow("ReplacedSwapChainGameWnd6");
     CreatingFactory creating(rig.runtime->GetDxgiProxy());
@@ -6165,7 +5864,7 @@ TEST(DxgiProxyTest, ASwapChainCreatedAtTheOldOnesAddressDoesNotInheritTheOldBack
     rig.Present(chain.Get(), 1, 0);
     ASSERT_EQ(chain.getBufferCalls, 1);
 
-    g_onSystemCreation = [&] { chain.buffer.references = 1; };  // the old buffers go with the old swap chain
+    g_onSystemCreation = [&] { chain.buffer.references = 1; };
     creating.CreateForHwnd(chain.Get(), gameWindow);
     g_onSystemCreation = nullptr;
 
@@ -6173,12 +5872,8 @@ TEST(DxgiProxyTest, ASwapChainCreatedAtTheOldOnesAddressDoesNotInheritTheOldBack
     EXPECT_EQ(chain.getBufferCalls, 2) << "the new swap chain's back buffers are fetched, not the cached old ones";
 }
 
-// ---- A refused OpenXR session (ADR-0004) ----------------------------------------------------------------------------
-
 namespace {
 
-// A runtime that refuses the session for the game's device, as one does when the headset is on another GPU than the
-// one the game renders on. Its graphics requirements name `requiredAdapter`.
 class SessionRefusingOpenXrRuntime : public FakeOpenXrRuntime {
 public:
     uint32_t createSessionCalls = 0;
@@ -6196,7 +5891,6 @@ public:
     }
 };
 
-// What the system's factory was asked to create.
 struct SystemCreationRequest {
     int calls = 0;
     DXGI_SWAP_CHAIN_DESC desc{};
@@ -6225,8 +5919,6 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChain(
     return S_OK;
 }
 
-// The Injector in Active VR Mode on a runtime that will refuse the session, with a hooked factory, a game window and
-// the game's real (WARP) Direct3D 12 device and queue, which the game hands to the creation hooks.
 struct RefusedSessionRig {
     std::shared_ptr<SessionRefusingOpenXrRuntime> runtime = std::make_shared<SessionRefusingOpenXrRuntime>();
     std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(runtime);
@@ -6237,7 +5929,6 @@ struct RefusedSessionRig {
     MockFactory2 factory;
     std::unique_ptr<InjectorRuntime> injector;
 
-    // `runtimeNeedsTheGamesAdapter` makes the runtime's graphics requirements name the adapter the game renders on.
     explicit RefusedSessionRig(bool runtimeNeedsTheGamesAdapter = false) {
         g_systemCreationRequest = {};
         ComPtr<IDXGIFactory4> dxgiFactory;
@@ -6268,7 +5959,6 @@ struct RefusedSessionRig {
     bool Ready() const { return injector != nullptr; }
     DxgiProxy& Proxy() { return injector->GetDxgiProxy(); }
 
-    // The game creates its swap chain the way FS25 does: windowed=FALSE, at 3840x2160, scaling NONE.
     HRESULT CreateForHwnd() {
         DXGI_SWAP_CHAIN_DESC1 desc{};
         desc.Width = 3840;
@@ -6309,7 +5999,7 @@ struct RefusedSessionRig {
     }
 };
 
-} // namespace
+}
 
 TEST(DxgiProxyTest, ARefusedSessionLeavesTheGamesCreateSwapChainForHwndAsTheGameAskedAndEntersPassThrough) {
     RefusedSessionRig rig;
@@ -6430,7 +6120,7 @@ TEST(DxgiProxyTest, WhenTheRuntimeNeedsAnotherAdapterThanTheGamesAWarningNamesBo
 }
 
 TEST(DxgiProxyTest, WhenTheRuntimeNeedsTheGamesAdapterThereIsNoAdapterWarning) {
-    RefusedSessionRig rig(/*runtimeNeedsTheGamesAdapter=*/true);
+    RefusedSessionRig rig(true);
     if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
     LogCapture capture("fs25vr_refused_session_adapter_test.log");
 
@@ -6441,6 +6131,6 @@ TEST(DxgiProxyTest, WhenTheRuntimeNeedsTheGamesAdapterThereIsNoAdapterWarning) {
     EXPECT_EQ(rig.runtime->createSessionCalls, 1u);
 }
 
-} // namespace fs25vr
+}
 
 

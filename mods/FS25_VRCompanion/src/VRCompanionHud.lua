@@ -1,13 +1,5 @@
--- ====================================================================
--- FS25 VR Companion Mod: HUD Subsystem
--- Manages in-engine VR HUD Group placement and scaling, the HUD Safe Area,
--- stereoscopic convergence, the three-stage visibility state machine, and
--- the Speedometer group's stack of fill levels under the speedometer.
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
--- VR HUD Three-Stage State Machine Constants
 VRCompanion.HUD_STATE_HIDDEN = 0
 VRCompanion.HUD_STATE_STREAMLINED = 1
 VRCompanion.HUD_STATE_FULL = 2
@@ -24,8 +16,6 @@ VRCompanion.HUD_STATE_NAMES = {
     [2] = "Full"
 }
 
--- The map-load HUD alert for each HUD state: its l10n key (modDesc.xml) and its English text. It names no key or button, since
--- the HUD Toggle Action can be rebound.
 VRCompanion.HUD_LOAD_ALERT_TEXTS = {
     [0] = { key = "vrHud_loadAlert_hidden", english = "VR HUD: Hidden" },
     [1] = { key = "vrHud_loadAlert_streamlined", english = "VR HUD: Streamlined" },
@@ -45,21 +35,18 @@ local HUD_GROUP_TEXTS = {
     controls = { key = "vrHud_groupControls", english = "Controls" },
 }
 
--- The HUD state's name in the game's language, for a notification (console output and log lines name it by HUD_STATE_NAMES).
 function VRCompanion:getHudStateText(state)
     local text = HUD_STATE_TEXTS[state]
     if text == nil then return (self.HUD_STATE_NAMES and self.HUD_STATE_NAMES[state]) or tostring(state) end
     return VRCompanion.getLocalisedText(text.key, text.english)
 end
 
--- The HUD Group's name in the game's language, for a notification (console output and log lines use getHudGroupLabel).
 function VRCompanion:getHudGroupText(groupName)
     local text = HUD_GROUP_TEXTS[groupName]
     if text == nil then return self:getHudGroupLabel(groupName) end
     return VRCompanion.getLocalisedText(text.key, text.english)
 end
 
--- VR HUD runtime state defaults (initialized only when not already set)
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
 if VRCompanion.hudSafeAreaHorizontal == nil then VRCompanion.hudSafeAreaHorizontal = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
 if VRCompanion.hudSafeAreaVertical == nil then VRCompanion.hudSafeAreaVertical = VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL end
@@ -73,30 +60,21 @@ if VRCompanion.hudAnchorRight == nil then VRCompanion.hudAnchorRight = VRCompani
 if VRCompanion.hudAnchorBottom == nil then VRCompanion.hudAnchorBottom = VRCompanion.hudAnchorBottomBase end
 if VRCompanion.hudAnchorTop == nil then VRCompanion.hudAnchorTop = VRCompanion.hudAnchorTopBase end
 if VRCompanion.currentConvergenceOffset == nil then VRCompanion.currentConvergenceOffset = 0.0 end
--- The four HUD Groups (CONTEXT.md, ADR-0022). Each group lists its engine displays and its
--- fixed home corner, and says whether it shows in the Streamlined and Full HUD. Placement and
--- visibility both look a display up through its group. The context action display is in no group.
--- The group names, in order, are VRCompanion.HUD_GROUP_NAMES (VRCompanionConfig.lua): that one list
--- drives layout, visibility, save/load and listing.
 VRCompanion.HUD_GROUPS = {
     map = { displays = { "IngameMap" }, alignX = "left", alignY = "bottom" },
     speedometer = { displays = { "SpeedMeterDisplay", "FillLevelsDisplay" }, alignX = "right", alignY = "bottom" },
     info = { displays = { "GameInfoDisplay" }, alignX = "right", alignY = "top" },
     controls = { displays = { "InputHelpDisplay" }, alignX = "left", alignY = "top" }
 }
--- Visibility flags start at their DEFAULT_* constants (VRCompanionConfig.lua)
 for _, name in ipairs(VRCompanion.HUD_GROUP_NAMES) do
     local group = VRCompanion.HUD_GROUPS[name]
     group.streamlined = VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED[name]
     group.full = VRCompanion.DEFAULT_HUD_GROUP_FULL[name]
 end
 
--- Not in any group: bottom-centered on the Speedometer group's bottom margin, drawn at that
--- group's scale, and shown in both the Streamlined and Full HUD.
 local CONTEXT_ACTION_DISPLAY = "ContextActionDisplay"
 local CONTEXT_ACTION_ANCHOR_GROUP = "speedometer"
 
--- The group a display belongs to, and the group's name
 local function findHudGroup(displayName)
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
         local group = VRCompanion.HUD_GROUPS[groupName]
@@ -107,7 +85,6 @@ local function findHudGroup(displayName)
     return nil, nil
 end
 
--- A group's HUD Group Margins and scale multiplier, clamped to their ranges
 function VRCompanion:getHudGroupLayout(groupName)
     local stored = (self.hudGroupLayout or {})[groupName] or {}
     return self:sanitizeHudGroupLayout(groupName, stored.marginX, stored.marginY, stored.scale)
@@ -124,7 +101,6 @@ function VRCompanion:setHudGroupLayout(groupName, marginX, marginY, scale)
     return layout
 end
 
--- The game's own UI scale setting
 function VRCompanion:getHudBaseUiScale()
     local gs = g_gameSettings or _G.g_gameSettings
     local gsClass = GameSettings or _G.GameSettings
@@ -134,52 +110,38 @@ function VRCompanion:getHudBaseUiScale()
     return 1.0
 end
 
--- FOV Overscan widens the view by (1 + percent / 100) in tangent, so the same normalized screen position and size would
--- sit further out, look bigger and read nearer. The HUD shrinks toward the screen centre by this factor instead, which
--- keeps its angular position and size (and, with the convergence disparity, its depth) as without the overscan.
 function VRCompanion:getHudFovCompensation()
     local percent = self.fovOverscan or 0
     if percent <= 0 or self.is2DViewActive then return 1.0 end
     return 1.0 / (1.0 + percent / 100.0)
 end
 
--- A normalized distance from a screen edge, pulled in toward the centre by the FOV Overscan compensation
 function VRCompanion:compensateHudEdgeDistance(distance)
     local compensation = self:getHudFovCompensation()
     if compensation == 1.0 then return distance end
     return 0.5 - (0.5 - distance) * compensation
 end
 
--- The HUD Depth moves the HUD Groups back or forward as one panel straight ahead. Their layouts are set for HUD_LAYOUT_DEPTH
--- (1.8 m), so at `depth` a group looks 1.8 / depth times its size and sits that much nearer to the screen centre, as a
--- panel does from further away; the convergence disparity puts it at the same depth. 2D Floating Window Mode has no depth.
 function VRCompanion:getHudDepthScale()
     local depth = self.hudConvergenceDepth
     if self.is2DViewActive or type(depth) ~= "number" or depth ~= depth then return 1.0 end
     return self.HUD_LAYOUT_DEPTH / self:clamp(depth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
 end
 
--- How much the HUD Groups are shrunk toward the screen centre: the FOV Overscan compensation and the HUD Depth together.
--- The HUD Safe Area takes only the overscan: warnings, notifications and other mods' HUDs are not drawn at the groups' scale.
 function VRCompanion:getHudGroupViewScale()
     return self:getHudFovCompensation() * self:getHudDepthScale()
 end
 
--- A HUD Group Margin, as the normalized distance from the screen edge the group is placed at: pulled in toward the centre, or
--- pushed out toward the edge by a HUD Depth nearer than the default, but never past the edge
 function VRCompanion:placeHudGroupEdgeDistance(margin)
     local viewScale = self:getHudGroupViewScale()
     if viewScale == 1.0 then return margin end
     return self:clamp(0.5 - (0.5 - margin) * viewScale, 0.0, 0.5)
 end
 
--- The scale a group is drawn at: the game's UI scale setting times the group's own scale, shrunk by the FOV Overscan and
--- scaled by the HUD Depth
 function VRCompanion:getHudGroupScale(groupName)
     return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale * self:getHudGroupViewScale()
 end
 
--- Width and height of a display, 0 where it does not say
 local function getDisplaySize(display)
     local w, h = 0, 0
     if type(display.getWidth) == "function" then
@@ -197,17 +159,11 @@ local function getDisplaySize(display)
     return w, h
 end
 
--- The scale a display is drawn at, taken from its group
 function VRCompanion:getHudDisplayScale(displayName)
     local _, groupName = findHudGroup(displayName)
     return self:getHudGroupScale(groupName or CONTEXT_ACTION_ANCHOR_GROUP)
 end
 
--- Where a display's bottom-left corner goes: its group's outer edges sit at the group's margins
--- from the home corner, with the display's width or height subtracted for right- and top-anchored
--- groups. The Speedometer group's bottom margin is measured to the bottom of the lowest fill level,
--- so the fill levels sit on it and the speedometer stacks above them, one scaled gap clear. The
--- convergence offset moves every display horizontally by the same amount.
 function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffset)
     local offset = convergenceOffset or 0.0
     local group, groupName = findHudGroup(displayName)
@@ -229,7 +185,6 @@ function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffs
         local fillLevels = self:getFillLevelsDisplay()
         if fillLevels ~= nil then
             local _, fillHeight = self:getFillLevelsBlockSize(fillLevels)
-            -- No fill levels shown: nothing to stack above, so no space and no gap are reserved
             if fillHeight > 0 then
                 y = y + fillHeight + self.HUD_FILL_LEVEL_GAP * self:getHudGroupScale(groupName)
             end
@@ -269,18 +224,12 @@ local function setDisplayVisible(display, isVisible)
     end
 end
 
--- tan(fovX / 2) of the view the eyes are rendered with, or nil before the camera path has fetched a headset projection. The
--- FOV is the one fetchEyeProjection last read (both eyes are rendered with the same symmetric FOV, which already holds the
--- FOV Overscan), so the HUD asks VRBridge nothing more per update.
 local function renderedTanHalfFovX(self)
     local fovX = self.renderedFovX
     if type(fovX) ~= "number" or not (fovX > 0.01 and fovX < math.pi - 0.01) then return nil end
     return math.tan(fovX * 0.5)
 end
 
--- The share of the screen width each eye's HUD is shifted by so that it reads `depth` metres away: each eye sees a point that
--- far straight ahead half the IPD to the side, (ipd / 2) / depth in tangent, on a screen 2 tan(fovX / 2) wide. Without a
--- headset projection, a fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
 function VRCompanion:computeConvergenceDisparity(ipd, depth)
     local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH
     if targetDepth == nil or targetDepth <= 0.001 then
@@ -300,7 +249,6 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
         end
     end
 
-    -- The disparity is a share of the screen width, which the FOV Overscan widens
     local compensation = self:getHudFovCompensation()
     if targetIpd == nil or targetIpd <= 0.001 then
         return self.DEFAULT_CONVERGENCE_DISPARITY * compensation
@@ -316,16 +264,11 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
     return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY) * compensation
 end
 
--- `vrHudDepth [1.0-5.0]` sets the HUD Depth, how far away the HUD Groups are in the headset, in metres (2.5 by default,
--- saved as vrSettings.hudConvergenceDepth). The groups move back or forward as one panel: further away they are drawn smaller
--- and nearer to the screen centre (getHudDepthScale) and shifted less between the eyes (the HUD Convergence Offset, which the
--- next updates ease to the new depth). They are placed again at once.
 function VRCompanion:setHudConvergenceDepth(depth, save)
     if type(depth) ~= "number" or depth ~= depth or depth < self.MIN_HUD_DEPTH or depth > self.MAX_HUD_DEPTH then
         return false
     end
     self.hudConvergenceDepth = depth
-    -- 2D Floating Window Mode keeps the engine's layout; the depth applies on returning to VR
     if not self.is2DViewActive then self:repositionAllHudDisplays() end
     if save then self:saveConfiguration() end
     return true
@@ -343,23 +286,12 @@ function VRCompanion:consoleCommandSetHudDepth(arg)
     return string.format("HUD depth set to: %g m (Saved)", depth)
 end
 
--- `vrHudTrace [frames]` (diagnostics, not saved): for the next rendered frames (12 by default, up to 120) logs to log.txt
--- where the HUD is placed for each eye, to find out in the headset why the HUD only shifts sideways instead of taking its depth.
---   update lines: every HUD convergence update, with the frame and eye it ran for, the offset it placed the HUD Groups at and
---                 where each group's display says it is.
---   rendered lines: one per rendered frame, keyed by VRBridge's frame and sub-pass, with the eye that frame goes to and, for
---                 each HUD display, the x range its overlays were drawn over in that frame ("other": overlays drawn outside
---                 the displays' own draw).
--- Under Sequential Dual-Pass a display's range should differ by twice the offset between the two frames of a pair: the same
--- range in both eyes is a display drawn with one layout for both. Overlay.render, and the draw of each display instance, are
--- wrapped only while the trace runs.
 local HUD_TRACE_DEFAULT_FRAMES = 12
 local HUD_TRACE_MAX_FRAMES = 120
 local HUD_TRACE_UPDATES_PER_FRAME = 4
 local HUD_TRACE_DISPLAYS = { "speedometer", "fillLevels", "info", "controls", "map", "context", "other" }
 local hudTrace = { frames = 0, updates = 0, wrappedDraws = {} }
 
--- The HUD's displays by trace name
 local function hudTraceDisplays(self)
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -374,14 +306,12 @@ local function hudTraceDisplays(self)
     }
 end
 
--- Restores the display being drawn and passes on the draw's results, or rethrows its error
 local function endTracedDraw(previous, ok, ...)
     hudTrace.current = previous
     if not ok then error((...), 0) end
     return ...
 end
 
--- While the trace runs, each display's draw names the display its overlays belong to
 local function wrapHudTraceDraws(self)
     for name, display in pairs(hudTraceDisplays(self)) do
         if type(display) == "table" and type(display.draw) == "function" then
@@ -455,8 +385,6 @@ local function recordHudTraceOverlay(overlay)
     end
     local x, width = tonumber(overlay.x), tonumber(overlay.width) or 0
     if x == nil then return end
-    -- The mod's own Overlay.render hook, which this one wraps, moves the map's overlays to the Map group as they are drawn
-    -- (runMapDraw): log where they land, not where the engine put them
     if VRCompanion.mapDrawDepth > 0 and VRCompanion.mapHotspotDepth == 0 then
         x = x + (VRCompanion.mapDrawShiftX or 0.0)
     end
@@ -510,7 +438,6 @@ function VRCompanion:stopHudTrace()
     if wasTracing then print("[FS25_VR] HUD trace: end") end
 end
 
--- One update line: the frame and eye this convergence update ran for, and where it left each group's display
 function VRCompanion:traceHudConvergenceUpdate(eye, offset)
     if hudTrace.frames <= 0 or hudTrace.updates <= 0 then return end
     hudTrace.updates = hudTrace.updates - 1
@@ -532,7 +459,6 @@ function VRCompanion:traceHudConvergenceUpdate(eye, offset)
     print(string.format("[FS25_VR] HUD trace: update frame %d sub-pass %d active eye %d, placed for eye %s at offset %+.4f: speedometer x=%s controls x=%s info x=%s map x=%s",
         frame, subPass, activeEye, tostring(eye), offset or 0.0, describeX(speedo), describeX(controls), describeX(info), describeX(map)))
     if hudTrace.updates <= 0 and hudTrace.rendered == nil then
-        -- Nothing was rendered through Overlay.render (the HUD hidden, or drawn some other way): end rather than log forever
         print("[FS25_VR] HUD trace: no overlays were rendered during the trace")
         self:stopHudTrace()
     end
@@ -552,10 +478,6 @@ function VRCompanion:consoleCommandHudTrace(arg)
     return string.format("HUD trace started for %d rendered frames; read log.txt", frames)
 end
 
--- `vrHudEyeTest [left|right|off]` (diagnostics, not saved, off after a map unload): moves the whole HUD far to the right, by
--- HUD_EYE_TEST_SHIFT of the screen width, in the frames rendered for the named eye only. Closing one eye at a time then shows
--- which eye's image those frames' HUD actually reaches: only that eye (the per-eye HUD works), the other eye (the HUD reaches
--- the eyes swapped), both eyes or neither (one frame's HUD is shown to both eyes).
 VRCompanion.HUD_EYE_TEST_SHIFT = 0.15
 local HUD_EYE_TEST_EYES = { left = 0, right = 1 }
 
@@ -582,8 +504,6 @@ function VRCompanion:consoleCommandHudEyeTest(arg)
     return string.format("HUD eye test: %s. Close one eye at a time: only the %s eye should show the HUD moved right", name, name)
 end
 
--- `vrEyeSnapshot` (diagnostics): asks the Injector to write the next stereo frame it copies to each eye as a picture,
--- fs25_vr_eye0.bmp (left) and fs25_vr_eye1.bmp (right) next to fs25_vr.log, so what each eye is handed can be looked at.
 function VRCompanion:consoleCommandEyeSnapshot()
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge == nil or type(bridge.snapshotEyes) ~= "function" then
@@ -660,8 +580,6 @@ function VRCompanion:getFillLevelsDisplay(hud)
     return nil
 end
 
--- The fill levels display's width, and the height of all its fill levels as drawn at the Speedometer
--- group's scale: one row per fill level, a fixed gap between rows.
 function VRCompanion:getFillLevelsBlockSize(display)
     local uiScale = self:getHudGroupScale("speedometer")
 
@@ -699,8 +617,6 @@ function VRCompanion:getFillLevelsBlockSize(display)
         width = 0.12 * uiScale
     end
 
-    -- The display's own list of fill levels is authoritative, and may be empty. Only a display that
-    -- says nothing about its levels is assumed to be showing one row.
     local numLevels = 1
     if type(display.fillLevelData) == "table" then
         numLevels = #display.fillLevelData
@@ -714,9 +630,6 @@ function VRCompanion:getFillLevelsBlockSize(display)
     return width, height
 end
 
--- Places the Speedometer group's stack: the fill levels right-aligned on the group's bottom margin,
--- with the speedometer directly above them (see getHudDisplayPosition). Returns the fill levels'
--- x and y and the speedometer's y.
 function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     if display == nil then return end
 
@@ -819,8 +732,6 @@ function VRCompanion:updateHudConvergence(dt)
     end
 
     local isPassThrough = self:isPassThroughMode()
-    -- The mod's own head-tracking switch, not the engine's setting (isHeadTrackingActive): the mod places the head itself,
-    -- and in the game the engine's setting reads off, which kept the HUD at zero disparity whatever its depth.
     local isTrackingActive = self.headTrackingEnabled ~= false
 
     local targetDisparity = 0.0
@@ -875,9 +786,6 @@ function VRCompanion:updateHudConvergence(dt)
     _G.g_hudAnchorBottom = baseBottom
     _G.g_hudAnchorTop = baseTop
 
-    -- Anchors and convergence state above always update; moving the elements
-    -- themselves is wasted work while the HUD is Hidden. setHudState repositions
-    -- them against this state when the HUD becomes visible.
     if self:getHudState() ~= self.HUD_STATE_HIDDEN then
         self:repositionHudForConvergence()
     end
@@ -888,8 +796,6 @@ function VRCompanion:updateHudConvergence(dt)
     return shiftedLeft, shiftedRight, offset
 end
 
--- Moves every HUD element to its convergence-offset position using the current
--- anchor and convergence state.
 function VRCompanion:repositionHudForConvergence()
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -899,14 +805,12 @@ function VRCompanion:repositionHudForConvergence()
 
     local fl = self:getFillLevelsDisplay(hud)
 
-    -- Each display sits at its group's margins, shifted by the same convergence offset
     local function place(display, displayName)
         if display == nil or type(display.setPosition) ~= "function" then return end
         local x, y = self:getHudDisplayPosition(display, displayName, offset)
         pcall(display.setPosition, display, x, y)
     end
 
-    -- The Speedometer group is one stack: the fill levels on the bottom margin, the speedometer above them
     if fl ~= nil then
         self:positionFillLevelsUnderSpeedometer(fl, offset)
     else
@@ -969,8 +873,6 @@ function VRCompanion:applyHudState(state)
         { display = hud.ingameMap or hud.ingameMapDisplay, name = "IngameMap" },
         { display = hud.gameInfo or hud.gameInfoDisplay, name = "GameInfoDisplay" }
     }
-    -- The input help's own visibility is the game's minimized/maximized toggle (F1), so a shown
-    -- Controls group keeps the player's choice instead of always opening maximized
     local inputHelpVis = self:isDisplayVisible("InputHelpDisplay", state) and self.controlsExpanded ~= false
 
     for _, entry in ipairs(displays) do
@@ -1014,8 +916,6 @@ function VRCompanion:setHudState(newState)
     local state = self:clamp(newState or self.HUD_STATE_HIDDEN, self.HUD_STATE_HIDDEN, self.HUD_STATE_FULL)
     self.hudState = state
     self:applyHudState(state)
-    -- Hidden updates skip repositioning, so place the elements now with the
-    -- current convergence offset. 2D Floating Window Mode keeps its own anchors.
     if state ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
         self:repositionHudForConvergence()
     end
@@ -1032,7 +932,6 @@ function VRCompanion:cycleHudState()
     local curState = self:getHudState()
     local nextState = (curState + 1) % 3
     self:setHudState(nextState)
-    -- The next map starts in the state the player last chose
     self.persistedHudState = nextState
     self:saveConfiguration()
     local stateName = (self.HUD_STATE_NAMES and self.HUD_STATE_NAMES[nextState]) or tostring(nextState)
@@ -1059,12 +958,10 @@ function VRCompanion:cycleHudState()
     return nextState
 end
 
--- Display label of a group name, e.g. "speedometer" -> "Speedometer".
 function VRCompanion:getHudGroupLabel(groupName)
     return (string.gsub(groupName, "^%l", string.upper))
 end
 
--- The group names that show in a HUD state, in HUD_GROUP_NAMES order. Hidden has none.
 function VRCompanion:getEnabledHudGroups(state)
     local enabled = {}
     if state ~= self.HUD_STATE_STREAMLINED and state ~= self.HUD_STATE_FULL then
@@ -1080,8 +977,6 @@ function VRCompanion:getEnabledHudGroups(state)
     return enabled
 end
 
--- Turns a group on or off for the Streamlined ("streamlined") or Full ("full") HUD and applies it
--- to the displays at once. Returns false when the group or state name is unknown.
 function VRCompanion:setHudGroupVisibility(groupName, stateName, enabled)
     local group = self.HUD_GROUPS[groupName]
     if group == nil or (stateName ~= "streamlined" and stateName ~= "full") then
@@ -1092,15 +987,10 @@ function VRCompanion:setHudGroupVisibility(groupName, stateName, enabled)
     return true
 end
 
--- Remembers the game setting the input help shown (maximized) or hidden (minimized), which is how
--- its help toggle (F1) works, and saves it when it changes. Only a change while the Controls group is
--- shown and no menu is open is the player's: the mod hides the input help in the other HUD states, and
--- menus such as the construction screen open it for as long as they are up.
 function VRCompanion:rememberControlsExpanded(isExpanded)
     if type(isExpanded) ~= "boolean" or not self:isDisplayVisible("InputHelpDisplay") then
         return
     end
-    -- Asked of the GUI directly: a menu opens the input help as it opens, before the menu state is next polled
     local menuOpen = self:doesMenuTakeInput()
     local gui = g_gui or _G.g_gui
     if gui ~= nil and type(gui.getIsGuiVisible) == "function" then
@@ -1117,8 +1007,6 @@ function VRCompanion:onHudToggleAction(...)
     return self:cycleHudState()
 end
 
--- The HUD Safe Area: the engine's global HUD anchors, which keep everything outside the HUD Groups
--- (warnings, notifications, other mods' HUDs) inside the lens. It does not place the HUD Groups.
 function VRCompanion:calculateHudAnchors(horizontal, vertical)
     local clampedHorizontal = self:clamp(horizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_HORIZONTAL)
     local clampedVertical = self:clamp(vertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_VERTICAL)
@@ -1168,7 +1056,6 @@ function VRCompanion:positionHudDisplay(display, displayName)
 
     local scale = self:getHudDisplayScale(displayName)
 
-    -- Scale first, so the display's size is measured as it will be drawn
     if type(display.setScale) == "function" then
         pcall(function() display:setScale(scale) end)
     end
@@ -1178,7 +1065,6 @@ function VRCompanion:positionHudDisplay(display, displayName)
         return
     end
 
-    -- The current convergence offset shifts every display, as it does in repositionHudForConvergence
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
 
     display.anchorX = anchorX
@@ -1211,7 +1097,6 @@ function VRCompanion:repositionAllHudDisplays(hud)
     end
     if targetHud == nil then return end
 
-    -- The fill levels go first: the speedometer sits above them, so their size must be settled
     local d6 = self:getFillLevelsDisplay(targetHud)
     if d6 ~= nil then self:positionHudDisplay(d6, "FillLevelsDisplay") end
 
@@ -1344,10 +1229,6 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     print("[FS25_VR] Restored standard 2D HUD corner anchors.")
 end
 
--- The engine builds the map's layout in the screen corner (from g_safeFrameOffsetX/Y) and draws its
--- content, ring, north arrow and hotspots there at absolute overlay positions that setPosition does not
--- move, so placing only the element leaves them outside the lens. While the map's draw methods run,
--- every overlay rendered, and its clip rectangle, is shifted from the engine's corner to the Map group.
 local MAP_DRAW_CLASSES = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle",
     "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
 
@@ -1356,8 +1237,6 @@ VRCompanion.mapHotspotDepth = 0
 VRCompanion.mapDrawShiftX = 0.0
 VRCompanion.mapDrawShiftY = 0.0
 
--- How far the map's draw moves from the engine's corner to the Map group, or nothing where the engine's
--- own position applies: the fullscreen map, the Hidden HUD and 2D Floating Window Mode
 function VRCompanion:getMapDrawShift()
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -1368,7 +1247,6 @@ function VRCompanion:getMapDrawShift()
     return x - (self.mapEngineBaseX or 0.0), y - (self.mapEngineBaseY or 0.0)
 end
 
--- Runs fn(...) as part of the map's drawing, so the overlays it renders are shifted to the Map group
 function VRCompanion:runMapDraw(fn, ...)
     if self.mapDrawDepth > 0 then
         self.mapDrawDepth = self.mapDrawDepth + 1
@@ -1383,9 +1261,6 @@ function VRCompanion:runMapDraw(fn, ...)
     return table.unpack(results, 2, results.n)
 end
 
--- Runs fn(layout, ...) with the layout's position fields moved to the Map group. The layout crops the map
--- to its circle with a native 2D mask it sets in drawBefore, which a mod cannot intercept, and draws its
--- text with natives too, but both take their absolute coordinates from these fields.
 function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
     local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
     if (dx == 0.0 and dy == 0.0) or type(layout) ~= "table" or type(layout.mapPosX) ~= "number" or type(layout.mapPosY) ~= "number" then
@@ -1467,7 +1342,6 @@ function VRCompanion:hookHud()
                 end)
             end
 
-            -- The help toggle (F1) may set the input help's visibility directly rather than through the HUD
             if displayName == "InputHelpDisplay" and type(cls.setVisible) == "function" then
                 local origSetVisible = cls.setVisible
                 hookMethod(cls, "setVisible", function(displaySelf, isVisible, ...)
@@ -1478,8 +1352,6 @@ function VRCompanion:hookHud()
         end
     end
 
-    -- The map draws at the engine's corner: its draw methods run as one map draw, during which
-    -- Overlay:render shifts every overlay and clip rectangle to the Map group's position
     self.mapEngineBaseX = _G.g_safeFrameOffsetX or 0.0
     self.mapEngineBaseY = _G.g_safeFrameOffsetY or 0.0
     self.mapDrawDepth = 0
@@ -1490,23 +1362,19 @@ function VRCompanion:hookHud()
             local drawMethods = {}
             for key, value in pairs(cls) do
                 if type(key) == "string" and string.sub(key, 1, 4) == "draw" and type(value) == "function"
-                    and not (className == "IngameMap" and key == "draw") then -- IngameMap.draw is hooked above
+                    and not (className == "IngameMap" and key == "draw") then
                     drawMethods[#drawMethods + 1] = key
                 end
             end
             for _, key in ipairs(drawMethods) do
                 local origMethod = cls[key]
                 if className ~= "IngameMap" and (key == "drawBefore" or key == "drawCoordinates" or key == "drawLatency") then
-                    -- The layout sets the map's circular mask in drawBefore and places its text, both at absolute
-                    -- coordinates taken from its own position fields, so they run with those fields moved
                     hookMethod(cls, key, function(layout, ...)
                         return self:runMapDraw(function(_, ...)
                             return self:callWithMapLayoutShifted(layout, origMethod, ...)
                         end, layout, ...)
                     end)
                 elseif className == "IngameMap" and (string.find(key, "Hotspot", 1, true) or string.find(key, "PointsOfInterest", 1, true)) then
-                    -- Hotspots take their position from getMapObjectPosition, shifted below, so the overlay
-                    -- shift must not move them a second time
                     hookMethod(cls, key, function(...)
                         return self:runMapDraw(function(...)
                             self.mapHotspotDepth = self.mapHotspotDepth + 1
@@ -1522,7 +1390,6 @@ function VRCompanion:hookHud()
                     end)
                 end
             end
-            -- Hotspots (fields, vehicles) are drawn with natives at the screen position the layout hands out
             if type(cls.getMapObjectPosition) == "function" then
                 local origObjectPosition = cls.getMapObjectPosition
                 hookMethod(cls, "getMapObjectPosition", function(layout, ...)
@@ -1633,16 +1500,6 @@ function VRCompanion:unhookHud()
     print("[FS25_VR] Unhooked native engine HUD display interfaces.")
 end
 
--- A Stereo Dialog (ADR-0032) is drawn at HUD depth: while it shows in the stereoscopic view, the game's GUI draw runs with the
--- dialog's root moved by the HUD Convergence Offset of the eye being rendered, the same displacement the HUD Groups get (under
--- AFR the sign alternates with the frame parity). The root is a full-screen element, and GuiElement:setAbsolutePosition moves
--- it and all its descendants by the same amount, so the whole dialog moves with it. The draw is where the move happens, so that
--- the eye is the one being rendered, and what was moved is moved back by the same amount afterwards, from wherever the draw
--- left it, so that nothing the game places from the dialog's own values drifts (the lesson of the rod minigame, #140). A dialog
--- whose root cannot be moved this way is drawn where the game placed it: zero disparity.
--- The dialog has a depth of its own, `vrDialogDepth` (default 2.5 m, saved), apart from the HUD Depth: it fills more of the view
--- than a HUD group, and read too close at the HUD's former 1.8 m default in the headset. Its disparity is that of the depth, with the sign
--- of the eye being rendered; like the HUD's it is nil (no shift) while the HUD's convergence is off (pass-through, no tracking).
 VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH = 2.5
 VRCompanion.stereoDialogDepth = VRCompanion.stereoDialogDepth or VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH
 
@@ -1674,7 +1531,6 @@ function VRCompanion:saveStereoDialogDepthSetting(xmlFile, xml)
     end
 end
 
--- A key that is missing, or a depth out of range, keeps the current value.
 function VRCompanion:loadStereoDialogDepthSetting(xmlFile, xml)
     if type(xml.getFloat) ~= "function" then return end
     self:setStereoDialogDepth(xml.getFloat(xmlFile, STEREO_DIALOG_DEPTH_KEY))
@@ -1702,7 +1558,6 @@ function VRCompanion:drawGuiAtHudDepth(original, gui, ...)
     return table.unpack(results, 2, results.n)
 end
 
--- Wraps Gui.draw (once the class exists), the game's draw of every screen and dialog.
 function VRCompanion:hookGuiDraw()
     local class = Gui or (_G and _G.Gui)
     if type(class) ~= "table" or type(class.draw) ~= "function" then return end
@@ -1718,23 +1573,13 @@ function VRCompanion:unhookGuiDraw()
     self.guiDrawHook = nil
 end
 
--- ---- The HUD in the subsystem registry --------------------------------------------------------------------------------------
--- Map load (after the core has read settings.xml): the HUD Safe Area and the HUD Groups are applied, then the HUD goes to the state
--- the player last chose; a first install starts Hidden for full VR immersion. Map unload: the HUD goes back to the full screen in
--- the Full state, the diagnostics stop and the convergence state is reset. The camera and mission hooks (hookHud, hookGuiDraw,
--- unhookHud, unhookGuiDraw) and updateHudConvergence stay direct calls of the core: a raise in updateHudConvergence reaches the
--- caller of update. Unload runs after Input's (no order matters between the two) and before Stereo's, as it did before the
--- registry; Stereo then leaves 2D Floating Window Mode without applying the Safe Area or the HUD state again (see the core's
--- deleteMap).
 VRCompanion:registerSubsystem("hud", {
     mapLoad = function(self)
         self:applyHudSafeArea()
         self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
     end,
     mapUnload = function(self)
-        -- Restore HUD state and visibility to standard 2D Full
         self:setHudState(self.HUD_STATE_FULL)
-        -- Restore the global HUD anchors to the full screen
         self:restoreHudSafeArea()
         self.currentConvergenceOffset = 0.0
         self.currentConvergenceDisparity = 0.0
@@ -1745,7 +1590,6 @@ VRCompanion:registerSubsystem("hud", {
         self:stopHudTrace()
         self.hudEyeTestEye = nil
     end,
-    -- The Stereo Dialog depth; the HUD Safe Area, the HUD Groups and the HUD state are the core's settings (VRCompanionConfig.lua)
     saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
     consoleCommands = {

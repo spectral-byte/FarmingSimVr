@@ -18,8 +18,6 @@ LuauTestRunner::~LuauTestRunner() {
     }
 }
 
-// Luau's base library only has gcinfo. collectgarbage serves weak-table tests (a forced full collection, the default)
-// and allocation tests: "collect", "count" (KB, with the byte remainder), "stop" and "restart".
 static int LuauCollectGarbage(lua_State* L) {
     std::string_view option = luaL_optstring(L, 1, "collect");
     if (option == "collect") {
@@ -48,7 +46,6 @@ void LuauTestRunner::InitializeEnvironment() {
 
     luaL_openlibs(L_);
 
-    // Register print to capture logs
     lua_pushlightuserdata(L_, this);
     lua_pushcclosure(L_, &LuauPrint, "print", 1);
     lua_setglobal(L_, "print");
@@ -61,15 +58,12 @@ void LuauTestRunner::InitializeEnvironment() {
     lua_pushcfunction(L_, &LuauCollectGarbage, "collectgarbage");
     lua_setglobal(L_, "collectgarbage");
 
-    // Register loadstring
     lua_pushcfunction(L_, &LuauLoadString, "loadstring");
     lua_setglobal(L_, "loadstring");
 
-    // Register loadCompanionMod (loads module files in modDesc order, as the engine does)
     lua_pushcfunction(L_, &LuauLoadCompanionMod, "loadCompanionMod");
     lua_setglobal(L_, "loadCompanionMod");
 
-    // Register require (supporting @lune/fs)
     lua_pushlightuserdata(L_, this);
     lua_pushcclosure(L_, &LuauRequire, "require", 1);
     lua_setglobal(L_, "require");
@@ -213,7 +207,6 @@ int LoadCompanionMod(lua_State* L, std::string* errorOut) {
         lua_pushstring(L, msg.c_str());
         return status;
     };
-    // Resolve the mod root once so every file comes from the same checkout
     const std::string modDescRel = std::string(kCompanionModDir) + "modDesc.xml";
     const auto modDescPath = ResolveProjectPath(modDescRel);
     if (modDescPath.empty()) return fail(-1, "Companion Mod not found: " + modDescRel);
@@ -337,7 +330,6 @@ LuauExecutionResult LuauTestRunner::ExecuteCode(const std::string& code, const s
         }
     }
 
-    // A hook the core caught and logged still fails the run, unless the chunk said it expects it
     std::string errorMessage = hasFailures ? "One or more assertions failed in captured test output" : "";
     if (!unexpectedHookErrors_.empty()) {
         hasFailures = true;

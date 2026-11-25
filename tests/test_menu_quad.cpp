@@ -1,5 +1,3 @@
-// The menu quad's geometry on its own (spec #247): plain poses and vectors, no OpenXR session. The panel-hit, menu-pointer, Menu
-// Distance and OpenXR manager suites cover the same maths through the manager; these look at the module directly.
 #include "openxr/menu_quad.h"
 #include <gtest/gtest.h>
 #include <cmath>
@@ -28,7 +26,7 @@ TEST(MenuQuadTest, WithoutAPoseTheQuadIsAMenuDistanceStraightAheadOfTheOrigin) {
 
 TEST(MenuQuadTest, AlignedQuadSitsAtEyeLevelAheadOfTheHeadsYaw) {
     MenuQuad quad;
-    quad.AlignToHeadPose(HeadAt(1.0f, 1.7f, 2.0f, 1.5707964f));  // yawed a quarter turn to the left: forward is -X
+    quad.AlignToHeadPose(HeadAt(1.0f, 1.7f, 2.0f, 1.5707964f));
     ASSERT_TRUE(quad.HasPose());
     const XrPosef pose = quad.Pose();
     EXPECT_NEAR(pose.position.x, 1.0f - MenuQuad::kDefaultDistance, 1e-5f);
@@ -107,5 +105,5 @@ TEST(MenuQuadTest, AQuadPlacedWithoutAValidHeadWaitsForOneAndAFocusWaitsForTheNe
     EXPECT_TRUE(quad.AwaitsHead(true, 500));
 }
 
-}  // namespace
-}  // namespace fs25vr
+}
+}

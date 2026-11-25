@@ -1,9 +1,3 @@
-# Runs the harness against the Injector in build\ (version.dll, from 1.2) in both startup orders, with the VDXR simulation
-# layer enabled for this shell only (no User variables, no Steam restart). Each run uses a fresh copy of version.dll in its
-# own folder under build\vdxr_sim_layer, since the Injector writes fs25_vr.log next to itself. Run build.ps1 first.
-#   .\run.ps1                       # <repo>\build\version.dll
-#   .\run.ps1 -Injector <path>      # another version.dll, or a proxy dxgi.dll up to 1.1.9 (one run, no modes)
-#   .\run.ps1 -BuildDir <path>      # another CMake build folder (its version.dll and its build.ps1 output)
 param(
     [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\build'),
     [string]$Injector = ''

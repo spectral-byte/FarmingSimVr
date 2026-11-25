@@ -1,7 +1,3 @@
-// FOV coverage (ADR-0005): the eyes are rendered and submitted with a symmetric FOV that covers every edge of
-// the headset's own FOV. These tests run on the Fake Tracked Headset and look only at what leaves the system:
-// the FOV the engine camera is given, the FOV the compositor received at xrEndFrame, VRBridge's published
-// eye projection and the log.
 #include "companion_mod_fixture.h"
 #include "core/logger.h"
 #include <cmath>
@@ -15,7 +11,6 @@ struct RenderResolution {
     uint32_t height;
 };
 
-// Square-ish (Virtual Desktop's Godlike preset) and 16:9.
 constexpr RenderResolution kSquarish{ 3072, 3216 };
 constexpr RenderResolution kWidescreen{ 1920, 1080 };
 
@@ -29,20 +24,17 @@ void SetHeadsetFov(fs25vr::FakeTrackedHeadset& headset) {
     headset.SetEyeFov(1, kRightEyeFov);
 }
 
-// Starts a Fake Tracked Headset with the asymmetric FOV and the eye swapchains created at `resolution`.
 void StartHeadset(fs25vr::FakeTrackedHeadset& headset, const RenderResolution& resolution) {
     SetHeadsetFov(headset);
     ASSERT_TRUE(headset.manager->CreateEyeSwapchains(resolution.width, resolution.height));
 }
 
-// Copies both eyes and submits the pair, as the Injector does once per Stereo Presentation pair.
 void SubmitPair(fs25vr::FakeTrackedHeadset& headset) {
     ASSERT_TRUE(headset.manager->CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(headset.manager->CopyBackBufferToEye(1, nullptr));
     ASSERT_TRUE(headset.manager->SubmitFramePair());
 }
 
-// Redirects the game log to a temp file while a test runs and counts lines containing a needle.
 class LogCapture {
 public:
     LogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_fov_coverage_log_test.log") {
@@ -76,7 +68,7 @@ private:
     std::filesystem::path m_path;
 };
 
-} // namespace
+}
 
 class FovCoverageTest : public ::testing::TestWithParam<RenderResolution> {};
 
@@ -150,7 +142,6 @@ TEST(FovCoverageValuesTest, ARuntimeFovChangeDuringTheSessionIsCoveredFromTheNex
     ASSERT_EQ(headset.SubmittedViews().size(), 2u);
     EXPECT_NEAR(headset.SubmittedViews()[0].fov.angleUp, 0.9715f, 0.0005f);
 
-    // The player lowers Virtual Desktop's FOV Tangent: every side shrinks.
     headset.SetEyeFov(0, { -0.70f, 0.50f, 0.60f, -0.40f });
     headset.SetEyeFov(1, { -0.50f, 0.70f, 0.60f, -0.40f });
     SubmitPair(headset);
@@ -160,8 +151,6 @@ TEST(FovCoverageValuesTest, ARuntimeFovChangeDuringTheSessionIsCoveredFromTheNex
     EXPECT_NEAR(headset.SubmittedViews()[0].fov.angleRight, 0.70f, 0.0005f);
 }
 
-// The Companion Mod hands the engine camera the vertical FOV VRBridge publishes, so the camera and the compositor
-// must agree.
 class FovCoverageCameraTest : public CompanionModTest, public ::testing::WithParamInterface<RenderResolution> {};
 
 TEST_P(FovCoverageCameraTest, TheEngineCameraFovEqualsTheSubmittedVerticalFovForBothEyes) {
@@ -179,7 +168,6 @@ TEST_P(FovCoverageCameraTest, TheEngineCameraFovEqualsTheSubmittedVerticalFovFor
         _G.mockVehicleCam = { isInside = true, cameraNode = 301, origTransX = 0, origTransY = 1.5, origTransZ = 0 }
     )luau", "=setupCamera"), 0);
 
-    // AFR: even engine frames render the left eye, odd frames the right.
     double cameraFovY[2] = {};
     for (uint32_t eye = 0; eye < 2; ++eye) {
         ASSERT_EQ(bridge.GetFrameParity(), eye);
@@ -266,7 +254,6 @@ TEST(FovCoverageLogTest, TheRenderedFovIsLoggedWheneverItChanges) {
     ASSERT_TRUE(headset.manager->LocateActiveViews(1000000));
     EXPECT_EQ(log.Count("OpenXrManager: Rendered FOV"), 1u);
 
-    // The swapchains give the coverage a new aspect: the rendered FOV changes, the headset's does not.
     ASSERT_TRUE(headset.manager->CreateEyeSwapchains(kSquarish.width, kSquarish.height));
     EXPECT_EQ(log.Count("OpenXrManager: Rendered FOV"), 2u);
     EXPECT_EQ(log.Count("OpenXrManager: Headset FOV"), 1u);

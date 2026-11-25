@@ -10,22 +10,18 @@ namespace fs25vr {
 
 namespace {
 std::atomic<bool> s_processTerminating{false};
-} // anonymous namespace
+}
 
 void OnProcessAttach(HMODULE selfModule) {
     DisableThreadLibraryCalls(selfModule);
-    // The first line of fs25_vr.log: it names the version, so a log alone says which Injector the player runs.
     LogInfo("Farming Simulator 25 VR Injector " + std::string(kInjectorVersion) + " attached to process.");
 }
 
 void OnProcessDetach(LPVOID lpReserved) {
     LogInfo("Farming Simulator 25 VR Injector detaching from process.");
     if (lpReserved != nullptr) {
-        // Set before returning: the CRT runs our static destructors right after DllMain.
         s_processTerminating = true;
     } else {
-        // FreeLibrary: safe to unwind our own hooks. Unwind whichever interceptor owns the live
-        // detours, not the newest runtime's, so no hook is left pointing into the unloaded DLL.
         NgxInterceptor::DetachLiveHooks();
         FidelityFxInterceptor::DetachLiveHooks();
     }
@@ -40,4 +36,4 @@ void ResetProcessTerminatingForTesting() {
     s_processTerminating = false;
 }
 
-} // namespace fs25vr
+}

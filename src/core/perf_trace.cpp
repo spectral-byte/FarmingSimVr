@@ -63,7 +63,7 @@ const char* DescribeFrames(uint32_t stereoFrames, uint32_t dualPassFrames) {
     return "mode switched";
 }
 
-} // namespace
+}
 
 const char* PerfSectionLabel(PerfSection section) {
     const size_t index = static_cast<size_t>(section);
@@ -115,7 +115,6 @@ PerfSectionStats SummarizePerfSamples(std::vector<int64_t> samplesNs) {
     int64_t sum = 0;
     for (int64_t s : samplesNs) sum += s;
     const size_t n = samplesNs.size();
-    // Nearest rank: the smallest sample with at least 95% of the samples at or below it.
     const size_t p95Index = static_cast<size_t>(std::ceil(0.95 * static_cast<double>(n))) - 1;
     stats.count = static_cast<uint32_t>(n);
     stats.avgMs = static_cast<double>(sum) / static_cast<double>(n) / 1e6;
@@ -129,7 +128,6 @@ PerfTrace& PerfTrace::Instance() {
     return instance;
 }
 
-// Info lines reach the file as they are logged, so the trace can be read while the game runs.
 PerfTrace::PerfTrace() : m_clock(&ReadQpcNanoseconds), m_sink(&LogInfo) {}
 
 void PerfTrace::SetClock(Clock clock) {
@@ -185,8 +183,6 @@ void PerfTrace::Stop() {
     out.Write();
 }
 
-// The sink runs after the lock is released: it writes to the log file, and the motion vector pass's
-// render thread would otherwise wait on that I/O to add a GPU sample.
 void PerfTrace::Output::Write() const {
     if (!sink) return;
     for (const std::string& line : lines) sink(line);
@@ -289,4 +285,4 @@ std::string PerfTrace::BuildReport(const char* label, const Samples& samples, in
     return line;
 }
 
-} // namespace fs25vr
+}

@@ -9,9 +9,6 @@
 
 namespace fs25vr {
 
-/**
- * @brief RAII wrapper for Win32 event handles to prevent resource leaks during device resets or failures.
- */
 class ScopedEventHandle {
 public:
     ScopedEventHandle() noexcept : m_handle(nullptr) {}
@@ -76,9 +73,6 @@ private:
     HANDLE m_handle = nullptr;
 };
 
-/**
- * @brief RAII guard for mapping and automatically unmapping ID3D12Resource memory.
- */
 template <typename T = uint8_t>
 class ScopedResourceMap {
 public:
@@ -144,9 +138,6 @@ private:
     HRESULT m_hr = E_FAIL;
 };
 
-/**
- * @brief RAII guard ensuring ID3D12GraphicsCommandList is properly closed.
- */
 class ScopedCommandListRecording {
 public:
     explicit ScopedCommandListRecording(ID3D12GraphicsCommandList* cmdList) noexcept
@@ -172,4 +163,4 @@ private:
     bool m_closed = false;
 };
 
-} // namespace fs25vr
+}

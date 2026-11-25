@@ -1,9 +1,3 @@
-// Animated Objects, the haptic pulses on the Pointer Hand (ADR-0034, spec #180, ticket #182), seen from outside: the real Companion Mod runs
-// against the real VRBridge over FakeTrackedHeadset, with the game stood in by the Lua stubs of animated_object_test_support.h. The test
-// moves the fake Motion Controllers, pulls the trigger and asserts which pulses reached which hand: the light one as the ray lands on a door
-// it could work (the select pulse of a Click Point), the firmer one for the pull that toggles it (the click pulse). Prior art: test_haptics.cpp
-// (the same pulses for Click Points) and test_object_grab_feedback.cpp (the landing pulse of Object Grab).
-
 #include "animated_object_test_support.h"
 #include <string>
 
@@ -12,14 +6,10 @@ namespace {
 using namespace hand_tools_test;
 using namespace animated_object_test;
 
-// A second door beside the first one: the ray of a hand 0.8 m to the side lands on it.
 constexpr const char* kDoorBeside = "_G.besideDoor = StubAnimatedObject.door({ name = 'besideDoor', x = -1.2, y = -0.2, z = 2.0 })";
-// One Animated Object with two moving parts a little apart (a double gate): the ray of the hand at kHandX lands on the first, the ray
-// of a hand 1.2 m to the side on the second.
 constexpr const char* kGateOfTwoLeaves =
     "_G.door = StubAnimatedObject.door({ name = 'gate', parts = { { x = -0.4, y = -0.2, z = 2.0 }, { x = -1.6, y = -0.2, z = 2.0 } } })";
 
-// The strongest pulse a hand got (0..1), or 0 when it got none.
 float StrongestTo(const FakeTrackedHeadset& headset, uint32_t hand) {
     float strongest = 0.0f;
     for (const auto& pulse : headset.HapticPulses()) {
@@ -28,17 +18,15 @@ float StrongestTo(const FakeTrackedHeadset& headset, uint32_t hand) {
     return strongest;
 }
 
-}  // namespace
-
-// ---- The select pulse -----------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, OneLightPulseOnThePointerHandAsTheRayLandsOnADoorAndNoneWhileItStaysThere) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // beside the door
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     ASSERT_EQ(PulsesTo(kRight), 0) << "nothing under the ray: nothing felt";
 
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // lands on it
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
     EXPECT_EQ(PulsesTo(kRight), 1) << "one pulse as it lands";
     EXPECT_GT(StrongestTo(headset, kRight), 0.0f);
@@ -48,9 +36,9 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, OneLightPulseOnThePointerHandAsTheRayL
     FRAMES(30);
     EXPECT_EQ(PulsesTo(kRight), 1) << "and none while it stays";
 
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // leaves
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(kRight), 1) << "none as it leaves";
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // lands again
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(kRight), 2) << "one more as it lands again";
 }
 
@@ -58,17 +46,17 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, MovingTheRayFromOneMovingPartToAnother
     ASSERT_NO_FATAL_FAILURE(StartWithDoor("ok", false));
     ASSERT_EQ(RunLuauChunk(L, kGateOfTwoLeaves, "=gate"), 0);
     EnterZone();
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // the first leaf
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
     ASSERT_EQ(PulsesTo(kRight), 1);
 
-    POINT_HAND(kRight, kHandX + 1.2f, kHandY, kHandZ);  // the second leaf of the same gate
+    POINT_HAND(kRight, kHandX + 1.2f, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-1.60 -0.20 1.95");
     EXPECT_EQ(PulsesTo(kRight), 1) << "the same Animated Object: no new pulse";
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(kRight), 1) << "and back";
 
-    POINT_HAND(kRight, kHandX + 0.6f, kHandY, kHandZ);  // between the leaves (the gap is at world x -1.0): on nothing
+    POINT_HAND(kRight, kHandX + 0.6f, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "none");
     POINT_HAND(kRight, kHandX + 1.2f, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(kRight), 2) << "the ray left the gate and landed on it again";
@@ -83,7 +71,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, LandingOnADifferentDoorPulsesAgainEven
     ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
     ASSERT_EQ(PulsesTo(kRight), 1);
 
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // straight onto the other door
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-1.20 -0.20 1.95");
     EXPECT_EQ(PulsesTo(kRight), 2) << "a different Animated Object";
     EXPECT_EQ(PulsesTo(kLeft), 0);
@@ -93,7 +81,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorOfTheLeftHandPulsesTheLeftHandNev
     ASSERT_NO_FATAL_FAILURE(StartWithDoor("ok", false));
     ASSERT_EQ(RunLuauChunk(L, kDoorOnTheLeft, "=leftDoor"), 0);
     EnterZone("leftDoor");
-    // The right Motion Controller is tracked but lies still, so it is not in use.
     headset.SetHandPointing(kRight, HandAt(kHandX, kHandY, kHandZ));
 
     POINT_HAND(kLeft, -kHandX, kHandY, kHandZ);
@@ -105,8 +92,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorOfTheLeftHandPulsesTheLeftHandNev
     EXPECT_EQ(PulsesTo(kLeft), 2) << "one landing, one click";
     EXPECT_EQ(PulsesTo(kRight), 0);
 }
-
-// ---- The click pulse ------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, ThePullThatTogglesADoorPulsesOnceFirmerThanTheLandingAndHoldingTheTriggerPulsesNoMore) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
@@ -134,14 +119,12 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ThePullThatTogglesADoorPulsesOnceFirme
 TEST_F(VirtualGamepadAnimatedObjectsTest, APullThatTogglesNothingPulsesNoClick) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // aimed over the door
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     ASSERT_EQ(DrawnEnd(), "none");
     PullTrigger(kRight);
     EXPECT_EQ(Toggles(), 0);
     EXPECT_EQ(PulsesTo(kRight), 0) << "a pull with the ray on no door is no click";
 }
-
-// ---- Nothing to feel ------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorThatCannotBeTriggeredPulsesNothingOnLandingOrOnThePull) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor("ok", false));
@@ -194,11 +177,11 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorOutsideTheZonePulsesNothing) {
 TEST_F(VirtualGamepadAnimatedObjectsTest, ATriggerHeldOverFromAPadBindingPulsesNoClickAndAFreshPullDoes) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // aimed over the door
-    PullTrigger(kRight);                        // held for a binding, say
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    PullTrigger(kRight);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // the ray lands with the trigger still down
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
     FRAMES(3);
     ASSERT_EQ(Toggles(), 0);

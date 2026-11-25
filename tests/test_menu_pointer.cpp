@@ -1,8 +1,3 @@
-// Menu pointing in the Companion Mod (spec #71): the real Companion Mod over the real
-// VRBridge over FakeTrackedHeadset, with a stub GUI that records the cursor moves and clicks the
-// mod delivers through the game's own GUI mouse handling. The first block covers the two bridge
-// calls the mod relies on (panel hit, drawn cursor); the rest covers the mod's behaviour.
-
 #include "companion_mod_fixture.h"
 
 namespace {
@@ -23,15 +18,12 @@ HeadPose PoseAt(float x, float y, float z) {
     return pose;
 }
 
-// Head at (0, 1.6, 0) looking ahead; the menu panel will sit 1.5 m in front of it at eye height.
 void PlaceHead(FakeTrackedHeadset& headset) {
     headset.SetHeadPose(PoseAt(0.0f, 1.6f, 0.0f));
     headset.manager->PollHeadPose();
 }
 
-} // namespace
-
-// ---- VRBridge.getPanelHit / VRBridge.setMenuCursor ----
+}
 
 TEST_F(CompanionModTest, BridgeReportsWhereAHandsRayHitsTheVisibleMenuPanel) {
     FakeTrackedHeadset headset;
@@ -83,13 +75,11 @@ TEST_F(CompanionModTest, BridgePanelHitIsAMissWithoutAVisiblePanelATrackedHandOr
     headset.SetHandPose(kRight, PoseAt(0.0f, 1.6f, 0.0f));
     headset.NextFrame();
 
-    // No menu and no 2D Floating Window: there is no panel to hit.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local miss = VRBridge.getPanelHit(1)
         assert(miss.hit == false and miss.u == 0 and miss.v == 0 and miss.distance == 0)
     )luau", "=noPanel"), 0);
 
-    // The 2D Floating Window Mode panel counts the same as a menu.
     bridge.Set2DViewActive(true);
     ASSERT_EQ(RunLuauChunk(L, "assert(VRBridge.getPanelHit(1).hit == true, '2D panel')", "=panel2d"), 0);
     bridge.Set2DViewActive(false);
@@ -109,15 +99,12 @@ TEST_F(CompanionModTest, BridgePanelHitIsAMissWithoutAVisiblePanelATrackedHandOr
     lua_close(L2);
 }
 
-// The Pointer Ray starts at the index fingertip and runs along the finger, not along the aim pose, and the panel is the
-// Injector's geometry: the Companion Mod hands it the ray (tracking space, the space the hand poses are in).
 TEST_F(CompanionModTest, BridgeReportsWhereAGivenRayHitsThePanelWhateverTheHandsAimPoseSays) {
     FakeTrackedHeadset headset;
     PlaceHead(headset);
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     bridge.SetMenuVisible(true);
-    // The aim pose of the right hand is somewhere that hits nothing (far to the side, pointing straight ahead).
     headset.SetHandPose(kRight, PoseAt(5.0f, 1.6f, 0.0f));
     headset.SetHandPose(kLeft, PoseAt(-5.0f, 1.6f, 0.0f));
     headset.NextFrame();
@@ -147,7 +134,6 @@ TEST_F(CompanionModTest, BridgeReportsWhereAGivenRayHitsThePanelWhateverTheHands
         assert(VRBridge.getPanelHitAlongRay(1, 0.4, 1.6 + 0.225, 0, 0, 0, -1, out) == out and math.abs(out.u - 0.75) < 1e-4, "filled in place")
     )luau", "=panelHitAlongRay"), 0);
 
-    // No panel, or a hand that is not tracked, is a miss whatever the ray.
     headset.SetHandTracked(kRight, false);
     headset.NextFrame();
     ASSERT_EQ(RunLuauChunk(L, "assert(VRBridge.getPanelHitAlongRay(1, 0, 1.6, 0, 0, 0, -1).hit == false, 'untracked hand')", "=untrackedAlongRay"), 0);
@@ -176,7 +162,6 @@ TEST_F(CompanionModTest, BridgeSetsTheDrawnCursorWhileThePointerRayHasControlAnd
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setMenuCursor(false)", "=releaseCursor"), 0);
     EXPECT_FALSE(pointer().active) << "the desk mouse has control again";
 
-    // A stale ray cursor must not survive a menu opening or closing.
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setMenuCursor(true, 0.5, 0.5)", "=setAgain"), 0);
     bridge.SetMenuVisible(true);
     EXPECT_FALSE(pointer().active);
@@ -188,12 +173,8 @@ TEST_F(CompanionModTest, BridgeSetsTheDrawnCursorWhileThePointerRayHasControlAnd
     EXPECT_FALSE(pointer().active);
 }
 
-// ---- The Companion Mod points at menus ----
-
 namespace {
 
-// The game's GUI as the mod sees it: it records every mouse event the mod delivers (normalized
-// screen position with the origin at the BOTTOM left, as the game's GUI uses).
 constexpr const char* kGuiStubs = R"luau(
     _G.addConsoleCommand = function() end
     _G.removeConsoleCommand = function() end
@@ -229,8 +210,6 @@ protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // Starts the mod over the headset with a menu showing and the Pointer Hand (right) in use,
-    // aimed at the middle of the panel.
     void StartWithMenuOpen() {
         PlaceHead(headset);
         SetGameTime(10000);
@@ -240,7 +219,7 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
         headset.SetHandPointing(kRight, AimAt(0.5f, 0.5f));
         NextFrame(&headset);
-        AimRightHandAt(0.55f, 0.5f);  // a real move: the hand is in use and the ray takes control
+        AimRightHandAt(0.55f, 0.5f);
     }
 
     void AimRightHandAt(float u, float v) {
@@ -259,13 +238,12 @@ protected:
     int Count(const char* expression) { return std::stoi(EvalLua(L, expression)); }
 };
 
-} // namespace
+}
 
 TEST_F(MenuPointerTest, TheCursorFollowsTheFingerTheRayRunsAlongNotTheAimPose) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
 
-    // The finger points at (0.75, 0.25) of the panel, while the runtime's aim pose points at nothing: 5 m to the right.
     headset.SetHandPointing(kRight, AimAt(0.75f, 0.25f));
     headset.SetHandAimPose(kRight, PoseAt(5.0f, 1.6f, 0.0f));
     NextFrame(&headset);
@@ -276,9 +254,8 @@ TEST_F(MenuPointerTest, TheCursorFollowsTheFingerTheRayRunsAlongNotTheAimPose) {
     EXPECT_NEAR(drawn.u, 0.75f, 1e-3f);
     EXPECT_NEAR(drawn.v, 0.25f, 1e-3f);
 
-    // The aim pose is the fallback while the grip pose is not tracked: the cursor goes where the aim pose points.
     headset.SetHandPose(kRight, AimAt(0.25f, 0.5f));
-    headset.SetHandGripPose(kRight, PoseAt(0.0f, 0.0f, 0.0f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, PoseAt(0.0f, 0.0f, 0.0f), false);
     NextFrame(&headset);
     ExpectLastGuiEventAt(0.25, 0.5);
 }
@@ -318,7 +295,7 @@ TEST_F(MenuPointerTest, ATriggerPullIsOneLeftClickAtTheCursorPosition) {
     EXPECT_EQ(EvalLua(L, "guiLast().button"), "1") << "the left mouse button";
     ExpectLastGuiEventAt(0.40, 0.70);
 
-    for (int i = 0; i < 5; ++i) NextFrame(&headset);  // holding the trigger is not more clicks
+    for (int i = 0; i < 5; ++i) NextFrame(&headset);
     EXPECT_EQ(Count("guiDowns()"), 1);
 
     PullRightTrigger(0.0f);
@@ -342,7 +319,7 @@ TEST_F(MenuPointerTest, ALightTouchOnTheTriggerDoesNotClickAndASlowReleaseDoesNo
     EXPECT_EQ(Count("guiDowns()"), 0);
     PullRightTrigger(1.0f);
     EXPECT_EQ(Count("guiDowns()"), 1);
-    for (float value : { 0.8f, 0.5f, 0.7f, 0.5f, 0.8f }) {  // wobbling between the two thresholds
+    for (float value : { 0.8f, 0.5f, 0.7f, 0.5f, 0.8f }) {
         PullRightTrigger(value);
     }
     EXPECT_EQ(Count("guiDowns()"), 1) << "hysteresis: the wobble is the same pull";
@@ -370,7 +347,7 @@ TEST_F(MenuPointerTest, ATriggerPullOffThePanelDoesNothingEvenIfTheHandSweepsOnt
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
     const int eventsOnPanel = Count("#guiEvents");
-    AimRightHandAt(1.30f, 0.50f);  // well right of the panel
+    AimRightHandAt(1.30f, 0.50f);
     EXPECT_EQ(Count("#guiEvents"), eventsOnPanel) << "the cursor stays where it was";
 
     PullRightTrigger(1.0f);
@@ -389,7 +366,6 @@ TEST_F(MenuPointerTest, MovingTheDeskMouseTakesControlAndMovingThePointerHandTak
     ASSERT_TRUE(headset.manager->GetPointerCursorOverride().active);
     const int eventsWhileRayControlled = Count("#guiEvents");
 
-    // The engine reports the desk mouse to the mod as mouse events.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:mouseEvent(0.20, 0.60, false, false, 0)", "=deskMouse"), 0);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
@@ -399,7 +375,7 @@ TEST_F(MenuPointerTest, MovingTheDeskMouseTakesControlAndMovingThePointerHandTak
     EXPECT_EQ(Count("guiDowns()"), 0) << "the trigger does not click while the mouse has control";
     PullRightTrigger(0.0f);
 
-    AimRightHandAt(0.70f, 0.30f);  // the Pointer Hand moves
+    AimRightHandAt(0.70f, 0.30f);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
     EXPECT_TRUE(headset.manager->GetPointerCursorOverride().active);
     ExpectLastGuiEventAt(0.70, 0.70);
@@ -413,7 +389,7 @@ TEST_F(MenuPointerTest, TheDeskMouseIsAlsoNoticedBySamplingItsPositionWhenNoMous
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_inputBinding = { x = 0.5, y = 0.5, getMousePosition = function(self) return self.x, self.y end }
     )luau", "=inputBinding"), 0);
-    NextFrame(&headset);  // first sample: just remembers where the mouse is
+    NextFrame(&headset);
     AimRightHandAt(0.40f, 0.30f);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
 
@@ -447,7 +423,7 @@ TEST_F(MenuPointerTest, TheRayLosesControlWhenThePointerHandIsPutDown) {
     AimRightHandAt(0.40f, 0.30f);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
 
-    AdvanceGameTime(3500);  // the Motion Controller lies still for longer than the in-use window
+    AdvanceGameTime(3500);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
     EXPECT_FALSE(headset.manager->GetPointerCursorOverride().active);
@@ -529,7 +505,7 @@ TEST_F(MenuPointerTest, AFailingMenuNeverBreaksTheGameUpdate) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
     ASSERT_EQ(RunLuauChunk(L, "_G.guiFails = true", "=failing"), 0);
-    AimRightHandAt(0.40f, 0.30f);  // NextFrame fails the test if the update raises
+    AimRightHandAt(0.40f, 0.30f);
     PullRightTrigger(1.0f);
     PullRightTrigger(0.0f);
     int reports = 0;

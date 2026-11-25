@@ -1,15 +1,9 @@
--- ====================================================================
--- Test Suite for In-Engine 2D Floating Window Mode & Camera / HUD Decoupling
--- ====================================================================
-
--- Mock GIANTS Engine globals before loading VRCompanion
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Mock camera globals
 _G.cameraFovY = {}
 _G.cameraProjectionOffsets = {}
 function setFovY(node, fov)
@@ -35,7 +29,6 @@ MathUtil = {
 }
 _G.MathUtil = MathUtil
 
--- Mock VRBridge
 _G.mockBridge2DActive = false
 local mockVRBridge = {
     version = "1.0.0.0",
@@ -60,7 +53,6 @@ local mockVRBridge = {
 _G.VRBridge = mockVRBridge
 VRBridge = mockVRBridge
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
 
 local passed = 0
@@ -79,25 +71,21 @@ end
 
 print("Running In-Engine 2D Floating Window Mode Tests...")
 
--- Slice 1: State Tracking and VRBridge Synchronization
 test("Is2DViewActiveStateTrackingAndSynchronization", function()
     assert(VRCompanion.is2DViewActive == false, "is2DViewActive must default to false")
     assert(VRCompanion:getIs2DViewActive() == false, "getIs2DViewActive must return false")
     assert(VRBridge.getIs2DViewActive() == false, "VRBridge must default to false")
 
-    -- Enable 2D View
     VRCompanion:set2DViewActive(true)
     assert(VRCompanion.is2DViewActive == true, "is2DViewActive must be true")
     assert(VRCompanion:getIs2DViewActive() == true, "getIs2DViewActive must return true")
     assert(VRBridge.getIs2DViewActive() == true, "VRBridge must reflect true state")
 
-    -- Disable 2D View
     VRCompanion:set2DViewActive(false)
     assert(VRCompanion.is2DViewActive == false, "is2DViewActive must be false")
     assert(VRCompanion:getIs2DViewActive() == false, "getIs2DViewActive must return false")
     assert(VRBridge.getIs2DViewActive() == false, "VRBridge must reflect false state")
 
-    -- External Bridge Sync on update()
     VRBridge.set2DViewActive(true)
     assert(VRCompanion.is2DViewActive == false)
     VRCompanion:update(16.6)
@@ -106,7 +94,6 @@ test("Is2DViewActiveStateTrackingAndSynchronization", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 2: In-Cab Vehicle Camera Decoupling & 6DOF Bypass
 test("InCabVehicleCameraBypasses6DOFTrackingIn2DMode", function()
     local nodeTrans = { 0.5, 2.0, 1.0 }
     local nodeRot = { 0.0, 3.14159, 0.0 }
@@ -130,15 +117,13 @@ test("InCabVehicleCameraBypasses6DOFTrackingIn2DMode", function()
         origTransZ = 1.0,
     }
 
-    -- 3D VR Mode applies HMD pose
     VRCompanion:set2DViewActive(false)
     VRCompanion:onVehicleCameraUpdate(mockVehCam, 16.6)
     assert(math.abs(nodeRot[1] - 0.15) < 0.001, "3D VR mode must apply HMD pitch (0.15) to camera")
 
-    -- 2D Floating Window Mode bypasses 6DOF updates
     VRCompanion:set2DViewActive(true)
-    mockVehCam.rotX = 0.35 -- player looking down with 2D mouse
-    mockVehCam.rotY = 2.80 -- player looking to the side with 2D mouse
+    mockVehCam.rotX = 0.35
+    mockVehCam.rotY = 2.80
     nodeRot = { 0.35, 2.80, 0.0 }
     nodeTrans = { 0.5, 2.0, 1.0 }
 
@@ -150,7 +135,6 @@ test("InCabVehicleCameraBypasses6DOFTrackingIn2DMode", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 3: On-Foot Player Camera Decoupling & 2D Mouse Look
 test("OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook", function()
     local mockInput = { cameraRotationX = 0.20, cameraRotationY = -0.30 }
     local curCamRot = { 0.0, 0.0, 0.0 }
@@ -172,12 +156,10 @@ test("OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook", function()
     function setRotation(node, rx, ry, rz) curCamRot = { rx, ry, rz } end
     function getRotation(node) return curCamRot[1], curCamRot[2], curCamRot[3] end
 
-    -- 3D VR Mode locks neck pitch to 0
     VRCompanion:set2DViewActive(false)
     VRCompanion:onPlayerCameraUpdateRotation(mockPlayerCam, 16.6)
     assert(curCamRot[1] == 0.0, "3D VR mode must zero neck pitch")
 
-    -- 2D Floating Window Mode applies mouse pitch and yaw
     VRCompanion:set2DViewActive(true)
     curCamRot = { 0.0, 0.0, 0.0 }
     curCamTrans = { 0.0, 1.8, 0.0 }
@@ -186,7 +168,6 @@ test("OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook", function()
     assert(math.abs(curCamRot[1] - 0.20) < 0.001, "2D mode must update pitch from mouse Y")
     assert(math.abs(curCamRot[2] - 0.30) < 0.001, "2D mode must update yaw from mouse X")
 
-    -- onPlayerCameraUpdate bypasses 6DOF updates in 2D mode
     VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 16.6)
     assert(math.abs(curCamRot[1] - 0.20) < 0.001, "2D mode must not overwrite pitch with HMD pose")
     assert(math.abs(curCamTrans[1] - 0.0) < 0.001, "2D mode must not apply HMD translation")
@@ -194,9 +175,6 @@ test("OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- The camera the engine renders through, as getCamera() reports it. As in the game, the camera
--- manager renders through registered cameras (the game's own, and any added with addCamera) and
--- ignores others; the global setCamera is the game's deprecation wrapper and binds nothing.
 local function installRenderedCamera(initial)
     local rendered = initial
     local registered = { [initial] = true }
@@ -265,18 +243,15 @@ test("In2DFloatingWindowModeOnFootRendersThroughTheGamesOwnCamera", function()
     assert(ok, tostring(err))
 end)
 
--- Slice 4: Camera Projection FOV Restoration and Zero Offsets
 test("CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMode", function()
     local camNode = 50
-    setFovY(camNode, 1.0472) -- 60 degrees
+    setFovY(camNode, 1.0472)
     setProjectionOffset(camNode, 0.0, 0.0)
 
-    -- 3D VR mode applies VR headset FOV
     VRCompanion:set2DViewActive(false)
     VRCompanion:applyCameraProjection(camNode, 0)
     assert(math.abs(getFovY(camNode) - 1.8326) < 0.01, "3D VR mode must apply VR FOV")
 
-    -- 2D mode restores original FOV and zero offsets
     VRCompanion:set2DViewActive(true)
     VRCompanion:applyCameraProjection(camNode, 0)
     local restoredFov = getFovY(camNode)
@@ -284,7 +259,6 @@ test("CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMode", function()
     assert(math.abs(restoredFov - 1.0472) < 0.0001, "2D mode must restore original FOV")
     assert(offX == 0.0 and offY == 0.0, "2D mode must enforce zero projection offsets")
 
-    -- Return to 3D VR mode
     VRCompanion:set2DViewActive(false)
     VRCompanion:applyCameraProjection(camNode, 0)
     assert(math.abs(getFovY(camNode) - 1.8326) < 0.01, "Returning to 3D VR mode restores VR FOV")
@@ -301,12 +275,10 @@ test("HudConvergenceDisparityZeroedAndFullFrameAnchorsAppliedIn2DMode", function
     _G.g_hudAnchorBottom = 0.16
     _G.g_hudAnchorTop = 0.84
 
-    -- 3D VR mode computes disparity
     VRCompanion:set2DViewActive(false)
     VRCompanion:updateHudConvergence(16.6)
     assert(VRCompanion.currentConvergenceDisparity > 0.0, "3D VR mode has non-zero disparity")
 
-    -- 2D mode zeroes disparity and applies full frame anchors
     VRCompanion:set2DViewActive(true)
     VRCompanion:updateHudConvergence(16.6)
     assert(VRCompanion.currentConvergenceDisparity == 0.0, "2D mode zeroes disparity")
@@ -319,7 +291,6 @@ test("HudConvergenceDisparityZeroedAndFullFrameAnchorsAppliedIn2DMode", function
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 6: Menu Stickiness
 test("ModeIsStickyAcrossInGameGuiMenus", function()
     local menuVisible = false
     _G.g_gui = {
@@ -329,13 +300,11 @@ test("ModeIsStickyAcrossInGameGuiMenus", function()
     VRCompanion:set2DViewActive(true)
     assert(VRCompanion.is2DViewActive == true)
 
-    -- Open GUI menu
     menuVisible = true
     VRCompanion:update(16.6)
     assert(VRCompanion.isMenuVisible == true)
     assert(VRCompanion.is2DViewActive == true, "2D mode must persist while in GUI menu")
 
-    -- Close GUI menu
     menuVisible = false
     VRCompanion:update(16.6)
     assert(VRCompanion.isMenuVisible == false)
@@ -344,7 +313,6 @@ test("ModeIsStickyAcrossInGameGuiMenus", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 7: Clean Initialization on Map Load
 test("FreshMapLoadAlwaysInitializesIn3DVrMode", function()
     VRCompanion:set2DViewActive(true)
     assert(VRCompanion.is2DViewActive == true)
@@ -354,7 +322,6 @@ test("FreshMapLoadAlwaysInitializesIn3DVrMode", function()
     assert(VRBridge.getIs2DViewActive() == false, "VRBridge must be synchronized to false")
 end)
 
--- Slice 8: Snap Turn Suppression
 test("SnapTurnSuppressedWhen2DViewActive", function()
     local mockVehCam = { isInside = true, rotY = 0.0, origRotY = 0.0 }
     VRCompanion.getActiveVehicleCamera = function() return mockVehCam end
@@ -372,7 +339,6 @@ test("SnapTurnSuppressedWhen2DViewActive", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 9: Console Commands
 test("ConsoleCommandsManage2DViewMode", function()
     VRCompanion:set2DViewActive(false)
 
@@ -391,11 +357,10 @@ test("ConsoleCommandsManage2DViewMode", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 10: Toggle View Action Registration & deleteMap Cleanup
 test("ToggleViewActionRegistrationAndCleanup", function()
     local registeredEvents = {}
     _G.g_inputBinding = {
-        events = {}, actionEvents = {}, -- FS25: events keyed by event id, actionEvents keyed by action name
+        events = {}, actionEvents = {},
         registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
             local id = actionName .. "|table: 0x0|" .. (self.nextEventNumber or 1); self.nextEventNumber = (self.nextEventNumber or 1) + 1
             local ev = { id = id, actionName = actionName, target = target, callback = callback }
@@ -418,7 +383,6 @@ test("ToggleViewActionRegistrationAndCleanup", function()
     assert(VRCompanion.toggleViewActionEventId == nil, "toggleViewActionEventId must be cleared by deleteMap")
 end)
 
--- The map's life: load makes the eye nodes and registers the VR action events, unload undoes them and leaves 2D mode
 test("MapLoadMakesTheEyeNodesAndRegistersTheActionEventsAndUnloadUndoesThem", function()
     local nextId = 0
     _G.g_inputBinding = {
@@ -464,7 +428,6 @@ test("MapLoadMakesTheEyeNodesAndRegistersTheActionEventsAndUnloadUndoesThem", fu
     end
 end)
 
--- A map unloaded in 2D Floating Window Mode hands the game its full-screen HUD in the Full state, as one unloaded in VR does
 test("MapUnloadIn2DModeLeavesTheGamesHudAnchorsAtTheFullScreen", function()
     _G.g_hudAnchorLeft, _G.g_hudAnchorRight, _G.g_hudAnchorBottom, _G.g_hudAnchorTop = 0.0, 1.0, 0.0, 1.0
     VRCompanion.origHudAnchors = nil
@@ -484,7 +447,6 @@ test("MapUnloadIn2DModeLeavesTheGamesHudAnchorsAtTheFullScreen", function()
     assert(VRCompanion.origHudAnchors == nil, "no game anchors are kept for the next map")
 end)
 
--- Slice 11: Toggle View Action Debounce & Silent Execution
 test("ToggleViewActionDebounceAndSilentExecution", function()
     local warningCalls = 0
     _G.g_currentMission = {
@@ -497,27 +459,23 @@ test("ToggleViewActionDebounceAndSilentExecution", function()
     VRCompanion:resetToggleViewDebounce()
     assert(VRCompanion.is2DViewActive == false)
 
-    -- First press toggles to 2D
     local ok1 = VRCompanion:onToggleVrViewAction("VR_TOGGLE_VIEW", 1, 1000)
     assert(ok1 == true, "First toggle press must succeed")
     assert(VRCompanion.is2DViewActive == true, "is2DViewActive must be true")
     assert(warningCalls == 0, "No blinking warning on toggle")
 
-    -- Second rapid press (elapsed 100ms < 250ms debounce) is rejected
     local ok2, reason = VRCompanion:onToggleVrViewAction("VR_TOGGLE_VIEW", 1, 1100)
     assert(ok2 == false, "Rapid consecutive press must be debounced")
     assert(reason == "debounced", "Failure reason must be 'debounced'")
     assert(VRCompanion.is2DViewActive == true, "Mode must remain 2D")
     assert(warningCalls == 0, "No warning on debounced press")
 
-    -- Third press (> 250ms debounce) succeeds, toggling back to 3D
     local ok3 = VRCompanion:onToggleVrViewAction("VR_TOGGLE_VIEW", 1, 1300)
     assert(ok3 == false, "Toggling back returns false")
     assert(VRCompanion.is2DViewActive == false, "Must return to 3D VR mode")
     assert(warningCalls == 0, "No warning on returning to 3D mode")
 end)
 
--- Slice 12: Recenter in 2D Mode Realigns Floating Quad Without Touching Camera
 test("RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation", function()
     local alignMenuQuadCalls = 0
     local recenterCalls = 0
@@ -533,17 +491,14 @@ test("RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation", f
     VRCompanion.getActiveVehicleCamera = function() return mockVehCam end
     VRCompanion.getControlledVehicle = function() return {} end
 
-    -- Enable 2D View
     VRCompanion:set2DViewActive(true)
 
-    -- Trigger Recenter in 2D Mode
     VRCompanion:onRecenterAction()
 
     assert(alignMenuQuadCalls == 1, "alignMenuQuad must be called in 2D mode recenter")
     assert(recenterCalls == 0, "VRBridge.recenter must NOT be called in 2D mode")
     assert(mockVehCam.rotY == 1.25, "Vehicle camera rotY must remain unchanged")
 
-    -- Switch to 3D Mode and trigger recenter
     VRCompanion:set2DViewActive(false)
     VRCompanion:onRecenterAction()
 

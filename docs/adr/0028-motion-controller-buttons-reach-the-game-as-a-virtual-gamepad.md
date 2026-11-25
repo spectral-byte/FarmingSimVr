@@ -31,3 +31,5 @@ Proposed. Partly replaces ADR-0025: the raw per-hand inputs and their declaratio
 - The one-time rewrite depends on the game's InputBinding, whose readable source is stripped. If the rewrite turns out impossible or a game patch breaks it, the Virtual Gamepad starts with the game's defaults plus the Companion Mod's own pad defaults, and the player rebinds Snap Turn in the Controls screen.
 - On the Settings page a trigger click on the Pointer Ray menu also reaches the game as RT (and a grip or lower face button that goes back as LB / RB or a face button, a scrolling stick as the stick). That only matters for a binding the player has put on those inputs; the alternative, a pad that reads neutral through the whole Controls screen, makes binding impossible.
 - Wheel Grab still steers through `setSteeringInput` (ADR-0027); the Virtual Gamepad's stick steering is dropped like any other device's while the Steering Wheel is held.
+
+More decisions about this area, from the code comments: [ADR-0048](0048-virtual-gamepad-decisions.md).

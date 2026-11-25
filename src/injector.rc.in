@@ -1,11 +1,3 @@
-// Version resource of the Injector (version.dll). configure_file() fills in the version from the
-// Companion Mod's modDesc.xml, so the Injector and the release carry the same number.
-//
-// The Installer (installer/fs25_vr.iss) recognises an Injector of ours, to overwrite it without
-// treating it as a foreign version.dll, and to remove an earlier one that was the game's dxgi.dll, by
-// ProductName "FS25 VR" below. The Injector reads it too, to find an earlier Injector still loaded as
-// dxgi.dll (IsFs25VrModule). Do not change it without changing IsOurInjector in the Installer script
-// and IsFs25VrModule in src/core/injector_startup.cpp too.
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO

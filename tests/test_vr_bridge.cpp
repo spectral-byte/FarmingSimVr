@@ -23,7 +23,7 @@ int RunLuauString(lua_State* L, const std::string& code) {
     return lua_pcall(L, 0, 0, 0);
 }
 
-} // anonymous namespace
+}
 
 class VrBridgeTest : public ::testing::Test {
 protected:
@@ -43,7 +43,6 @@ protected:
 };
 
 TEST_F(VrBridgeTest, BridgeFunctionWithoutItsBridgeUpvalueRaisesLuaError) {
-    // Pushed without the bridge upvalue that Inject supplies: there is no singleton to fall back to.
     lua_pushcfunction(L, &fs25vr::VRBridge::Lua_IsReady, "isReady");
 
     ASSERT_NE(lua_pcall(L, 0, 1, 0), LUA_OK);
@@ -63,10 +62,8 @@ TEST_F(VrBridgeTest, InjectsGlobalTableWithoutStackCorruption) {
     EXPECT_TRUE(injected);
     EXPECT_TRUE(bridge.IsInjected(L));
 
-    // The Lua stack top must remain strictly unaltered
     EXPECT_EQ(lua_gettop(L), initialTop);
 
-    // Second injection should be a clean no-op
     bool secondInject = bridge.Inject(L);
     EXPECT_TRUE(secondInject);
     EXPECT_EQ(lua_gettop(L), initialTop);
@@ -92,7 +89,6 @@ TEST_F(VrBridgeTest, InjectingLeavesAStoppedCollectorStopped) {
 }
 
 TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
-    // The version is the one the composition root supplies (a test supplies its own), not a fixed text.
     fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -146,7 +142,6 @@ TEST_F(VrBridgeTest, ReportsTheInjectorsReleaseVersionWhenNoneIsSupplied) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // The build's version (the pinning test ties it to modDesc.xml), not the fixed text of the releases up to 1.2.
     const std::string expected(fs25vr::kInjectorVersion);
     lua_pushstring(L, expected.c_str());
     lua_setglobal(L, "expectedVersion");
@@ -387,7 +382,6 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
 
-    // Advance frame from native C++ to frame 1 (parity 1 = Right eye)
     bridge.AdvanceFrame();
     EXPECT_EQ(bridge.GetFrameParity(), 1u);
     EXPECT_EQ(bridge.GetFrameIndex(), 1u);
@@ -398,7 +392,6 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
         assert(VRBridge.frameIndex == 1, "VRBridge.frameIndex must now be 1")
     )luau"), 0);
 
-    // Advance frame from native C++ to frame 2 (parity 0 = Left eye)
     bridge.AdvanceFrame();
     EXPECT_EQ(bridge.GetFrameParity(), 0u);
     EXPECT_EQ(bridge.GetFrameIndex(), 2u);
@@ -408,7 +401,6 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
         assert(VRBridge.frameIndex == 2, "VRBridge.frameIndex must now be 2")
     )luau"), 0);
 
-    // Direct C++ SetFrameParity
     bridge.SetFrameParity(1);
     EXPECT_EQ(bridge.GetFrameParity(), 1u);
     ASSERT_EQ(RunLuauString(L, R"luau(
@@ -601,7 +593,7 @@ TEST_F(VrBridgeTest, GetHandStateReportsTheGripPoseNextToTheAimPoseWithItsOwnTra
     headset.SetHandPose(1, aim);
     headset.SetHandGripPose(1, grip);
     headset.SetHandPose(0, aim);
-    headset.SetHandGripPose(0, grip, /*tracked=*/false);
+    headset.SetHandGripPose(0, grip, false);
     headset.NextFrame();
 
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -630,9 +622,9 @@ TEST_F(VrBridgeTest, GetHandStateReportsTheGripPoseNextToTheAimPoseWithItsOwnTra
 }
 
 TEST_F(VrBridgeTest, GetHandStateReportsAnUntrackedZeroedHandWhenThereIsNothingToTrack) {
-    fs25vr::FakeTrackedHeadset refused(fs25vr::FakeTrackedHeadsetOptions{ /*refuseActionSet=*/true });
+    fs25vr::FakeTrackedHeadset refused(fs25vr::FakeTrackedHeadsetOptions{ true });
     fs25vr::FakeTrackedHeadset headset;
-    headset.SetHandPose(0, fs25vr::HeadPose(), /*tracked=*/false);
+    headset.SetHandPose(0, fs25vr::HeadPose(), false);
     headset.NextFrame();
 
     fs25vr::VRBridge noRuntime(nullptr, nullptr);
@@ -658,7 +650,6 @@ TEST_F(VrBridgeTest, GetHandStateReportsAnUntrackedZeroedHandWhenThereIsNothingT
         EXPECT_EQ(RunLuauString(state, check), 0);
         lua_close(state);
     }
-    // A controller that is switched off reports untracked too (hand 0), while hand 1 is fine.
     ASSERT_TRUE(offBridge.Inject(L));
     ASSERT_EQ(RunLuauString(L, R"luau(
         assert(VRBridge.getHandState(0).tracked == false and VRBridge.getHandState(0).gripPoseTracked == false)
@@ -755,14 +746,12 @@ TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
 
     EXPECT_FALSE(bridge.IsCompanionActive());
 
-    // Initially inactive before handshake
     ASSERT_EQ(RunLuauString(L, R"luau(
         assert(type(VRBridge.isCompanionActive) == "function", "isCompanionActive must be a function")
         assert(type(VRBridge.onMapUnload) == "function", "onMapUnload must be a function")
         assert(VRBridge.isCompanionActive() == false, "must be false before handshake")
     )luau"), 0);
 
-    // Perform handshake
     ASSERT_EQ(RunLuauString(L, R"luau(
         local res = VRBridge.handshake()
         assert(res.success == true, "handshake must succeed")
@@ -771,7 +760,6 @@ TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
 
     EXPECT_TRUE(bridge.IsCompanionActive());
 
-    // Unload map
     ASSERT_EQ(RunLuauString(L, R"luau(
         VRBridge.onMapUnload()
         assert(VRBridge.isCompanionActive() == false, "must be false after map unload")
@@ -785,7 +773,6 @@ TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp)
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // Initially false in both C++ and Luau
     EXPECT_FALSE(bridge.IsMenuVisible());
 
     ASSERT_EQ(RunLuauString(L, R"luau(
@@ -795,7 +782,6 @@ TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp)
         assert(VRBridge.isMenuVisible == false, "initial isMenuVisible property must be false")
     )luau"), 0);
 
-    // Set menu visible from Luau
     ASSERT_EQ(RunLuauString(L, R"luau(
         VRBridge.setMenuVisible(true)
         assert(VRBridge.getIsMenuVisible() == true, "getIsMenuVisible must return true after setMenuVisible(true)")
@@ -804,7 +790,6 @@ TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp)
 
     EXPECT_TRUE(bridge.IsMenuVisible());
 
-    // Frame parity reset test: setting parity to 1, then setMenuVisible should reset parity to 0
     bridge.SetFrameParity(1);
     EXPECT_EQ(bridge.GetFrameParity(), 1u);
     bridge.SetMenuVisible(false);
@@ -815,7 +800,6 @@ TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp)
         assert(VRBridge.getIsMenuVisible() == false, "getIsMenuVisible must reflect C++ SetMenuVisible(false)")
     )luau"), 0);
 
-    // Dynamic property access via __index
     bridge.SetMenuVisible(true);
     ASSERT_EQ(RunLuauString(L, R"luau(
         assert(VRBridge.getIsMenuVisible() == true, "must be true")
@@ -846,14 +830,13 @@ TEST_F(VrBridgeTest, SetMenuVisibleTrueTriggersQuadAlignmentOnOpenXrManager) {
     simPose.rotation = fs25vr::EulerAngles(0.0f, 1.5707963f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
-    openXrManager->PollHeadPose();  // the engine polls the head pose every frame
+    openXrManager->PollHeadPose();
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     EXPECT_FALSE(openXrManager->HasMenuQuadPose());
 
-    // Setting menu visible must trigger quad alignment to the current head pose
     bridge.SetMenuVisible(true);
     EXPECT_TRUE(openXrManager->HasMenuQuadPose());
 
@@ -892,7 +875,6 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // Initially false in both C++ and Luau
     EXPECT_FALSE(bridge.Is2DViewActive());
 
     ASSERT_EQ(RunLuauString(L, R"luau(
@@ -902,7 +884,6 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
         assert(VRBridge.is2DViewActive == false, "initial is2DViewActive property must be false")
     )luau"), 0);
 
-    // Set 2D view active from Luau
     ASSERT_EQ(RunLuauString(L, R"luau(
         VRBridge.set2DViewActive(true)
         assert(VRBridge.getIs2DViewActive() == true, "getIs2DViewActive must return true after set2DViewActive(true)")
@@ -911,7 +892,6 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
 
     EXPECT_TRUE(bridge.Is2DViewActive());
 
-    // Frame parity reset test: setting parity to 1, then Set2DViewActive(false) should reset parity to 0
     bridge.SetFrameParity(1);
     EXPECT_EQ(bridge.GetFrameParity(), 1u);
     bridge.Set2DViewActive(false);
@@ -922,7 +902,6 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
         assert(VRBridge.getIs2DViewActive() == false, "getIs2DViewActive must reflect C++ Set2DViewActive(false)")
     )luau"), 0);
 
-    // Dynamic property access via __index
     bridge.Set2DViewActive(true);
     ASSERT_EQ(RunLuauString(L, R"luau(
         assert(VRBridge.getIs2DViewActive() == true, "must be true")
@@ -1085,14 +1064,13 @@ TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
-    openXrManager->PollHeadPose();  // the engine polls the head pose every frame
+    openXrManager->PollHeadPose();
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     EXPECT_FALSE(openXrManager->HasMenuQuadPose());
 
-    // Setting 2D view active must trigger quad alignment to the current head pose
     bridge.Set2DViewActive(true);
     EXPECT_TRUE(openXrManager->HasMenuQuadPose());
 
@@ -1114,27 +1092,22 @@ TEST_F(VrBridgeTest, DefaultRenderingModeIsSequentialDualPassAndThreadSafe) {
 TEST_F(VrBridgeTest, ModeTransitionsSwitchStateAndResetSubPassAndParity) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
 
-    // Advance to parity 1 and sub-pass 1
     bridge.SetFrameParity(1);
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(bridge.GetFrameParity(), 1u);
     EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
 
-    // Switch to AFR
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
     EXPECT_FALSE(bridge.IsSequentialDualPass());
 
-    // Clean reset: mode change must reset subPassIndex and frameParity to 0
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
     EXPECT_EQ(bridge.GetFrameParity(), 0u);
 
-    // Advance again
     bridge.SetFrameParity(1);
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
 
-    // Switch back to Sequential Dual-Pass
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
     EXPECT_TRUE(bridge.IsSequentialDualPass());
@@ -1146,7 +1119,6 @@ TEST_F(VrBridgeTest, SubPassCyclingAndFrameBoundaryResets) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
 
-    // Sub-pass cycling (0 -> 1 -> 0 -> 1)
     uint32_t next = bridge.AdvanceSubPass();
     EXPECT_EQ(next, 1u);
     EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
@@ -1155,15 +1127,12 @@ TEST_F(VrBridgeTest, SubPassCyclingAndFrameBoundaryResets) {
     EXPECT_EQ(next, 0u);
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
 
-    // Advance to sub-pass 1, then advance frame boundary
     bridge.AdvanceSubPass();
     EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
 
-    // AdvanceFrame represents the presentation boundary and must reset subPassIndex to 0
     bridge.AdvanceFrame();
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
 
-    // SetFrameIndex also represents boundary reset
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
     bridge.SetFrameIndex(10);
@@ -1305,21 +1274,17 @@ TEST_F(VrBridgeTest, DiscontinuitySignallingExposedToLuauAndFlagsBothContexts) {
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
 
-    // Signal in C++
     bridge.SignalDiscontinuity();
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
 
-    // Consume Left context
     EXPECT_TRUE(bridge.ConsumeDiscontinuity(0));
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
 
-    // Consume Right context
     EXPECT_TRUE(bridge.ConsumeDiscontinuity(1));
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
 
-    // Re-signal via Luau resetTemporalHistory()
     ASSERT_EQ(RunLuauString(L, R"luau(
         assert(type(VRBridge.resetTemporalHistory) == "function", "resetTemporalHistory must be a function")
         VRBridge.resetTemporalHistory()
@@ -1328,7 +1293,6 @@ TEST_F(VrBridgeTest, DiscontinuitySignallingExposedToLuauAndFlagsBothContexts) {
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
 
-    // Also via signalDiscontinuity alias
     EXPECT_TRUE(bridge.ConsumeDiscontinuity(0));
     EXPECT_TRUE(bridge.ConsumeDiscontinuity(1));
     ASSERT_EQ(RunLuauString(L, R"luau(
@@ -1343,33 +1307,28 @@ TEST_F(VrBridgeTest, DiscontinuitySignallingExposedToLuauAndFlagsBothContexts) {
 TEST_F(VrBridgeTest, ViewTransitionsAndRecenterFlagDiscontinuity) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
 
-    // Recenter flags discontinuity
     bridge.Recenter();
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
 
-    // 2D view toggle flags discontinuity
     bridge.Set2DViewActive(true);
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
 
-    // Setting same 2D view state does not flag again
     bridge.Set2DViewActive(true);
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
 
-    // Toggling back to 3D flags discontinuity
     bridge.Set2DViewActive(false);
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
 
-    // Menu visibility toggle flags discontinuity
     bridge.SetMenuVisible(true);
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
     EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
@@ -1486,7 +1445,6 @@ TEST_F(VrBridgeTest, SetRenderingModeIsQueuedWhileOpenXrIsActiveUntilLatched) {
 
     EXPECT_EQ(RunLuauString(L, "VRBridge.setRenderingMode('AFR')"), 0);
 
-    // Not applied mid frame pair: only queued until the compositor frame boundary.
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(bridge.GetPendingRenderingMode(), fs25vr::VRRenderingMode::AFR);
 
@@ -1513,7 +1471,6 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // VRBridge should expose exactly kExposedFieldCount fields (1 version string + one entry per function; see kFunctionTable)
     const char* expectedKeys[] = {
         "version",
         "isReady",
@@ -1589,13 +1546,12 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
     EXPECT_EQ(count, fs25vr::VRBridge::kExposedFieldCount);
     EXPECT_EQ(sizeof(expectedKeys) / sizeof(expectedKeys[0]), fs25vr::VRBridge::kExposedFieldCount);
 
-    // Verify key presence directly from the pushed VRBridge table
     for (const char* key : expectedKeys) {
         lua_getfield(L, -1, key);
         EXPECT_FALSE(lua_isnil(L, -1)) << "Missing expected field: " << key;
         lua_pop(L, 1);
     }
-    lua_pop(L, 1); // pop VRBridge table
+    lua_pop(L, 1);
 }
 
 

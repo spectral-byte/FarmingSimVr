@@ -54,7 +54,6 @@ TEST(MathUtilsTest, EulerAnglesOperations) {
 }
 
 TEST(MathUtilsTest, QuaternionToEulerAndBack) {
-    // 90 degrees around Y (yaw)
     float halfAngle = 0.25f * 3.14159265f;
     Quaternion qYaw(0.0f, std::sin(halfAngle), 0.0f, std::cos(halfAngle));
     EulerAngles angles = QuaternionToEuler(qYaw);
@@ -65,7 +64,6 @@ TEST(MathUtilsTest, QuaternionToEulerAndBack) {
 }
 
 TEST(MathUtilsTest, RotateVectorByQuaternion) {
-    // 90 degrees around Y (yaw): (1, 0, 0) should rotate to (0, 0, -1)
     float halfAngle = 0.25f * 3.14159265f;
     Quaternion qYaw(0.0f, std::sin(halfAngle), 0.0f, std::cos(halfAngle));
     Vector3 v(1.0f, 0.0f, 0.0f);

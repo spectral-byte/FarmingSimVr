@@ -1,15 +1,9 @@
--- ====================================================================
--- Test Suite for In-Cab Vehicle Snap Turn, State & Debounce
--- ====================================================================
-
--- Mock GIANTS Engine globals before loading VRCompanion
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
 local fs = require("@lune/fs")
 
@@ -29,32 +23,25 @@ end
 
 print("Running In-Cab Snap Turn, State & Debounce Tests...")
 
--- Slice 1: Core Snap Turn State Machine Defaults & Configuration
 test("SnapTurnStateMachineDefaultsAndConfigurableTurnAngle", function()
-    -- Default turn angle is pi/2 radians (90 degrees)
     assert(VRCompanion.DEFAULT_SNAP_TURN_ANGLE ~= nil, "DEFAULT_SNAP_TURN_ANGLE constant must be defined")
     assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - (math.pi * 0.5)) < 0.0001,
         string.format("DEFAULT_SNAP_TURN_ANGLE must be pi/2 (1.5708 rad), got %f", VRCompanion.DEFAULT_SNAP_TURN_ANGLE))
     assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.5)) < 0.0001,
         "getSnapTurnAngle must return pi/2 by default")
 
-    -- Debounce cooldown constant is at least 250ms
     assert(VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS ~= nil, "DEFAULT_SNAP_TURN_DEBOUNCE_MS constant must be defined")
     assert(VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS >= 250, "DEFAULT_SNAP_TURN_DEBOUNCE_MS must be at least 250ms")
 
-    -- Set configurable turn angle in radians (e.g. 45 degrees = pi/4)
     VRCompanion:setSnapTurnAngle(math.pi * 0.25)
     assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.25)) < 0.0001, "Configured snap turn angle to pi/4")
 
-    -- Set configurable turn angle in degrees (e.g. 90 degrees)
     VRCompanion:setSnapTurnAngle(90)
     assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.5)) < 0.0001, "Setting 90 degrees should convert to pi/2 radians")
 
-    -- Reset to default pi/2 for subsequent tests
     VRCompanion:setSnapTurnAngle(math.pi * 0.5)
 end)
 
--- Slice 2: Debounce Timing Cooldown Enforcement (minimum 250ms)
 test("DebounceCooldownEnforcesMinimum250msBetweenSnapTurns", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -71,22 +58,18 @@ test("DebounceCooldownEnforcesMinimum250msBetweenSnapTurns", function()
         controlledVehicle = mockVeh
     }
 
-    -- 1. First snap turn at t = 1000ms: succeeds
     local ok1, newRot1 = VRCompanion:snapTurnRight(nil, 1000)
     assert(ok1 == true, "First snap turn at t=1000 must succeed")
     assert(math.abs(mockCam.rotY - (-math.pi * 0.5)) < 0.0001, "Camera rotY must be -pi/2")
 
-    -- 2. Rapid repeat at t = 1100ms (100ms later, < 250ms): rejected by debounce
     local ok2, err2 = VRCompanion:snapTurnRight(nil, 1100)
     assert(ok2 == false, "Snap turn 100ms later must be rejected by debounce")
     assert(err2 == "debounced", "Error message must indicate debounced")
     assert(math.abs(mockCam.rotY - (-math.pi * 0.5)) < 0.0001, "Camera rotY must not change during cooldown")
 
-    -- 3. Snap turn at t = 1240ms (240ms later, still < 250ms): rejected
     local ok3, _ = VRCompanion:snapTurnRight(nil, 1240)
     assert(ok3 == false, "Snap turn 240ms later must still be debounced")
 
-    -- 4. Snap turn at t = 1250ms (exactly 250ms cooldown elapsed): succeeds
     local ok4, newRot4 = VRCompanion:snapTurnRight(nil, 1250)
     assert(ok4 == true, "Snap turn at t=1250 (250ms elapsed) must succeed")
     assert(math.abs(math.abs(mockCam.rotY) - math.pi) < 0.0001, "Camera rotY must advance to -pi / pi (180 deg)")
@@ -94,7 +77,6 @@ test("DebounceCooldownEnforcesMinimum250msBetweenSnapTurns", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 4: In-Cab Snap Turning Adjusts cam.rotY and Updates headTrackingNode
 test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -113,7 +95,7 @@ test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
         cameraNode = 301,
         headTrackingNode = 302,
         origHeadTrackingRotX = 0,
-        origHeadTrackingRotY = math.pi, -- 180 deg neutral forward in cab
+        origHeadTrackingRotY = math.pi,
         origHeadTrackingRotZ = 0,
         origRotY = math.pi,
         rotY = math.pi
@@ -129,29 +111,23 @@ test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
     }
     VRCompanion:onEnterVehicle(veh, true, nil)
 
-    -- 1. Snap turn right (-pi/2)
     local okR, newRotR = VRCompanion:snapTurnRight(nil, 1000)
     assert(okR == true, "snapTurnRight must succeed")
-    -- cam.rotY = normalizeAngle(pi - pi/2) = +pi/2
     assert(math.abs(testCam.rotY - (math.pi * 0.5)) < 0.0001,
         string.format("Expected cam.rotY = +pi/2 (1.571), got %f", testCam.rotY))
 
-    -- headTrackingNode must be immediately updated
     local headRotR = nodeRotations[302]
     assert(headRotR ~= nil, "headTrackingNode rotation must be updated")
     assert(math.abs(headRotR.ry - (math.pi * 0.5)) < 0.0001,
         string.format("headTrackingNode yaw must equal +pi/2, got %f", headRotR.ry))
     assert(math.abs(headRotR.rx) < 0.0001 and math.abs(headRotR.rz) < 0.0001, "Pitch and roll must remain 0")
 
-    -- Vehicle rotation state table must also be updated
     assert(VRCompanion.vehicleRotationStates[veh] ~= nil, "Vehicle rotation state must exist")
     assert(math.abs(VRCompanion.vehicleRotationStates[veh].rotY - (math.pi * 0.5)) < 0.0001,
         "Vehicle rotation state must track snapped rotY")
 
-    -- 2. Snap turn left (+pi/2) after 300ms
     local okL, newRotL = VRCompanion:snapTurnLeft(nil, 1300)
     assert(okL == true, "snapTurnLeft must succeed after cooldown")
-    -- cam.rotY = normalizeAngle(pi/2 + pi/2) = pi
     assert(math.abs(math.abs(testCam.rotY) - math.pi) < 0.0001,
         string.format("Expected cam.rotY = pi (-pi), got %f", testCam.rotY))
 
@@ -162,7 +138,6 @@ test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 5: Angle Wrapping Around [-pi, pi] Boundaries Over Full 360-Degree Cycles
 test("AngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -179,26 +154,21 @@ test("AngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     }
 
     local t = 1000
-    -- Step 1: Turn right from 0 -> -90 deg (-pi/2)
     VRCompanion:snapTurnRight(nil, t)
     assert(math.abs(testCam.rotY - (-math.pi * 0.5)) < 0.0001, "Step 1: -pi/2")
 
-    -- Step 2: Turn right from -90 -> -180 deg (-pi)
     t = t + 300
     VRCompanion:snapTurnRight(nil, t)
     assert(math.abs(math.abs(testCam.rotY) - math.pi) < 0.0001, "Step 2: pi")
 
-    -- Step 3: Turn right from -180 -> -270 deg (wraps to +90 deg / +pi/2)
     t = t + 300
     VRCompanion:snapTurnRight(nil, t)
     assert(math.abs(testCam.rotY - (math.pi * 0.5)) < 0.0001, "Step 3: wraps to +pi/2")
 
-    -- Step 4: Turn right from +90 -> 0 deg (completing 360 deg circle)
     t = t + 300
     VRCompanion:snapTurnRight(nil, t)
     assert(math.abs(testCam.rotY - 0.0) < 0.0001, "Step 4: completes full circle to 0.0")
 
-    -- Now turn left 4 times to reverse the full circle
     t = t + 300
     VRCompanion:snapTurnLeft(nil, t)
     assert(math.abs(testCam.rotY - (math.pi * 0.5)) < 0.0001, "Reverse Step 1: +pi/2")
@@ -218,7 +188,6 @@ test("AngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 6: 6DOF OpenXR Head Tracking Preserved on Top of Snapped View
 test("Preserves6DofOpenXrHeadTrackingOnTopOfSnappedView", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -253,7 +222,6 @@ test("Preserves6DofOpenXrHeadTrackingOnTopOfSnappedView", function()
         return fromT.x + rx, fromT.y + ry, fromT.z + rz
     end
 
-    -- Setup physical head pose with slight tilt and forward lean
     _G.VRBridge = {
         isReady = function() return true end,
         getFrameParity = function() return 0 end,
@@ -290,27 +258,21 @@ test("Preserves6DofOpenXrHeadTrackingOnTopOfSnappedView", function()
         controlledVehicle = veh
     }
 
-    -- 1. Perform snap turn right (-90 deg / -pi/2 rad)
     VRCompanion:snapTurnRight(nil, 1000)
 
-    -- 2. Execute onVehicleCameraUpdate tick
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
 
-    -- headTrackingNode yaw must be +pi/2
     local headRot = nodeRotations[502]
     assert(math.abs(headRot.ry - (math.pi * 0.5)) < 0.001, "headTrackingNode yaw must equal +pi/2")
 
-    -- Final cameraNode rotation must composite snapped view (+pi/2) + head tracking yaw (0.08)
     local camRot = nodeRotations[501]
     local expectedCamYaw = VRCompanion:normalizeAngle(math.pi * 0.5 + 0.08)
     assert(math.abs(camRot.ry - expectedCamYaw) < 0.001,
         string.format("Camera composite yaw must be %f, got %f", expectedCamYaw, camRot.ry))
 
-    -- Physical pitch (0.12) and roll (-0.01) must be preserved
     assert(math.abs(camRot.rx - 0.12) < 0.001, "Physical head pitch must be preserved")
     assert(math.abs(camRot.rz - (-0.01)) < 0.001, "Physical head roll must be preserved")
 
-    -- Physical head translation (0.05, 0.02, -0.10) must be rotated collinearly by snapped gaze yaw
     local camTrans = nodeTranslations[501]
     local expX, expY, expZ = VRCompanion:rotateVectorByYaw(0.05, 0.02, -0.10, math.pi * 0.5)
     assert(math.abs(camTrans.x - (0.0 + expX)) < 0.001, "Collinear translation x mismatch")
@@ -320,7 +282,6 @@ test("Preserves6DofOpenXrHeadTrackingOnTopOfSnappedView", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 7: Recenter Action Resets Snapped cam.rotY to cam.origRotY Forward Windshield
 test("RecenterActionResetsSnappedRotYBackToNeutralWindshieldAlignment", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -376,7 +337,7 @@ test("RecenterActionResetsSnappedRotYBackToNeutralWindshieldAlignment", function
         origHeadTrackingRotX = 0,
         origHeadTrackingRotY = math.pi,
         origHeadTrackingRotZ = 0,
-        origRotY = math.pi, -- Forward out windshield
+        origRotY = math.pi,
         rotY = math.pi
     }
     nodeTranslations[602] = { x = 0.0, y = 1.6, z = 0.0 }
@@ -389,24 +350,19 @@ test("RecenterActionResetsSnappedRotYBackToNeutralWindshieldAlignment", function
         controlledVehicle = veh
     }
 
-    -- 1. Execute two snap turns right -> turned 180 degrees, looking out rear window
     VRCompanion:snapTurnRight(nil, 1000)
     VRCompanion:snapTurnRight(nil, 1300)
     assert(math.abs(cam.rotY - 0.0) < 0.0001, "Camera facing backward (rotY = 0)")
 
-    -- 2. Trigger VR_RECENTER_VIEW
     VRCompanion:onRecenterAction()
 
-    -- 3. cam.rotY must be cleanly restored to cam.origRotY (math.pi, facing forward windshield)
     assert(math.abs(cam.rotY - cam.origRotY) < 0.0001,
         string.format("Recenter must reset rotY back to origRotY (%.3f), got %.3f", cam.origRotY, cam.rotY))
 
-    -- 4. headTrackingNode must be restored to origHeadTrackingRotY
     local headRot = nodeRotations[602]
     assert(math.abs(headRot.ry - math.pi) < 0.001,
         string.format("headTrackingNode yaw must reset to pi (180 deg), got %f", headRot.ry))
 
-    -- 5. Subsequent update verifies view faces forward (+Z) out windshield
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     local camRot = nodeRotations[601]
     local lookX, _, lookZ = VRCompanion:rotateVectorByYaw(0, 0, -1, camRot.ry)
@@ -415,7 +371,6 @@ test("RecenterActionResetsSnappedRotYBackToNeutralWindshieldAlignment", function
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 9: Fallback Vehicle Camera Without Tracking Node
 test("FallbackVehicleCameraWithoutTrackingNodeSupportsSnapTurnAndRecenter", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -451,19 +406,16 @@ test("FallbackVehicleCameraWithoutTrackingNodeSupportsSnapTurnAndRecenter", func
         }
     }
 
-    -- 1. Snap turn left on fallback camera
     local ok, newRot = VRCompanion:snapTurnLeft(nil, 1000)
     assert(ok == true, "Fallback camera snapTurnLeft must succeed")
     assert(math.abs(fallbackCam.rotY - (math.pi * 0.5)) < 0.0001, "Fallback rotY must be +pi/2")
 
-    -- 2. Recenter resets fallback camera rotY back to 0.0
     VRCompanion:onRecenterAction()
     assert(math.abs(fallbackCam.rotY - 0.0) < 0.0001, "Recenter resets fallback cam rotY to 0.0")
 
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 10: GUI Menu Guard Suppresses Snap Turn
 test("GuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -479,7 +431,6 @@ test("GuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
         }
     }
 
-    -- Set menu visible
     VRCompanion.isMenuVisible = true
 
     local okR, errR = VRCompanion:snapTurnRight(nil, 1000)
@@ -495,8 +446,6 @@ test("GuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- The menu quad showing and a menu taking the input are two states. Polling the GUI sets both together; the
--- input one alone (no quad shown) must still refuse the turn.
 test("SnapTurnIsRefusedWhileAMenuTakesTheInputEvenWithoutTheMenuQuad", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -539,7 +488,6 @@ test("PollingAnOpenGuiRefusesSnapTurnUntilItCloses", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 11: On-Foot Snap Turn Adjusts Player Character yawNode
 test("OnFootSnapTurnAdjustsPlayerCharacterYawNode", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -581,7 +529,6 @@ test("OnFootSnapTurnAdjustsPlayerCharacterYawNode", function()
         }
     }
 
-    -- 1. Trigger snap turn right (+90 deg -> -pi/2 yawNode)
     local okR, newYawR = VRCompanion:snapTurnRight(nil, 1000)
     assert(okR == true, "On-foot snapTurnRight must succeed")
     assert(math.abs(newYawR - (-math.pi * 0.5)) < 0.0001,
@@ -589,7 +536,6 @@ test("OnFootSnapTurnAdjustsPlayerCharacterYawNode", function()
     assert(math.abs(nodeRotations[10].ry - (-math.pi * 0.5)) < 0.0001,
         string.format("yawNode rotation must equal -pi/2, got %f", nodeRotations[10].ry))
 
-    -- 2. Trigger snap turn left (-90 deg -> back to 0.0 yawNode) after 300ms cooldown
     local okL, newYawL = VRCompanion:snapTurnLeft(nil, 1300)
     assert(okL == true, "On-foot snapTurnLeft must succeed after cooldown")
     assert(math.abs(newYawL - 0.0) < 0.0001,
@@ -600,7 +546,6 @@ test("OnFootSnapTurnAdjustsPlayerCharacterYawNode", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 12: Walking and Strafing Collinear Alignment After Snap Turn Without Rotational Drift
 test("WalkingAndStrafingImmediatelyAlignWithSnappedHeadingWithoutDrift", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -730,31 +675,26 @@ test("WalkingAndStrafingImmediatelyAlignWithSnappedHeadingWithoutDrift", functio
         }
     }
 
-    -- Step 1: Initial state (yawNode = 0.0) -> facing +Z forward
     local camLookX, _, camLookZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 0, 0, -1)
-    local walkWX, walkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1) -- W
+    local walkWX, walkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1)
     local dotInitial = camLookX * walkWX + camLookZ * walkWZ
     assert(math.abs(dotInitial - 1.0) < 0.001, "Initial gaze and W walk must be collinear forward")
 
-    -- Step 2: Trigger snap turn right (+90 deg -> yawNode = -pi/2)
     local okR, newYawR = VRCompanion:snapTurnRight(nil, 1000)
     assert(okR == true, "snapTurnRight must succeed")
     assert(math.abs(newYawR - (-math.pi * 0.5)) < 0.0001, "newYawR must be -pi/2")
     assert(math.abs(nodes[10].rot[2] - (-math.pi * 0.5)) < 0.0001, "yawNode rot must be -pi/2")
 
-    -- Step 3: Verify walking forward (W) immediately aligns with snapped heading
     local snappedLookX, _, snappedLookZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 0, 0, -1)
-    local snappedWalkWX, snappedWalkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1) -- W
+    local snappedWalkWX, snappedWalkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1)
     local dotW = snappedLookX * snappedWalkWX + snappedLookZ * snappedWalkWZ
     assert(math.abs(dotW - 1.0) < 0.001,
         string.format("After snap turn right, W must walk collinear with gaze! dotW = %f", dotW))
-    -- Must be facing right in world space (-X)
     assert(math.abs(snappedLookX - (-1.0)) < 0.001, "Snapped gaze must face -X (right)")
     assert(math.abs(snappedWalkWX - (-1.0)) < 0.001, "Snapped W walk must face -X (right)")
 
-    -- Step 4: Verify strafing (A/D) aligns with snapped orientation
-    local snappedWalkDX, snappedWalkDZ = mockInput:calculateNormalisedWorldMovementDirection(1, 0) -- D
-    local snappedWalkAX, snappedWalkAZ = mockInput:calculateNormalisedWorldMovementDirection(-1, 0) -- A
+    local snappedWalkDX, snappedWalkDZ = mockInput:calculateNormalisedWorldMovementDirection(1, 0)
+    local snappedWalkAX, snappedWalkAZ = mockInput:calculateNormalisedWorldMovementDirection(-1, 0)
     local camRightX, _, camRightZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 1, 0, 0)
     local camLeftX, _, camLeftZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, -1, 0, 0)
 
@@ -766,14 +706,12 @@ test("WalkingAndStrafingImmediatelyAlignWithSnappedHeadingWithoutDrift", functio
     assert(math.abs(dotA - 1.0) < 0.001,
         string.format("A strafe must match camera left after snap turn! dotA = %f", dotA))
 
-    -- Step 5: Verify zero rotational drift across subsequent camera rotation update
-    mockInput.cameraRotationY = 0 -- no mouse input
+    mockInput.cameraRotationY = 0
     VRCompanion:onPlayerCameraUpdateRotation(mockPlayerCam, 16.6)
     local _, updatedYaw, _ = _G.getRotation(mockPlayerCam.yawNode)
     assert(math.abs(updatedYaw - (-math.pi * 0.5)) < 0.001,
         string.format("yawNode must maintain -pi/2 without drift during subsequent frame update, got %f", updatedYaw))
 
-    -- Step 6: Subsequent snap turn left (-90 deg) restores neutral forward heading
     local okL, newYawL = VRCompanion:snapTurnLeft(nil, 1300)
     assert(okL == true, "snapTurnLeft must succeed")
     assert(math.abs(newYawL - 0.0) < 0.0001, "newYawL must be 0.0")
@@ -787,7 +725,6 @@ test("WalkingAndStrafingImmediatelyAlignWithSnappedHeadingWithoutDrift", functio
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 13: On-Foot GUI Menu Guard Suppresses Snap Turn
 test("OnFootGuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -826,22 +763,18 @@ test("OnFootGuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
         }
     }
 
-    -- Set menu visible (e.g. shop, pause, settings open)
     VRCompanion.isMenuVisible = true
 
-    -- 1. Snap turn right must be rejected
     local okR, errR = VRCompanion:snapTurnRight(nil, 1000)
     assert(okR == false, "On-foot snap turn right must be rejected when menu is visible")
     assert(errR == "menu_visible", "Error reason must be menu_visible")
     assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001, "yawNode must not change while menu is open")
 
-    -- 2. Snap turn left must be rejected
     local okL, errL = VRCompanion:snapTurnLeft(nil, 1100)
     assert(okL == false, "On-foot snap turn left must be rejected when menu is visible")
     assert(errL == "menu_visible", "Error reason must be menu_visible")
     assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001, "yawNode must not change while menu is open")
 
-    -- 3. Close menu -> snap turn succeeds
     VRCompanion.isMenuVisible = false
     local okAfter, newYawAfter = VRCompanion:snapTurnRight(nil, 1300)
     assert(okAfter == true, "On-foot snap turn must succeed after menu is closed")
@@ -851,7 +784,6 @@ test("OnFootGuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 14: On-Foot Angle Wrapping Across [-pi, pi] Over Full 360-Degree Cycles
 test("OnFootAngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -892,7 +824,6 @@ test("OnFootAngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
 
     local t = 1000
 
-    -- Cycle 1: Four right turns (0 -> -pi/2 -> -pi -> +pi/2 -> 0)
     VRCompanion:snapTurnRight(nil, t)
     assert(math.abs(nodeRotations[10].ry - (-math.pi * 0.5)) < 0.0001, "Step R1: -pi/2 (-90 deg)")
 
@@ -908,7 +839,6 @@ test("OnFootAngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     VRCompanion:snapTurnRight(nil, t)
     assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001, "Step R4: 0.0 (360 deg full circle)")
 
-    -- Cycle 2: Four left turns (0 -> +pi/2 -> pi -> -pi/2 -> 0)
     t = t + 300
     VRCompanion:snapTurnLeft(nil, t)
     assert(math.abs(nodeRotations[10].ry - (math.pi * 0.5)) < 0.0001, "Step L1: +pi/2 (+90 deg)")
@@ -928,7 +858,6 @@ test("OnFootAngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 15: On-Foot Action Events
 test("OnFootActionEventsTriggerSnapTurns", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -980,7 +909,6 @@ test("OnFootActionEventsTriggerSnapTurns", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 16: In-Engine Action Event Registration via g_inputBinding:registerActionEvent
 test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     VRCompanion:resetSnapTurnDebounce()
 
@@ -1037,16 +965,13 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
         end
     }
 
-    -- Reset stored IDs to force registration
     VRCompanion.snapLeftActionEventId = nil
     VRCompanion.snapRightActionEventId = nil
     VRCompanion.snapLeftLoggedOnce = nil
     VRCompanion.snapRightLoggedOnce = nil
 
-    -- 1. Call registerActionEvents(true)
     VRCompanion:registerActionEvents(true)
 
-    -- Assert VR_SNAP_TURN_LEFT was registered
     local leftEvent = registeredEvents["VR_SNAP_TURN_LEFT"]
     assert(leftEvent ~= nil, "VR_SNAP_TURN_LEFT must be registered with g_inputBinding")
     assert(leftEvent.target == VRCompanion, "leftEvent target must be VRCompanion")
@@ -1059,7 +984,6 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     assert(eventActive[leftEvent.id] == true, "Event must be activated")
     assert(eventVisibility[leftEvent.id] == true, "Event text visibility must be true")
 
-    -- Assert VR_SNAP_TURN_RIGHT was registered
     local rightEvent = registeredEvents["VR_SNAP_TURN_RIGHT"]
     assert(rightEvent ~= nil, "VR_SNAP_TURN_RIGHT must be registered with g_inputBinding")
     assert(rightEvent.target == VRCompanion, "rightEvent target must be VRCompanion")
@@ -1072,7 +996,6 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     assert(eventActive[rightEvent.id] == true, "Event must be activated")
     assert(eventVisibility[rightEvent.id] == true, "Event text visibility must be true")
 
-    -- 2. Test firing the registered callbacks
     local mockCam = {
         isInside = true,
         cameraNode = 1001,
@@ -1086,18 +1009,15 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     }
     _G.g_time = 1000
 
-    -- Invoke right callback via target:callback()
     rightEvent.callback(rightEvent.target)
     assert(math.abs(mockCam.rotY - (-math.pi * 0.5)) < 0.0001, "Invoking right callback must snap turn right to -pi/2")
 
     _G.g_time = 1300
-    -- Invoke left callback
     leftEvent.callback(leftEvent.target)
     assert(math.abs(mockCam.rotY - 0.0) < 0.0001, "Invoking left callback must snap turn left back to 0.0")
 
-    -- 3. Verify re-arming: clearing actionEvents and calling registerActionEvents(false) re-registers
     local preCount = nextEventId
-    _G.g_inputBinding.events = {} -- cleared by engine during vehicle switch
+    _G.g_inputBinding.events = {}
     _G.g_inputBinding.actionEvents = {}
     VRCompanion:registerActionEvents(false)
     assert(nextEventId > preCount, "registerActionEvents(false) must re-register missing snap turn events")
@@ -1107,8 +1027,6 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 16b: the events go into the gameplay input context, not the one that is current. At map load the loading
--- screen's menu context is current; events registered there exist but never fire until a vehicle is entered.
 test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles", function()
     local nextEventId = 0
     local contexts = {}  -- context name -> action name -> event
@@ -1150,28 +1068,23 @@ test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles"
         return count
     end
 
-    -- Map load: the menu context is current, the player is on foot
     VRCompanion:registerActionEvents(true)
     assert(eventsIn("MENU") == 0, "no VR action event may land in the loading screen's menu context")
     assert(eventsIn("PLAYER") == 6, "all six VR action events must be in the on-foot context, got " .. eventsIn("PLAYER"))
     assert(inputBinding.registrationContextName == nil, "the registration context must be reset afterwards")
 
-    -- The periodic check leaves them alone while nothing changed
     local before = nextEventId
     VRCompanion:registerActionEvents(false)
     assert(nextEventId == before, "the periodic check must not re-register events that are in place")
 
-    -- Into a vehicle: the periodic check moves them, even before the vehicle transition is seen
     _G.g_currentMission.controlledVehicle = {}
     VRCompanion:registerActionEvents(false)
     assert(eventsIn("PLAYER") == 0 and eventsIn("VEHICLE") == 6, "the events must move to the vehicle context")
     assert(contexts.VEHICLE.VR_SNAP_TURN_LEFT.id == VRCompanion.snapLeftActionEventId, "the stored id must be the new event's")
 
-    -- A forced registration in the same context replaces them rather than adding a second set
     VRCompanion:registerActionEvents(true)
     assert(eventsIn("VEHICLE") == 6, "a forced registration must not duplicate events")
 
-    -- Out of the vehicle: back to the on-foot context
     _G.g_currentMission.controlledVehicle = nil
     VRCompanion:registerActionEvents(false)
     assert(eventsIn("VEHICLE") == 0 and eventsIn("PLAYER") == 6, "the events must move back to the on-foot context")
@@ -1181,7 +1094,6 @@ test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles"
     VRCompanion.actionEventsContextName = nil
 end)
 
--- Slice 17: XML Configuration Loading and Saving of <snapTurnAngle>
 test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     local savedData = {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -1192,20 +1104,17 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     _G.saveXMLFile = function(xmlFile) return true end
     _G.delete = function(xmlFile) end
 
-    -- 1. Test saving default 90 degrees
     VRCompanion.snapTurnAngle = math.pi * 0.5
     VRCompanion:saveConfiguration()
     assert(savedData["vrSettings.snapTurnAngle"] ~= nil, "vrSettings.snapTurnAngle must be written by saveConfiguration")
     assert(math.abs(savedData["vrSettings.snapTurnAngle"] - 90.0) < 0.001,
         string.format("Expected snapTurnAngle 90.0 deg, got %s", tostring(savedData["vrSettings.snapTurnAngle"])))
 
-    -- 2. Test saving custom 45 degrees
     VRCompanion.snapTurnAngle = math.rad(45.0)
     VRCompanion:saveConfiguration()
     assert(math.abs(savedData["vrSettings.snapTurnAngle"] - 45.0) < 0.001,
         string.format("Expected snapTurnAngle 45.0 deg, got %s", tostring(savedData["vrSettings.snapTurnAngle"])))
 
-    -- 3. Test loading from user settings.xml (e.g. 45 degrees)
     _G.loadXMLFile = function(tag, path) return 888 end
     _G.getXMLFloat = function(xmlFile, key)
         if key == "vrSettings.snapTurnAngle" then return 45.0 end
@@ -1217,7 +1126,6 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
         string.format("Must load 45 deg (%.4f rad) from settings.xml, got %.4f", math.rad(45.0), VRCompanion:getSnapTurnAngle()))
 
-    -- 4. A modDesc.vrSettings key is not a settings source: the angle must stay at the previous value
     _G.getXMLFloat = function(xmlFile, key)
         if key == "modDesc.vrSettings.snapTurnAngle" then return 30.0 end
         return nil
@@ -1227,7 +1135,6 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
         "modDesc.vrSettings.snapTurnAngle must not be read as a settings key")
 
-    -- Clean up mocks
     _G.getUserProfileAppPath = nil
     _G.createFolder = nil
     _G.createXMLFile = nil
@@ -1241,7 +1148,6 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
 end)
 
--- Slice 18: Runtime Console Command vrSnapTurnAngle <degrees>
 test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     local savedData = {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -1259,20 +1165,16 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
         end
     }
 
-    -- Reset to default 90 degrees
     VRCompanion.snapTurnAngle = math.pi * 0.5
 
-    -- 1. Query current angle with no arguments
     local queryRes = VRCompanion:consoleCommandSetSnapTurnAngle()
     assert(queryRes ~= nil, "Query must return a status string")
     assert(string.find(queryRes, "90") ~= nil, "Query response must show current 90 deg")
     assert(string.find(queryRes, "vrSnapTurnAngle") ~= nil, "Query response must show usage")
 
-    -- Query with "status"
     local statusRes = VRCompanion:consoleCommandSetSnapTurnAngle("status")
     assert(string.find(statusRes, "90") ~= nil, "status query must show current 90 deg")
 
-    -- 2. Update to 45 degrees
     local set45Res = VRCompanion:consoleCommandSetSnapTurnAngle("45")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
         string.format("VRCompanion angle must be updated to 45 deg (%.4f rad), got %.4f", math.rad(45.0), VRCompanion:getSnapTurnAngle()))
@@ -1280,24 +1182,20 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     assert(savedData["vrSettings.snapTurnAngle"] == 45.0, "Configuration must be saved on change")
     assert(warningShown ~= nil and string.find(warningShown, "45") ~= nil, "Blinking warning must be shown")
 
-    -- 3. Update to 30 degrees
     warningShown = nil
     local set30Res = VRCompanion:consoleCommandSetSnapTurnAngle("30")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(30.0)) < 0.0001, "Angle must update to 30 deg")
     assert(savedData["vrSettings.snapTurnAngle"] == 30.0, "Saved config must update to 30 deg")
 
-    -- 4. Update to 180 degrees
     local set180Res = VRCompanion:consoleCommandSetSnapTurnAngle("180")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(180.0)) < 0.0001, "Angle must update to 180 deg")
     assert(savedData["vrSettings.snapTurnAngle"] == 180.0, "Saved config must update to 180 deg")
 
-    -- 4b. Small degree values (e.g. 5 deg) must be parsed as degrees, not radians
     local set5Res = VRCompanion:consoleCommandSetSnapTurnAngle("5")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(5.0)) < 0.0001,
         string.format("Angle 5 deg must be converted to radians (%.4f), got %.4f", math.rad(5.0), VRCompanion:getSnapTurnAngle()))
     assert(savedData["vrSettings.snapTurnAngle"] == 5.0, "Saved config must update to 5 deg")
 
-    -- 5. Invalid inputs must return usage and NOT change angle
     local prevAngle = VRCompanion:getSnapTurnAngle()
     local inv1 = VRCompanion:consoleCommandSetSnapTurnAngle("notanumber")
     assert(string.find(inv1, "Usage:") ~= nil, "Invalid string must return usage error")
@@ -1315,7 +1213,6 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     assert(string.find(inv4, "Usage:") ~= nil, "Angle > 360 must return usage error")
     assert(VRCompanion:getSnapTurnAngle() == prevAngle, "Angle must not change on > 360")
 
-    -- Clean up mocks
     _G.getUserProfileAppPath = nil
     _G.createFolder = nil
     _G.createXMLFile = nil
@@ -1327,54 +1224,41 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
 end)
 
--- Slice 19: modDesc.xml Schema, Action Bindings, L10n & Settings Invariants
 test("ModDescDeclaresSnapTurnActionsBindingsL10nAndSettings", function()
     local modDescContent = fs.readFile("mods/FS25_VRCompanion/modDesc.xml")
 
-    -- 1. Actions under category ONFOOT VEHICLE
     assert(string.find(modDescContent, '<action name="VR_SNAP_TURN_LEFT" category="ONFOOT VEHICLE"/>') ~= nil,
         "modDesc.xml must declare VR_SNAP_TURN_LEFT action under category ONFOOT VEHICLE")
     assert(string.find(modDescContent, '<action name="VR_SNAP_TURN_RIGHT" category="ONFOOT VEHICLE"/>') ~= nil,
         "modDesc.xml must declare VR_SNAP_TURN_RIGHT action under category ONFOOT VEHICLE")
 
-    -- 2. Input Bindings: KEY_numPad4 / KEY_numPad6 and Gamepad BUTTON_5 / BUTTON_6
     assert(string.find(modDescContent, '<actionBinding action="VR_SNAP_TURN_LEFT">') ~= nil,
         "modDesc.xml must declare actionBinding for VR_SNAP_TURN_LEFT")
     assert(string.find(modDescContent, '<actionBinding action="VR_SNAP_TURN_RIGHT">') ~= nil,
         "modDesc.xml must declare actionBinding for VR_SNAP_TURN_RIGHT")
 
-    -- Check left bindings
     local leftBindingMatch = string.match(modDescContent, '<actionBinding action="VR_SNAP_TURN_LEFT">(.-)</actionBinding>')
     assert(leftBindingMatch ~= nil, "Must extract VR_SNAP_TURN_LEFT binding block")
     assert(string.find(leftBindingMatch, 'input="KEY_numPad4"') ~= nil, "Left binding must map to KEY_numPad4")
     assert(string.find(leftBindingMatch, 'input="BUTTON_5"') ~= nil, "Left binding must map to Gamepad BUTTON_5")
 
-    -- Check right bindings
     local rightBindingMatch = string.match(modDescContent, '<actionBinding action="VR_SNAP_TURN_RIGHT">(.-)</actionBinding>')
     assert(rightBindingMatch ~= nil, "Must extract VR_SNAP_TURN_RIGHT binding block")
     assert(string.find(rightBindingMatch, 'input="KEY_numPad6"') ~= nil, "Right binding must map to KEY_numPad6")
     assert(string.find(rightBindingMatch, 'input="BUTTON_6"') ~= nil, "Right binding must map to Gamepad BUTTON_6")
 
-    -- 3. Localization strings in English and German
     assert(string.find(modDescContent, '<text name="input_VR_SNAP_TURN_LEFT">') ~= nil, "Must have l10n for input_VR_SNAP_TURN_LEFT")
     assert(string.find(modDescContent, '<text name="input_VR_SNAP_TURN_RIGHT">') ~= nil, "Must have l10n for input_VR_SNAP_TURN_RIGHT")
 
     assert(string.find(modDescContent, '<text name="vrSnapTurn_angleSet">') ~= nil, "Must have l10n for the snap turn angle notification")
 
-    -- Check German translations exist
     assert(string.find(modDescContent, "VR%-Blickdrehung links") ~= nil, "Must have German translation for snap turn left")
     assert(string.find(modDescContent, "VR%-Blickdrehung rechts") ~= nil, "Must have German translation for snap turn right")
     assert(string.find(modDescContent, "VR%-Blickdrehungswinkel") ~= nil, "Must have German translation for the snap turn angle notification")
 
-    -- 4. Defaults live in the DEFAULT_* constants, not in modDesc.xml
     assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define a <vrSettings> default block")
 end)
 
--- ====================================================================
--- Outside Camera Snap Turn and Recenter Action
--- ====================================================================
-
--- Fake VRBridge that counts discontinuity signals and recenters
 local function installCountingBridge()
     local calls = { discontinuity = 0, recenter = 0 }
     _G.VRBridge = {
@@ -1395,7 +1279,6 @@ local function controlOutsideCamera(cam)
     return veh
 end
 
--- A rotatable orbit camera the player has already orbited with the mouse
 local function orbitedOutsideCamera()
     return {
         isInside = false,
@@ -1414,7 +1297,6 @@ test("OutsideCameraSnapTurnStepsOrbitYawBySnapAngle", function()
     local orbitCam = orbitedOutsideCamera()
     controlOutsideCamera(orbitCam)
 
-    -- Snap right by 90 deg: 2.8 + pi/2, wrapped into [-pi, pi]
     local ok, newRot = VRCompanion:snapTurnRight(nil, 1000)
 
     VRCompanion:resetSnapTurnDebounce()
@@ -1452,7 +1334,6 @@ test("OutsideCameraSnapTurnKeepsOrbitYawWithinPlusMinusPi", function()
     local orbitCam = orbitedOutsideCamera()
     controlOutsideCamera(orbitCam)
 
-    -- Snap left from 2.8: 2.8 - pi/2 stays in range; snap right wraps (covered above), so start lower
     orbitCam.rotY = -2.8
     VRCompanion:snapTurnLeft(nil, 1000)
 
@@ -1481,7 +1362,6 @@ test("FixedOutsideCameraSnapTurnIsNotHandled", function()
     VRCompanion:resetSnapTurnDebounce()
     local calls = installCountingBridge()
 
-    -- A hitch camera: fixed (not rotatable), aimed down at the drawbar
     local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1301, origRotX = -0.9, origRotY = math.pi, rotX = -0.9, rotY = math.pi }
     controlOutsideCamera(hitchCam)
 
@@ -1502,7 +1382,6 @@ test("FixedOutsideCameraSnapTurnStartsNoDebounceCooldown", function()
     controlOutsideCamera(hitchCam)
     VRCompanion:snapTurnRight(nil, 1000)
 
-    -- Not handled means no cooldown starts: a snap turn right after the next camera switch still works
     local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1302, origRotX = 0, origRotY = 0, rotX = 0, rotY = 0 }
     controlOutsideCamera(orbitCam)
     local ok = VRCompanion:snapTurnRight(nil, 1050)
@@ -1516,12 +1395,10 @@ test("RecenterInOutsideCameraSwingsOrbitBackToDefaultRecordedOnActivation", func
     VRCompanion.recenterVrTrackingSpace = true
     local calls = installCountingBridge()
 
-    -- Engine state when the orbit camera becomes active: this is "forward" for the camera
     local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1401, rotateNode = 1402, rotX = 0.35, rotY = 0.2, zoom = 15.0 }
     local veh = controlOutsideCamera(orbitCam)
     VRCompanion:onVehicleCameraChanged(veh, 2)
 
-    -- Player orbits with the mouse, zooms in, and snap turns
     orbitCam.rotX = 0.9
     orbitCam.rotY = -1.1
     orbitCam.zoom = 8.0
@@ -1567,7 +1444,6 @@ test("RecenterLeavesAFixedOutsideCameraAimedAsTheGameAimedIt", function()
     VRCompanion.recenterVrTrackingSpace = true
     installCountingBridge()
 
-    -- A hitch camera has no orbit: its rotX/rotY are the game's aim, whatever its orig fields say
     local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1601, origRotX = 0, origRotY = 0, rotX = -0.9, rotY = math.pi }
     local veh = controlOutsideCamera(hitchCam)
     VRCompanion:onVehicleCameraChanged(veh, 3)

@@ -1,10 +1,3 @@
-// Hand Tools, the look ray (ADR-0029), seen from outside: the real Companion Mod runs against the
-// real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool). The
-// game's PlayerTargeter reads Player:getLookRay() once per update, as the game's does, and the stub keeps the ray it cast
-// (StubHandTool.lastRay()). A test asserts only that ray: where it starts and which way it points, against the head's (the
-// ray the game gives without VR) and against the tool's pointing axis (the lance's nozzle). Prior art:
-// test_hand_tools_lance.cpp (placement) and test_wheel_grab_steering_wrap.cpp (wrapping a game function).
-
 #include "hand_tools_test_support.h"
 #include <string>
 
@@ -12,13 +5,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers: the three rays a test compares. Each is { x, y, z, dirX, dirY, dirZ } in the world.
-//   targeterRay()   what the targeter cast in the last game frame
-//   headRay()       what the game's own getLookRay answers for the player: the first person camera
-//   headRayOfTheGame()   the first person camera, read from the scene (the game's ray in any game version)
-//   nozzleRay()     where the lance washes from and along
-//   sameRay(a, b)   the two rays start at the same point and point the same way
-//   apart(a, b)     metres between where the two rays start
 constexpr const char* kRayHelpers = R"luau(
     function _G.targeterRay() return { StubHandTool.lastRay() } end
     function _G.headRay() return { StubHandTool.originalGetLookRay(foot.player) } end
@@ -38,9 +24,8 @@ constexpr const char* kRayHelpers = R"luau(
     function _G.rayText(r) return r[1] and string.format("(%.3f %.3f %.3f) -> (%.3f %.3f %.3f)", table.unpack(r)) or "none" end
 )luau";
 
-}  // namespace
+}
 
-// The lance held on foot with the right Motion Controller picked up and a few frames run: the common start below.
 #define LANCE_IN_THE_RIGHT_HAND() \
     FakeTrackedHeadset headset; \
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f)); \
@@ -53,14 +38,12 @@ constexpr const char* kRayHelpers = R"luau(
     FRAMES(2); \
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()")
 
-// Both the aim and the grip pose of the hand set, so the Virtual Hand (grip pose) and the pointer (aim pose) agree.
 #define AIM_HAND(hand, x, y, z, pitch, yaw) \
     do { \
         headset.SetHandPose((hand), hand_tools_test::HandAt((x), (y), (z), (pitch), (yaw))); \
         headset.SetHandGripPose((hand), hand_tools_test::HandAt((x), (y), (z), (pitch), (yaw))); \
     } while (0)
 
-// The ray is the tool's, not the head's: it starts at the nozzle, which is not where the head is, and points along it.
 TEST_F(CompanionModTest, WithTheLanceInTheToolHandTheTargetersRayStartsAtTheNozzleAndPointsAlongItAndFollowsTheHandAcrossFrames) {
     LANCE_IN_THE_RIGHT_HAND();
 
@@ -68,8 +51,6 @@ TEST_F(CompanionModTest, WithTheLanceInTheToolHandTheTargetersRayStartsAtTheNozz
         << "the targeter cast " << EvalLua(L, "rayText(targeterRay())") << ", the nozzle is " << EvalLua(L, "rayText(nozzleRay())");
     EXPECT_GT(Number(L, "apart(targeterRay(), headRay())"), 0.2) << "and not from the head: the hand is held away from it";
 
-    // The hand moves and turns; the ray follows (the targeter reads the ray before the mod's update of its frame, so the
-    // frame after the one that moved the hand shows it).
     ASSERT_EQ(RunLuauChunk(L, "_G.before = targeterRay(); _G.nozzleBefore = nozzleRay()", "=before"), 0);
     AIM_HAND(kRight, 0.50f, 0.15f, -0.55f, 0.6f, 0.9f);
     FRAMES(2);
@@ -80,17 +61,15 @@ TEST_F(CompanionModTest, WithTheLanceInTheToolHandTheTargetersRayStartsAtTheNozz
     EXPECT_GT(Number(L, "apart(before, targeterRay())"), 0.3) << "so the ray starts somewhere else now";
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false");
 
-    // It points the way the hand points: along the nozzle, which is a unit direction that is not the head's.
     EXPECT_NEAR(Number(L, "targeterRay()[4]^2 + targeterRay()[5]^2 + targeterRay()[6]^2"), 1.0, 1e-3);
     EXPECT_LT(Number(L, "targeterRay()[4]*headRay()[4] + targeterRay()[5]*headRay()[5] + targeterRay()[6]*headRay()[6]"), 0.99)
         << "turned away from where the head looks";
 }
 
-// Everything that is not "a supported tool in a tracked Tool Hand" is the game's own ray, from the head.
 TEST_F(CompanionModTest, WhileTheToolHandIsSetDownOrUntrackedTheTargetersRayIsTheHeadsAndTheToolsAgainWhenItIsPickedUp) {
     LANCE_IN_THE_RIGHT_HAND();
 
-    AdvanceGameTime(3100);  // set down: the Motion Controller lies still for longer than the in-use timeout
+    AdvanceGameTime(3100);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true")
         << "set down: the targeter cast " << EvalLua(L, "rayText(targeterRay())") << ", the head's is " << EvalLua(L, "rayText(headRay())");
@@ -106,8 +85,7 @@ TEST_F(CompanionModTest, WhileTheToolHandIsSetDownOrUntrackedTheTargetersRayIsTh
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), nozzleRay())"), "true") << "tracked again: the tool's ray";
 
-    // Only the grip pose lost: there is no Virtual Hand to hold the tool, so the tool is not in the hand.
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), false);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true");
 }
@@ -147,7 +125,6 @@ TEST_F(CompanionModTest, ALeftMotionControllerPickedUpDoesNotMoveTheTargetersRay
 TEST_F(CompanionModTest, WithVrHandToolsOffOrMotionControllersOffTheTargetersRayIsTheHeadsAtOnce) {
     LANCE_IN_THE_RIGHT_HAND();
 
-    // At once: the targeter's very next update, with no mod update in between.
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off'); StubHandTool.tick(16.667)", "=off"), 0);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "vrHandTools off: the head's ray";
     FRAMES(2);
@@ -168,7 +145,6 @@ TEST_F(CompanionModTest, WithVrHandToolsOffOrMotionControllersOffTheTargetersRay
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), nozzleRay())"), "true") << "Motion Controllers on again: the tool's ray";
 }
 
-// Only the player who holds the tool aims it: another player's look ray (a remote player's, say) is the game's own.
 TEST_F(CompanionModTest, AnotherPlayersLookRayIsNotTheLances) {
     LANCE_IN_THE_RIGHT_HAND();
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -179,8 +155,6 @@ TEST_F(CompanionModTest, AnotherPlayersLookRayIsNotTheLances) {
     EXPECT_EQ(EvalLua(L, "sameRay(otherRay, headRay())"), "true");
 }
 
-// A game whose getLookRay is not what the wrap expects: the targeter works as in the game, and the log says so once
-// (the shared give-up of Hand Tools: ADR-0029, as ADR-0026 and ADR-0027).
 #define HAND_TOOLS_GIVE_UP_WHEN_GET_LOOK_RAY_IS(gameVariant) \
     do { \
         FakeTrackedHeadset headset; \
@@ -218,7 +192,6 @@ TEST_F(CompanionModTest, WithGetLookRayReshapedTheTargeterWorksAsInTheGameAndThe
     HAND_TOOLS_GIVE_UP_WHEN_GET_LOOK_RAY_IS("reshaped");
 }
 
-// The wrap is on the class while the map is loaded and gone with it; another mod's later wrap is never undone.
 TEST_F(CompanionModTest, UnloadingTheMapGivesPlayerGetLookRayBackAndAnotherModsLaterWrapIsNeverUndone) {
     LANCE_IN_THE_RIGHT_HAND();
     ASSERT_EQ(EvalLua(L, "Player.getLookRay == StubHandTool.originalGetLookRay"), "false") << "wrapped while the map is loaded";
@@ -236,9 +209,6 @@ TEST_F(CompanionModTest, UnloadingTheMapGivesPlayerGetLookRayBackAndAnotherModsL
     EXPECT_EQ(EvalLua(L, "Player.getLookRay == theirWrap"), "true") << "the other mod's wrap is still the class function";
 }
 
-// The wrap of Player:getLookRay asks each subsystem that can aim, in a fixed order (Hand Tools first, then Object Grab), and
-// takes the first ray it gets; the game's own (the head's) is the fallback. A subsystem registers with
-// VRCompanion:registerLookRayAimer(name, function(player) -> x, y, z, dirX, dirY, dirZ | nil).
 constexpr const char* kFixedAim = R"luau(
     _G.fixedAim = { 0.5, 1.25, -2.0, 0, 0, -1 }
     _G.aimerAsked = 0
@@ -282,7 +252,7 @@ TEST_F(CompanionModTest, TheHandToolsAreAskedFirstSoTheToolsRayWinsOverAnotherSu
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), nozzleRay())"), "true") << "the tool's ray: " << EvalLua(L, "rayText(targeterRay())");
     EXPECT_EQ(EvalLua(L, "aimerAsked"), "0") << "the first answer ends the asking";
 
-    AdvanceGameTime(3100);  // the lance is set down: the Hand Tools do not aim, so the other subsystem does
+    AdvanceGameTime(3100);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), fixedAim)"), "true") << "the targeter cast " << EvalLua(L, "rayText(targeterRay())");
 }

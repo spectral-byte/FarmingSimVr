@@ -28,3 +28,5 @@ Proposed.
 - The hitch and the PTO stub sit close together: 15 cm apart is about 4° from 2 m, inside the 5° cone. The nearest-to-centre rule picks between them, more easily up close.
 - A vehicle with no PTO output or hose target of its own for a hitch (a pass-through PTO, for one) has no Coupling Point for that action, which stays on Manual Attach's key.
 - Multiplayer stays in sync through Manual Attach's own events and the game's attach event, because its own paths are what runs.
+
+More decisions about this area, from the code comments: [ADR-0052](0052-animated-object-and-manual-attach-decisions.md).

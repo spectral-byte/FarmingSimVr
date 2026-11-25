@@ -5,14 +5,8 @@
 #include <fstream>
 #include <regex>
 
-// The player is warned when the Injector and the Companion Mod come from different releases (#243, #250).
-// The shipped Companion Mod runs in a Luau state against the real VRBridge, the game stood in by the stubs of the
-// Companion Mod test fixture. What is asserted is what the player and the logs show: the game's blinking warning,
-// the lines the mod prints to log.txt and the lines the Injector writes to fs25_vr.log.
-
 namespace {
 
-// The version the Companion Mod is released as: modDesc.xml's <version>, the one place it is written.
 std::string ReleaseVersion() {
     std::smatch version;
     const std::string modDesc = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
@@ -20,7 +14,6 @@ std::string ReleaseVersion() {
     return version[1].str();
 }
 
-// The lines that name every one of the needles.
 std::vector<std::string> LinesNaming(const std::vector<std::string>& lines, const std::vector<std::string>& needles) {
     std::vector<std::string> found;
     for (const std::string& line : lines) {
@@ -37,7 +30,6 @@ struct Warning {
     double ms;
 };
 
-// The Injector's log (fs25_vr.log) redirected to a temp file while a test runs.
 class InjectorLog {
 public:
     InjectorLog() : m_path(std::filesystem::temp_directory_path() / "fs25vr_version_warning_test.log") {
@@ -60,11 +52,10 @@ private:
     std::filesystem::path m_path;
 };
 
-} // namespace
+}
 
 class InjectorVersionWarningTest : public CompanionModTest {
 protected:
-    // The game with a mission that records the blinking warnings it is asked to show.
     void SetUp() override {
         CompanionModTest::SetUp();
         InstallMissionStub();
@@ -108,7 +99,6 @@ protected:
         return shown;
     }
 
-    // The warnings that are about the two versions not matching (the mod shows others, such as the HUD notice at load).
     std::vector<Warning> VersionWarnings() {
         std::vector<Warning> versionWarnings;
         for (const Warning& w : ShownWarnings()) {
@@ -117,14 +107,11 @@ protected:
         return versionWarnings;
     }
 
-    // What the player and the logs show for one map load and a few frames against an Injector of the given version, on a
-    // fresh game: the version lines are left out of `printed`, and the Injector's version is written as the release in the
-    // other lines (the handshake line names it), so that two runs can be compared.
     struct Observed {
         int versionWarnings = 0;
         std::vector<std::string> otherWarnings;
         std::vector<std::string> printed;
-        std::string bridgeCalls;  // each VRBridge function the mod called and how often, sorted by name
+        std::string bridgeCalls;
         std::string companionActive;
     };
 
@@ -179,7 +166,6 @@ protected:
         return observed;
     }
 
-    // The lines the mod printed to log.txt that name every one of the needles.
     std::vector<std::string> PrintedLinesNaming(const std::vector<std::string>& needles) {
         return LinesNaming(s_capturedLogs, needles);
     }
@@ -213,7 +199,6 @@ TEST_F(InjectorVersionWarningTest, DifferentVersionsShowTheBlinkingWarningNaming
 }
 
 TEST_F(InjectorVersionWarningTest, AnInjectorOf1_0_0IsCalledAnOlderVersionNotQuoted) {
-    // Every release up to 1.2 reported the fixed text 1.0.0, which says nothing about the release.
     fs25vr::VRBridge bridge(nullptr, nullptr, "1.0.0");
     LoadMod(bridge);
     LoadMap();
@@ -229,7 +214,6 @@ TEST_F(InjectorVersionWarningTest, AnInjectorOf1_0_0IsCalledAnOlderVersionNotQuo
 }
 
 TEST_F(InjectorVersionWarningTest, ThePassThroughModePlayerSeesTheWarningToo) {
-    // No headset session: the Injector forwards the game's calls and VRBridge says it is not ready.
     fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
     LoadMod(bridge);
     ASSERT_EQ(RunLuauChunk(L, R"luau(assert(VRBridge.isReady() == false, "no VR session runs"))luau", "=passThrough"), 0);
@@ -258,7 +242,6 @@ TEST_F(InjectorVersionWarningTest, AMismatchChangesNothingElseThePlayerAndTheLog
     const Observed matching = LoadMapAgainstAnInjectorOf(release);
     const Observed mismatching = LoadMapAgainstAnInjectorOf("7.8.9");
 
-    // The warning and the version lines are the whole difference.
     EXPECT_EQ(matching.versionWarnings, 0);
     EXPECT_EQ(mismatching.versionWarnings, 1);
     EXPECT_EQ(mismatching.otherWarnings, matching.otherWarnings) << "the game shows the same other warnings";
@@ -349,7 +332,6 @@ TEST_F(InjectorVersionWarningTest, TheReadmeTroubleshootingExplainsTheWarning) {
     const size_t entryEnd = std::min(readme.find("\n### ", entry + 1), readme.find("\n## ", entry + 1));
     const std::string text = readme.substr(entry, entryEnd - entry);
 
-    // It names what the player sees on the screen and what to do about it.
     fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
     LoadMod(bridge);
     LoadMap();
@@ -362,7 +344,6 @@ TEST_F(InjectorVersionWarningTest, TheReadmeTroubleshootingExplainsTheWarning) {
     EXPECT_NE(text.find("FS25_VRCompanion.zip"), std::string::npos) << "and the Companion Mod's file";
     EXPECT_NE(text.find("an older version"), std::string::npos) << "and what the warning says of a 1.2 or earlier Injector";
 
-    // The README.txt that package_release.ps1 writes into the bundle carries the same entry
     const std::string packaging = ReadFile("scripts/package_release.ps1");
     const size_t bundledEntry = packaging.find("IF A WARNING SAYS THE INJECTOR AND THE COMPANION MOD ARE FROM DIFFERENT VERSIONS");
     ASSERT_NE(bundledEntry, std::string::npos) << "the bundle's README.txt has the entry too";
@@ -373,7 +354,6 @@ TEST_F(InjectorVersionWarningTest, TheReadmeTroubleshootingExplainsTheWarning) {
 }
 
 TEST_F(InjectorVersionWarningTest, TheModsVersionConstantIsTheVersionInModDesc) {
-    // The Companion Mod holds its version as a constant, and a release bumps modDesc.xml: this fails when they disagree.
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion.VERSION"), ReleaseVersion());
 }

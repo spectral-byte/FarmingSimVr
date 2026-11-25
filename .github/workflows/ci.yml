@@ -5,7 +5,6 @@ on:
     branches: [main, beta]
   pull_request:
 
-# Superseded PR pushes are cancelled; every push to main or beta keeps its own result.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -13,7 +12,6 @@ concurrency:
 permissions:
   contents: read
 
-# The steps live in build-and-test.yml, shared with the release workflow so the two cannot drift apart.
 jobs:
   build-and-test:
     uses: ./.github/workflows/build-and-test.yml

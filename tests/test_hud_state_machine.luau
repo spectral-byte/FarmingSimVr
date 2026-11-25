@@ -1,12 +1,6 @@
--- ====================================================================
--- Test Suite for VR HUD Toggle Action & State Machine
--- ====================================================================
-
 local fs = require("@lune/fs")
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
--- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
 VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
@@ -25,7 +19,6 @@ end
 
 print("Running VR HUD State Machine Tests...")
 
--- Slice 1: modDesc.xml declarations
 test("ModDescDeclaresHudToggleActionAndBindings", function()
     local modDescContent = fs.readFile("mods/FS25_VRCompanion/modDesc.xml")
     assert(string.find(modDescContent, '<action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>') ~= nil,
@@ -36,7 +29,6 @@ test("ModDescDeclaresHudToggleActionAndBindings", function()
         "modDesc.xml must declare l10n text for input_VR_HUD_TOGGLE")
 end)
 
--- Slice 2: State constants, query/set, cycle transitions, and clamping
 test("DefinesThreeStageHudStateConstants", function()
     assert(VRCompanion.HUD_STATE_HIDDEN == 0, "HUD_STATE_HIDDEN must be 0")
     assert(VRCompanion.HUD_STATE_STREAMLINED == 1, "HUD_STATE_STREAMLINED must be 1")
@@ -44,21 +36,17 @@ test("DefinesThreeStageHudStateConstants", function()
 end)
 
 test("CyclesThroughThreeStageStateMachine", function()
-    -- Reset to Hidden
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     assert(VRCompanion:getHudState() == 0, "Initial state must be 0 (Hidden)")
 
-    -- Cycle 1: Hidden (0) -> Streamlined (1)
     local s1 = VRCompanion:cycleHudState()
     assert(s1 == 1, "First cycle must advance to 1 (Streamlined)")
     assert(VRCompanion:getHudState() == 1, "getHudState must report 1")
 
-    -- Cycle 2: Streamlined (1) -> Full (2)
     local s2 = VRCompanion:cycleHudState()
     assert(s2 == 2, "Second cycle must advance to 2 (Full)")
     assert(VRCompanion:getHudState() == 2, "getHudState must report 2")
 
-    -- Cycle 3: Full (2) -> Hidden (0)
     local s3 = VRCompanion:cycleHudState()
     assert(s3 == 0, "Third cycle must return to 0 (Hidden)")
     assert(VRCompanion:getHudState() == 0, "getHudState must report 0")
@@ -97,13 +85,11 @@ test("IsDisplayVisibleFiltersComponentsAcrossAllThreeStates", function()
         "GameInfoDisplay"
     }
 
-    -- 1. Hidden (0): All elements must be suppressed
     for _, d in ipairs(displays) do
         assert(VRCompanion:isDisplayVisible(d, VRCompanion.HUD_STATE_HIDDEN) == false,
             d .. " must be false in Hidden state")
     end
 
-    -- 2. Streamlined (1): Essential driving/implement telemetry visible; background panels suppressed
     assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true,
         "SpeedMeterDisplay must be visible in Streamlined state")
     assert(VRCompanion:isDisplayVisible("ContextActionDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true,
@@ -118,13 +104,11 @@ test("IsDisplayVisibleFiltersComponentsAcrossAllThreeStates", function()
     assert(VRCompanion:isDisplayVisible("GameInfoDisplay", VRCompanion.HUD_STATE_STREAMLINED) == false,
         "GameInfoDisplay clock/weather must be suppressed in Streamlined state")
 
-    -- 3. Full (2): All elements restored
     for _, d in ipairs(displays) do
         assert(VRCompanion:isDisplayVisible(d, VRCompanion.HUD_STATE_FULL) == true,
             d .. " must be visible in Full state")
     end
 
-    -- 4. Defaults to active state when state parameter is omitted
     VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
     assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay") == true, "SpeedMeterDisplay visible with omitted state")
     assert(VRCompanion:isDisplayVisible("IngameMap") == false, "IngameMap suppressed with omitted state")
@@ -133,7 +117,6 @@ test("IsDisplayVisibleFiltersComponentsAcrossAllThreeStates", function()
     assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay") == false, "SpeedMeterDisplay hidden with omitted state")
 end)
 
--- HUD Groups (spec #50, ticket #51): visibility is looked up through a display's group
 test("DefinesTheFourHudGroupsWithTheirMemberDisplaysAndHomeCorners", function()
     local groups = VRCompanion.HUD_GROUPS
     assert(type(groups) == "table", "HUD_GROUPS must be defined")
@@ -166,19 +149,16 @@ test("DefinesTheFourHudGroupsWithTheirMemberDisplaysAndHomeCorners", function()
     assert(count == 4, "There are exactly four HUD Groups")
 end)
 
--- Per-group visibility (spec #50, ticket #53)
 test("GroupVisibilityDefaultsComeFromDefaultConstants", function()
     local streamlinedDefaults = VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED
     local fullDefaults = VRCompanion.DEFAULT_HUD_GROUP_FULL
     assert(type(streamlinedDefaults) == "table" and type(fullDefaults) == "table", "per-group visibility defaults must be DEFAULT_* constants")
 
-    -- Streamlined = Speedometer group only; Full = all four groups
     for name, _ in pairs(VRCompanion.HUD_GROUPS) do
         assert(streamlinedDefaults[name] == (name == "speedometer"), name .. " Streamlined default")
         assert(fullDefaults[name] == true, name .. " Full default")
     end
 
-    -- A fresh copy of the mod starts every group at those defaults
     local saved = _G.VRCompanion
     _G.VRCompanion = nil
     local ok, err = pcall(function()
@@ -239,8 +219,6 @@ test("ContextActionVisibilityIsIndependentOfTheGroups", function()
     assert(ok, err)
 end)
 
--- Runs fn with the group flags restored to their defaults afterwards and the settings file and
--- the on-screen warning mocked. Returns what the game would have observed.
 local function withGroupVisibilityHarness(fn)
     local savedFlags = {}
     for name, group in pairs(VRCompanion.HUD_GROUPS) do
@@ -283,7 +261,6 @@ test("VrHudGroupShowAppliesSavesAndConfirms", function()
         VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
         assert(hud.ingameMap.isVisible == false, "the map starts out of the Streamlined HUD")
 
-        -- Map on in Streamlined: applies at once, saves, and confirms on screen
         local result = VRCompanion:consoleCommandHudGroupShow("map", "streamlined", "on")
         assert(hud.ingameMap.isVisible == true, "the change must apply immediately")
         assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_STREAMLINED) == true)
@@ -294,7 +271,6 @@ test("VrHudGroupShowAppliesSavesAndConfirms", function()
         assert(#observed.warnings == 1 and string.find(observed.warnings[1], "Map", 1, true) ~= nil, "on-screen confirmation names the group")
         assert(type(result) == "string" and string.find(result, "map", 1, true) ~= nil, "console result confirms the change")
 
-        -- A group may be on in Streamlined but off in Full
         VRCompanion:consoleCommandHudGroupShow("map", "full", "off")
         assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_STREAMLINED) == true)
         assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_FULL) == false)
@@ -303,12 +279,10 @@ test("VrHudGroupShowAppliesSavesAndConfirms", function()
         assert(hud.ingameMap.isVisible == false, "map is out of the Full HUD")
         assert(hud.speedMeter.isVisible == true, "other groups keep their flags")
 
-        -- The speedometer group's flag governs both its displays; the context action prompt ignores it
         VRCompanion:consoleCommandHudGroupShow("speedometer", "full", "off")
         assert(hud.speedMeter.isVisible == false and hud.fillLevels.isVisible == false, "both speedometer displays follow the group")
         assert(hud.contextAction.isVisible == true, "context action stays visible in Full")
 
-        -- Hidden shows nothing whatever the flags say
         for name, _ in pairs(VRCompanion.HUD_GROUPS) do
             VRCompanion:consoleCommandHudGroupShow(name, "streamlined", "on")
             VRCompanion:consoleCommandHudGroupShow(name, "full", "on")
@@ -342,7 +316,6 @@ test("VrHudGroupShowWithBadArgumentsPrintsUsageAndEveryGroupsVisibility", functi
                 assert(string.find(result, name, 1, true) ~= nil, name .. " must be listed with its visibility")
             end
         end
-        -- Current values appear: info is Streamlined on, Full off
         local result = VRCompanion:consoleCommandHudGroupShow()
         assert(string.find(result, "info: streamlined=on full=off", 1, true) ~= nil, "current visibility listed: " .. result)
         assert(string.find(result, "speedometer: streamlined=on full=on", 1, true) ~= nil, "default speedometer visibility listed")
@@ -403,7 +376,6 @@ test("HudCycleNotificationListsTheGroupsThatAreOnInTheNewState", function()
     end)
 end)
 
--- Slice 3: HUD visibility and display state application
 test("AppliesHiddenStateToHudAndDisplays", function()
     local hud = {
         isVisible = true,
@@ -455,12 +427,10 @@ test("AppliesStreamlinedStatePreservingEssentialTelemetryAndSuppressingBulkyPane
     assert(hud.setIsVisibleCalled == true, "hud:setIsVisible must be called")
     assert(hud.isVisible == true, "hud:setIsVisible(true) must be applied in Streamlined mode")
 
-    -- Essential driving and machine telemetry preserved
     assert(hud.speedMeter.isVisible == true, "speedMeter must be visible in Streamlined mode")
     assert(hud.fillLevels.isVisible == true, "machine fill levels must be visible in Streamlined mode")
     assert(hud.contextAction.isVisible == true, "contextAction prompts must be visible in Streamlined mode")
 
-    -- Bulky secondary panels suppressed (minimap, input help, clock, weather)
     assert(hud.inputHelp.isVisible == false, "inputHelp must be suppressed in Streamlined mode")
     assert(hud.ingameMap.isVisible == false, "ingameMap must be suppressed in Streamlined mode")
     assert(hud.gameInfo.isVisible == false, "gameInfo (clock, weather) must be suppressed in Streamlined mode")
@@ -488,7 +458,6 @@ test("AppliesFullStateRestoringAllDisplays", function()
     assert(hud.setIsVisibleCalled == true, "hud:setIsVisible must be called")
     assert(hud.isVisible == true, "hud:setIsVisible(true) must be applied in Full mode")
 
-    -- All base-game elements visible
     assert(hud.speedMeter.isVisible == true, "speedMeter must be visible in Full mode")
     assert(hud.fillLevels.isVisible == true, "fillLevels must be visible in Full mode")
     assert(hud.inputHelp.isVisible == true, "inputHelp must be visible in Full mode")
@@ -521,7 +490,6 @@ test("StreamlinedStatePreservesGranularDrivingAndImplementMetrics", function()
     }
     _G.g_currentMission = { hud = hud }
 
-    -- 1. Streamlined mode: essential metrics remain visible, bulky panels suppressed
     VRCompanion:applyHudState(VRCompanion.HUD_STATE_STREAMLINED)
     assert(hud.isVisible == true)
     assert(hud.speedMeter.isVisible == true)
@@ -535,7 +503,6 @@ test("StreamlinedStatePreservesGranularDrivingAndImplementMetrics", function()
     assert(hud.gameInfo.isVisible == false, "gameInfo suppressed in Streamlined")
     assert(hud.ingameMap.isVisible == false, "ingameMap suppressed in Streamlined")
 
-    -- 2. Hidden mode: all elements suppressed
     VRCompanion:applyHudState(VRCompanion.HUD_STATE_HIDDEN)
     assert(hud.isVisible == false)
     assert(hud.speedMeter.isVisible == false)
@@ -546,7 +513,6 @@ test("StreamlinedStatePreservesGranularDrivingAndImplementMetrics", function()
     assert(hud.speedMeter.fillLevelsDisplay.isVisible == false, "fillLevelsDisplay hidden in Hidden")
     assert(hud.contextAction.isVisible == false, "contextAction hidden in Hidden")
 
-    -- 3. Full mode: all elements restored
     VRCompanion:applyHudState(VRCompanion.HUD_STATE_FULL)
     assert(hud.isVisible == true)
     assert(hud.speedMeter.isVisible == true)
@@ -561,7 +527,6 @@ test("StreamlinedStatePreservesGranularDrivingAndImplementMetrics", function()
     assert(hud.ingameMap.isVisible == true, "ingameMap visible in Full")
 end)
 
--- Slice 4: Map lifecycle (defaults to Hidden on loadMap, restored on deleteMap)
 test("LoadMapInitializesHudInHiddenStateAndRegistersAction", function()
     local registeredActions = {}
     _G.g_inputBinding = {
@@ -597,13 +562,11 @@ test("LoadMapInitializesHudInHiddenStateAndRegistersAction", function()
     VRCompanion:configureHudSafeArea()
     VRCompanion:loadMap("mapUS")
 
-    -- Check HUD state defaulted to Hidden (0)
     assert(VRCompanion:getHudState() == 0, "HUD state must default to 0 (Hidden) on map load")
     assert(mockHud.setIsVisibleCalled == true, "hud:setIsVisible must be called on map load")
     assert(mockHud.lastVisibleParam == false, "hud:setIsVisible(false) must be called on map load")
     assert(mockHud.isVisible == false, "mockHud.isVisible must be false")
 
-    -- Check VR_HUD_TOGGLE action was registered
     local foundToggleAction = false
     for _, reg in ipairs(registeredActions) do
         if reg.actionName == "VR_HUD_TOGGLE" then
@@ -642,7 +605,6 @@ test("DeleteMapRestoresFullHudVisibility", function()
     assert(mockHud.inputHelp.isVisible == true, "inputHelp must be restored on map delete")
 end)
 
--- Slice 5: GUI menu transition preserves user-selected HUD state
 test("PreservesSelectedHudStateWhenTransitioningThroughGuiMenus", function()
     local mockHud = {
         isVisible = true,
@@ -662,22 +624,18 @@ test("PreservesSelectedHudStateWhenTransitioningThroughGuiMenus", function()
 
     VRCompanion:loadMap("mapUS")
 
-    -- 1. User cycles to Streamlined (1)
     VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
     assert(VRCompanion:getHudState() == 1, "User selected Streamlined (1)")
     assert(mockHud.speedMeter.isVisible == true, "Speedmeter visible")
     assert(mockHud.inputHelp.isVisible == false, "inputHelp hidden")
 
-    -- 2. User enters ESC pause menu or dealership GUI
     guiVisible = true
     VRCompanion:update(16)
     assert(VRCompanion.isMenuVisible == true, "Companion detected menu visible")
     assert(VRCompanion:getHudState() == 1, "hudState preserved as Streamlined during menu open")
 
-    -- Simulate vanilla engine / screen altering HUD during menu
     mockHud.inputHelp.isVisible = true
 
-    -- 3. User exits menu back to active 3D gameplay
     guiVisible = false
     VRCompanion:update(16)
     assert(VRCompanion.isMenuVisible == false, "Companion detected menu closed")
@@ -687,27 +645,21 @@ test("PreservesSelectedHudStateWhenTransitioningThroughGuiMenus", function()
     assert(mockHud.inputHelp.isVisible == false, "inputHelp preserved as hidden in Streamlined mode")
     assert(mockHud.ingameMap.isVisible == false, "ingameMap preserved as hidden in Streamlined mode")
 
-    -- 4. User cycles to Hidden (0)
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     assert(VRCompanion:getHudState() == 0, "User selected Hidden (0)")
     assert(mockHud.isVisible == false, "HUD hidden in state 0")
 
-    -- Enter GUI menu again
     guiVisible = true
     VRCompanion:update(16)
-    -- Simulate vanilla restoring HUD to visible on menu close
     mockHud.isVisible = true
 
-    -- Exit GUI menu back to active 3D gameplay
     guiVisible = false
     VRCompanion:update(16)
     assert(VRCompanion:getHudState() == 0, "hudState preserved as Hidden (0)")
     assert(mockHud.isVisible == false, "HUD must remain hidden after exiting menu")
 end)
 
--- Slice 6: Component visibility hooks into native engine HUD display interfaces
 test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", function()
-    -- Set up mock global display classes
     local draws = {
         HUD = 0,
         SpeedMeterDisplay = 0,
@@ -748,11 +700,9 @@ test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", functi
         getIsVisible = function(self) return true end
     }
 
-    -- 1. Hook HUD
     VRCompanion:hookHud()
     assert(VRCompanion.hudHooked == true, "hudHooked must be true after hookHud()")
 
-    -- 2. Test Streamlined state (1):
     VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
     draws = { HUD = 0, SpeedMeterDisplay = 0, ContextActionDisplay = 0, FillLevelsDisplay = 0, IngameMap = 0, InputHelpDisplay = 0, GameInfoDisplay = 0 }
 
@@ -778,7 +728,6 @@ test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", functi
     assert(_G.IngameMap:getIsVisible() == false, "IngameMap:getIsVisible must be false")
     assert(_G.GameInfoDisplay:getIsVisible() == false, "GameInfoDisplay:getIsVisible must be false")
 
-    -- 3. Test Hidden state (0):
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     draws = { HUD = 0, SpeedMeterDisplay = 0, ContextActionDisplay = 0, FillLevelsDisplay = 0, IngameMap = 0, InputHelpDisplay = 0, GameInfoDisplay = 0 }
 
@@ -801,7 +750,6 @@ test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", functi
     assert(_G.SpeedMeterDisplay:getIsVisible() == false, "SpeedMeterDisplay:getIsVisible must be false in Hidden mode")
     assert(_G.IngameMap:getIsVisible() == false, "IngameMap:getIsVisible must be false in Hidden mode")
 
-    -- 4. Test Full state (2):
     VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
     draws = { HUD = 0, SpeedMeterDisplay = 0, ContextActionDisplay = 0, FillLevelsDisplay = 0, IngameMap = 0, InputHelpDisplay = 0, GameInfoDisplay = 0 }
 
@@ -825,7 +773,6 @@ test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", functi
     assert(_G.IngameMap:getIsVisible() == true, "IngameMap:getIsVisible must be true in Full mode")
     assert(_G.GameInfoDisplay:getIsVisible() == true, "GameInfoDisplay:getIsVisible must be true in Full mode")
 
-    -- Clean up hooks
     VRCompanion:unhookHud()
     assert(VRCompanion.hudHooked == false, "hudHooked must be false after unhookHud()")
 end)
@@ -843,7 +790,6 @@ test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
         }
         VRCompanion:hookHud()
 
-        -- Map on in Streamlined, info off in Full
         VRCompanion.HUD_GROUPS.map.streamlined = true
         VRCompanion.HUD_GROUPS.info.full = false
 
@@ -866,8 +812,6 @@ test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
     end)
 end)
 
--- The game's help toggle (F1) minimizes the controls by hiding the input help. Cycling the HUD back to Full
--- keeps that choice instead of opening the controls maximized, and the choice is saved.
 test("ControlsKeepThePlayersMinimizedOrMaximizedChoiceAcrossHudStates", function()
     withGroupVisibilityHarness(function(observed)
         local savedExpanded = VRCompanion.controlsExpanded
@@ -920,7 +864,6 @@ test("ControlsKeepThePlayersMinimizedOrMaximizedChoiceAcrossHudStates", function
     end)
 end)
 
--- The state the player picks is saved; the Full the mod forces while a map is unloaded is not.
 test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
     withGroupVisibilityHarness(function(observed)
         local savedPersisted, savedTime = VRCompanion.persistedHudState, _G.g_time
@@ -938,7 +881,6 @@ test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
         assert(observed.store["vrSettings.hudState"] == "Hidden", "vrHudState saves the state it sets")
         assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_HIDDEN, "the saved state follows the player's choice")
 
-        -- What map unload does: show everything again for the 2D interface, without changing the saved choice
         VRCompanion:consoleCommandSetHudState("1")
         VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
         VRCompanion:saveConfiguration()
@@ -948,9 +890,6 @@ test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
     end)
 end)
 
--- The engine builds the map's layout in the screen corner and draws its content, ring and north arrow
--- there at absolute overlay positions that setPosition does not move, so the draw itself is shifted from
--- the engine's corner to the Map group's position.
 test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout
@@ -977,7 +916,7 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
         VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
         VRCompanion.currentConvergenceOffset = 0.01
         VRCompanion.is2DViewActive = false
-        VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH -- the Map group at its layout size
+        VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
         VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
         local function near(a, b) return math.abs(a - b) < 0.0001 end
@@ -987,7 +926,6 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
             return rendered[1], rendered[2]
         end
 
-        -- Shifted by the Map group's position (margins plus convergence offset) minus the engine's corner
         local c, r = drawMap()
         assert(near(c.x, -0.2637 + 0.117) and near(c.y, -0.441 + 0.3244), "the map content is shifted to the Map group")
         assert(near(c.cx1, 0.02 + 0.117) and near(c.cy1, 0.03 + 0.3244) and near(c.cx2, 0.12 + 0.117) and near(c.cy2, 0.14 + 0.3244),
@@ -996,17 +934,14 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
         assert(content.x == -0.2637 and content.y == -0.441 and ring.x == 0.0156 and ring.y == 0.0187,
             "the overlays are put back where the engine had them")
 
-        -- Draws outside the map's own methods are not shifted
         rendered = {}
         _G.Overlay.render(ring)
         assert(near(rendered[1].x, 0.0156) and near(rendered[1].y, 0.0187), "other overlays are drawn where the engine put them")
 
-        -- Changing the Map group's margins moves the map
         VRCompanion:setHudGroupLayout("map", 0.2, 0.25)
         c, r = drawMap()
         assert(near(r.x, 0.0156 + (0.21 - 0.013)) and near(r.y, 0.0187 + (0.25 - 0.0156)), "changing the Map group's margins moves the map")
 
-        -- Fullscreen, 2D Floating Window Mode and the Hidden HUD keep the engine's position
         _G.IngameMap.isFullscreen = true
         c, r = drawMap()
         assert(near(r.x, 0.0156) and near(r.y, 0.0187), "the fullscreen map keeps the engine's position")
@@ -1020,7 +955,6 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
         assert(c == nil, "the Hidden HUD draws no map")
         VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
-        -- A draw that fails leaves later draws unshifted outside the map
         VRCompanion:unhookHud()
         _G.IngameMapLayoutCircle.drawAfter = function() error("draw failed") end
         VRCompanion:hookHud()
@@ -1039,8 +973,6 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
     end)
 end)
 
--- The circular crop of the map is a 2D mask the layout sets in drawBefore at absolute screen coordinates, and its
--- coordinates readout is drawn from the same layout fields, so both follow the shift as well.
 test("MapMaskAndTextFollowTheMapGroup", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout
@@ -1054,7 +986,6 @@ test("MapMaskAndTextFollowTheMapGroup", function()
         local layout = { overlayMask = 77, mapPosX = 0.02, mapPosY = 0.03, mapSizeX = 0.1, mapSizeY = 0.12 }
         _G.IngameMapLayoutCircle = {
             drawBefore = function(self)
-                -- the engine's own mask, at the corner
                 _G.set2DMaskFromOverlay(self.overlayMask, true, self.mapPosX, self.mapPosY, self.mapSizeX, self.mapSizeY)
             end,
             drawCoordinates = function(self, text)
@@ -1076,7 +1007,7 @@ test("MapMaskAndTextFollowTheMapGroup", function()
         VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
         VRCompanion.currentConvergenceOffset = 0.01
         VRCompanion.is2DViewActive = false
-        VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH -- the Map group at its layout size
+        VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
         VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
         local function near(a, b) return math.abs(a - b) < 0.0001 end
@@ -1091,7 +1022,6 @@ test("MapMaskAndTextFollowTheMapGroup", function()
         assert(near(textAt.x, 0.02 + dx) and near(textAt.y, 0.03 + dy), "the coordinates readout is drawn from the shifted position")
         assert(layout.mapPosX == 0.02 and layout.mapPosY == 0.03, "the layout's own position is put back after drawing")
 
-        -- Nothing is changed where the engine's own position applies
         VRCompanion.is2DViewActive = true
         masks = {}
         _G.IngameMap:draw()
@@ -1105,9 +1035,6 @@ test("MapMaskAndTextFollowTheMapGroup", function()
     end)
 end)
 
--- Hotspots (fields, vehicles) are placed at the screen position the layout's getMapObjectPosition returns and
--- then drawn with natives, so that position follows the Map group; hotspots that render through overlays are
--- not shifted a second time by the overlay shift.
 test("MapHotspotsAreDrawnAtTheMapGroupsPositionOnce", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout
@@ -1123,7 +1050,6 @@ test("MapHotspotsAreDrawnAtTheMapGroupsPositionOnce", function()
             end
         }
         _G.IngameMap = {
-            -- like the engine: position from the layout, then draw the hotspot at it
             drawHotspot = function(self, objectX, viaOverlay)
                 local x, y, rotation, visible = _G.IngameMapLayoutCircle.getMapObjectPosition(engineLayout, objectX)
                 if not visible then return end
@@ -1138,7 +1064,7 @@ test("MapHotspotsAreDrawnAtTheMapGroupsPositionOnce", function()
         VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
         VRCompanion.currentConvergenceOffset = 0.01
         VRCompanion.is2DViewActive = false
-        VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH -- the Map group at its layout size
+        VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
         VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
         local function near(a, b) return math.abs(a - b) < 0.0001 end
@@ -1157,7 +1083,6 @@ test("MapHotspotsAreDrawnAtTheMapGroupsPositionOnce", function()
         assert(#rendered == 1 and near(rendered[1].x, 0.08 + dx) and near(rendered[1].y, 0.11 + dy),
             "a hotspot drawn through an overlay is shifted once, not twice")
 
-        -- Outside the map's own drawing, and where the engine's position applies, nothing moves
         local x, y = _G.IngameMapLayoutCircle.getMapObjectPosition(engineLayout, 0.2)
         assert(near(x, 0.08) and near(y, 0.11), "positions asked outside a map draw are the engine's")
         VRCompanion.is2DViewActive = true
@@ -1203,8 +1128,6 @@ test("LoadMapAndLifecycleIntegratesHudHooking", function()
     assert(VRCompanion.hudHooked == false, "deleteMap must unhook HUD displays")
 end)
 
--- Bindings live in modDesc.xml and reach the mod only through g_inputBinding action events.
--- A keyEvent on the mod listener would act on raw keys and ignore rebinding in the Controls menu.
 test("ModHasNoRawKeyEventHandlerSoBindingsComeOnlyFromInputBinding", function()
     assert(VRCompanion.keyEvent == nil, "VRCompanion must not define keyEvent")
 end)
@@ -1243,15 +1166,12 @@ test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function
     assert(VRCompanion.toggleViewActionEventId ~= nil)
     assert(VRCompanion.seatSetActionEventId ~= nil)
 
-    -- With all six events still registered, the periodic check registers nothing
     VRCompanion:registerActionEvents(false)
     assert(registrations == 6, "Periodic check must not re-register events that are still registered")
 
-    -- Simulate engine dropping the events upon entering a vehicle
     _G.g_inputBinding.events = {}
     _G.g_inputBinding.actionEvents = {}
 
-    -- Calling registerActionEvents() detects missing events and re-registers
     VRCompanion:registerActionEvents(false)
     assert(registrations == 12, "Should automatically re-register missing action events")
 

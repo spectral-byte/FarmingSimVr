@@ -1,24 +1,3 @@
--- Interactive Control
--- StubIC.install(variant)  installs the globals the Companion Mod looks at, in the release-1.2.0.1 shape
---   variants: nil / "ok", "renamedUpdateClickable" (the Click Point class lacks updateClickable),
---             "missingExecute" (the manager lacks onActionEventExecute)
---   Without a call there is no Interactive Control at all (g_modIsLoaded has no entry).
--- StubIC.addPoint(name, x, y, z, options) -> Click Point at a world position
---   options: analog (bool), inRange (default true: IC activates it), screenX, screenY (where the stub's
---   mouse test finds it; default 0.5, 0.5), facesAway (bool: like a static outdoor Click Point facing away
---   from the camera, IC tests it with no mouse position, so it is never clickable), outdoor (bool: on a
---   vehicle's exterior, for a player on foot; see StubIC.tick), offScreen (bool: it projects off the screen, so
---   IC runs no mouse test on it at all and its clickable state stays as it was)
--- StubIC.equip(vehicle, state) / StubIC.stateSetting (1 toggle, 2 always on, 3 always off) /
---   StubIC.stateWrites / StubIC.changeCamera(vehicle, cam)  the vehicle side, see below
--- StubIC.tick()  one frame of IC's own update of its Click Points (activation, the mouse hit test through
---   updateClickable, hover blink). Like IC, a Click Point in a cab updates every frame (IC updates those from the
---   vehicle's draw), an outdoor one only on the vehicle's update tick: every StubIC.outdoorTickFrames frames
---   (default 4). StubIC.framesToOutdoorTick is how many frames until the next tick (1: the next frame has it).
--- StubIC.executed  names of the Click Points IC executed through its controller, in order
--- StubIC.blinks[name]  hover blinks IC drew on a Click Point     StubIC.mouseX / mouseY  the desk mouse
--- StubIC.selected()  name of the Click Point IC currently treats as the clickable one, or nil
-
     StubIC = {}
     StubIC.stateWrites = {}
     function StubIC.install(variant)
@@ -78,7 +57,6 @@
             end
         end
 
-        -- IC's own settings: the state setting (toggle key, always on or always off).
         Manager.SETTING_STATE_TOGGLE, Manager.SETTING_STATE_ALWAYS_ON, Manager.SETTING_STATE_OFF = 1, 2, 3
         StubIC.stateSetting = Manager.SETTING_STATE_TOGGLE
         StubIC.stateWrites = {}
@@ -116,10 +94,6 @@
         return point
     end
 
-    -- StubIC.equip(vehicle, state) gives a vehicle Interactive Control's per-vehicle state: the synced
-    -- on/off state (spec_interactiveControl.state), isInteractiveControlActivated and
-    -- activateInteractiveControl(state, noEventSend), which records every call in StubIC.stateWrites
-    -- as { state, noEventSend } and, like IC, changes the state only when it differs.
     function StubIC.equip(vehicle, initialState)
         vehicle.spec_interactiveControl = { state = initialState == true, interactiveControllers = { {} } }
         function vehicle:isInteractiveControlActivated() return self.spec_interactiveControl.state end
@@ -130,8 +104,6 @@
         return vehicle
     end
 
-    -- StubIC.changeCamera(vehicle, cam): the vehicle's active camera becomes `cam`. Like IC (unless it
-    -- keeps itself alive) the vehicle switches itself off when the new camera is an inside camera.
     function StubIC.changeCamera(vehicle, cam)
         vehicle.getActiveCamera = function() return cam end
         if cam.isInside and not StubIC.keepAlive then vehicle:activateInteractiveControl(false) end
@@ -143,8 +115,6 @@
         if outdoorTick then StubIC.framesToOutdoorTick = StubIC.outdoorTickFrames or 1 end
         for _, point in ipairs(StubIC.points or {}) do
             if not point.outdoor then
-                -- The cab's Click Points are updated from the vehicle's draw, which the game skips while the HUD is hidden
-                -- (StubIC.noVehicleDraw).
                 if not StubIC.noVehicleDraw then point:update(true, false, true) end
             elseif outdoorTick then
                 point:update(false, true, false)

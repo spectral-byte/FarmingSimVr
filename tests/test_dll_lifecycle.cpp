@@ -35,7 +35,6 @@ HRESULT WINAPI ImmediateCreateFactory(REFIID, void** ppFactory) {
     return E_NOTIMPL;
 }
 
-// Returns from factory calls immediately, so a racing caller is not hidden behind real DXGI latency.
 class ImmediateSystemDxgi : public ISystemDxgi {
 public:
     bool LoadSystemDxgi() override { return true; }
@@ -75,8 +74,6 @@ public:
     XrResult EndFrame(XrSession, const XrFrameEndInfo*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
 };
 
-// Holds OpenXR initialization at its first runtime call until released, so a test can keep the
-// first factory call inside EnsureVrInitialized while a second one races it.
 class BlockingOpenXrDispatch : public FailingOpenXrDispatch {
 public:
     XrResult EnumerateInstanceExtensionProperties(const char*, uint32_t, uint32_t*, XrExtensionProperties*) override {
@@ -110,7 +107,6 @@ protected:
         return m_fakeNgx;
     }
 
-    // The proxy installs the NGX hooks on the interceptor it is given; these tests observe m_ngx.
     HRESULT CreateFactoryThroughNewProxy() {
         auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
         auto systemDxgi = std::make_shared<SystemDxgi>();
@@ -126,7 +122,6 @@ protected:
 TEST_F(DllLifecycleTest, ProcessAttachInstallsNoHooksAndDoesNotAttachNgx) {
     ASSERT_NE(LoadFakeNgx(), nullptr);
 
-    // Use the test exe's own module as a stand-in for the Injector DLL handle.
     OnProcessAttach(GetModuleHandleW(nullptr));
 
     EXPECT_FALSE(m_ngx->AreModuleHooksInstalled());
@@ -141,7 +136,7 @@ TEST_F(DllLifecycleTest, ProcessDetachDuringTerminationSkipsHookRemoval) {
     EXPECT_TRUE(m_ngx->AreModuleHooksInstalled());
 
     ResetProcessTerminatingForTesting();
-    OnProcessDetach(nullptr);  // FreeLibrary: cleanup allowed
+    OnProcessDetach(nullptr);
     EXPECT_FALSE(IsProcessTerminating());
     EXPECT_FALSE(m_ngx->AreModuleHooksInstalled());
 }
@@ -149,7 +144,6 @@ TEST_F(DllLifecycleTest, ProcessDetachDuringTerminationSkipsHookRemoval) {
 TEST_F(DllLifecycleTest, ProcessDetachUnwindsTheHookOwnerNotTheNewestRuntime) {
     ASSERT_TRUE(m_ngx->InstallModuleLoadHooks());
 
-    // A newer runtime with an interceptor of its own must not hide the hooks m_ngx owns.
     InjectorRuntime::Dependencies deps;
     deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
     InjectorRuntime newer(std::move(deps));
@@ -163,24 +157,21 @@ TEST_F(DllLifecycleTest, ProcessDetachUnwindsTheHookOwnerNotTheNewestRuntime) {
 TEST_F(DllLifecycleTest, DestructorsRunAfterTerminationDetachLeaveHooksInPlace) {
     ASSERT_EQ(TerminationTarget(5), 6);
 
-    void* patched = nullptr;  // past any ILT thunk
+    void* patched = nullptr;
     {
         FunctionDetour detour;
         ASSERT_TRUE(detour.Install(reinterpret_cast<void*>(&TerminationTarget), reinterpret_cast<void*>(&TerminationDetour)));
         patched = detour.GetTarget();
         OnProcessDetach(reinterpret_cast<LPVOID>(1));
-    }  // ~FunctionDetour runs here, as the CRT's static destructors do after DllMain returns.
+    }
 
     EXPECT_EQ(TerminationTarget(5), -5);
 
-    // The destructor deliberately left the hook. Remove it through MinHook so its
-    // hook table forgets the target too, or a later Install (e.g. --gtest_repeat) fails.
     ASSERT_EQ(MH_RemoveHook(patched), MH_OK);
     EXPECT_EQ(TerminationTarget(5), 6);
 }
 
 TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalled) {
-    // The race is timing-dependent; several fresh rounds make a regression show up reliably.
     constexpr int kRounds = 20;
     constexpr int kThreads = 8;
     std::atomic<int> sawHooksMissing{0};
@@ -197,7 +188,6 @@ TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalle
                 while (ready.load() < kThreads) {}
                 void* factory = nullptr;
                 proxy.CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory);
-                // On return the game may load nvngx immediately; the hooks must already exist.
                 if (!m_ngx->AreModuleHooksInstalled()) {
                     sawHooksMissing.fetch_add(1);
                 }
@@ -218,7 +208,7 @@ TEST_F(DllLifecycleTest, ConcurrentFactoryCallWaitsForOpenXrInitialization) {
         void* factory = nullptr;
         proxy.CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory);
     });
-    dispatch->entered.get_future().wait();  // the first caller is inside OpenXR initialization
+    dispatch->entered.get_future().wait();
 
     std::atomic<bool> secondReturned{false};
     std::thread second([&]() {
@@ -227,8 +217,6 @@ TEST_F(DllLifecycleTest, ConcurrentFactoryCallWaitsForOpenXrInitialization) {
         secondReturned = true;
     });
 
-    // The second caller decides from the OpenXR state whether to hook its factory, so it must not
-    // return while that state is still being established.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     EXPECT_FALSE(secondReturned.load());
 
@@ -265,5 +253,5 @@ TEST_F(DllLifecycleTest, HooksInstalledOnFactoryCallAttachToNgxLoadedLater) {
     EXPECT_TRUE(m_ngx->IsAttached());
 }
 
-} // namespace
-} // namespace fs25vr
+}
+}

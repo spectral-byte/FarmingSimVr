@@ -1,12 +1,3 @@
-// Hand Tools, describing a Hand Tool the Companion Mod does not support (ADR-0030): while the local player holds one, the
-// console command vrHandToolsDiagnostics also writes what the game gives that tool to the game log, so that a log from the
-// headset is enough to design the tool's support. Seen from outside: the real Companion Mod runs against the real VRBridge
-// over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool), another mod's tool
-// (StubHandTool.otherModTool) is the tool, and the test runs the console command as the game would and asserts what the
-// developer reads in the log and what the command answers. Never the mod's own state.
-// Prior art: test_hand_tools_offset_tuning.cpp (a console command and its log lines) and the diagnostics test in
-// test_hand_tools_lance.cpp.
-
 #include "hand_tools_test_support.h"
 #include <string>
 #include <vector>
@@ -15,16 +6,13 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Every line the probe writes starts with this (after the mod's own [FS25_VR] tag).
 constexpr const char* kProbeTag = "[FS25_VR] Hand Tool probe: ";
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsDescribeUnsupportedTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // The mod started with a player on foot who holds another mod's tool (made with the Lua options table given).
     void StartHolding(const std::string& toolOptions = "{}") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
@@ -33,7 +21,6 @@ protected:
                                "=holdOtherModTool"), 0);
     }
 
-    // Runs the command as the game would. The log lines are what the game logged during it; Probe() are the ones the probe wrote.
     std::string RunCommand() {
         s_capturedLogs.clear();
         return EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
@@ -51,7 +38,6 @@ protected:
         }
         return false;
     }
-    // The first probe line that has all of the texts, or "" when there is none.
     static std::string LineWith(const std::vector<std::string>& lines, std::initializer_list<const char*> texts) {
         for (const auto& line : lines) {
             bool all = true;
@@ -67,7 +53,7 @@ protected:
     }
 };
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, HoldingAnotherModsToolTheCommandLogsTheToolsConfigFileName) {
     ASSERT_NO_FATAL_FAILURE(StartHolding());
@@ -164,7 +150,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheLogSaysWhetherTheGameP
     RunCommand();
     EXPECT_FALSE(LineWith(Probe(), { "placement: through attachToolToCamera" }).empty()) << Joined(Probe());
 
-    // The player goes to the third person view: the game puts the tool in the avatar's hand.
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.thirdPerson(foot.player, true)", "=thirdPerson"), 0);
     RunCommand();
     EXPECT_FALSE(LineWith(Probe(), { "placement: not through attachToolToCamera" }).empty()) << Joined(Probe());
@@ -184,8 +169,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AToolTheGameNeverPlacedTh
     EXPECT_FALSE(LineWith(lines, { "placement: not through attachToolToCamera" }).empty()) << Joined(lines);
 }
 
-// A game in which the Companion Mod could not wrap attachToolToCamera (a game update renamed it): the mod never sees the
-// placement, so it does not claim a path it cannot know.
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithoutThePlacementWrapThePlacementPathIsSaidToBeUnknownNotToBeAnotherPath) {
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
     StartOptions options;
@@ -201,8 +184,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithoutThePlacementWrapTh
     EXPECT_FALSE(LineWith(lines, { "placement: unknown (the placement wrap is not installed)" }).empty()) << Joined(lines);
     EXPECT_TRUE(LineWith(lines, { "not through attachToolToCamera" }).empty()) << Joined(lines);
 }
-
-// ---- nothing to describe, and the answer ---------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheOneLineAnswerStaysTheSameAndOnlySaysTheToolIsUnsupported) {
     ASSERT_NO_FATAL_FAILURE(StartHolding());
@@ -224,7 +205,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithNothingHeldTheCommand
 
     EXPECT_NE(reply.find("held Hand Tool: none"), std::string::npos) << reply;
     EXPECT_TRUE(Probe().empty()) << Joined(Probe());
-    // One log line per field of the answer, nothing else: the command logs what it logged before.
     int fields = 1;
     for (size_t at = reply.find(" | "); at != std::string::npos; at = reply.find(" | ", at + 3)) ++fields;
     EXPECT_EQ(static_cast<int>(s_capturedLogs.size()), fields) << reply;
@@ -245,8 +225,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithASupportedToolHeldThe
     EXPECT_EQ(static_cast<int>(s_capturedLogs.size()), fields) << reply;
 }
 
-// Multiplayer: the game attaches the Hand Tool of every player in the session through the same function. Only the local
-// player's own tool is described.
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AnotherPlayersToolIsNeverDescribed) {
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
     ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
@@ -289,8 +267,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AnotherPlayersToolAttache
     EXPECT_TRUE(LineWith(lines, { "remote.xml" }).empty()) << Joined(lines);
 }
 
-// ---- partial reads and caps ---------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableThatThrowsWhenReadGivesAPartialDescriptionAndNoError) {
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ brokenSpec = true }"));
 
@@ -307,13 +283,8 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableThatThrowsWhenR
     for (const auto& line : s_capturedLogs) EXPECT_EQ(line.find("Error"), std::string::npos) << line;
 }
 
-// ---- caps ---------------------------------------------------------------------------------------------------------
-// The fields of a spec table, the functions of a class, the nodes and the lines of a whole run are capped, and each cut says
-// how much was left out: what is shown and what is left out add up to what the tool has.
-
 namespace {
 
-// The N of "N more" in a line, -1 when the line has none.
 int LeftOutCount(const std::string& line) {
     const size_t more = line.find(" more ");
     if (more == std::string::npos) return -1;
@@ -328,10 +299,10 @@ int CountLinesStartingWith(const std::vector<std::string>& lines, const std::str
     return count;
 }
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableWithManyFieldsIsCutAndTheLeftOutCountIsLogged) {
-    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecFields = 100 }"));  // 6 fields of its own and 100 more
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecFields = 100 }"));
 
     RunCommand();
 
@@ -346,7 +317,7 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableWithManyFieldsI
 }
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableOfAFewDozenFieldsIsShownWholeSoTheFieldsThatSortLastAreThere) {
-    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecFields = 80 }"));  // 6 fields of its own and 80 more: 86 fields
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecFields = 80 }"));
 
     RunCommand();
 
@@ -354,8 +325,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableOfAFewDozenFiel
     EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.extra80 (number) = 80" }).empty()) << Joined(lines);
     EXPECT_TRUE(LineWith(lines, { "spec_otherModTool: ", "more fields left out" }).empty()) << "nothing was cut: " << Joined(lines);
 }
-
-// ---- the contents of a small table, one level further -----------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASmallTableFieldIsOpenedOneLevelWithEachEntrysNameTypeAndShortValue) {
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ nestedTables = true }"));
@@ -382,8 +351,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ABigTableIsOnlyCountedNot
     EXPECT_EQ(CountLinesStartingWith(lines, "spec_otherModTool.bigTable."), 0) << "a table past the cap is not opened";
 }
 
-// ---- what is called a node --------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AnEntityNamedLikeAFileIsNotCalledANode) {
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ pathNamedNode = true }"));
 
@@ -409,7 +376,7 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheEnginesRootNodeIdAsAPl
 }
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AClassWithManyFunctionsIsCutAndTheLeftOutCountIsLogged) {
-    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraClassFunctions = 100 }"));  // onUseAction, onRollAction and 100 more
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraClassFunctions = 100 }"));
 
     RunCommand();
 
@@ -440,10 +407,7 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ATreeWithManyNodesIsCutAn
     EXPECT_EQ(shown + leftOut, 104);
 }
 
-// The tree is read as far as it can be: a node that cannot be read ends the walk, but the nodes already named stay, and so does
-// the count of the nodes that were left out before it (one cut that is not lost to the other).
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ANodeThatCannotBeReadMidwayKeepsTheNodesAlreadyNamedAndTheLeftOutCount) {
-    // 104 nodes within three levels (4 and 100 more children of the root), then a child whose name cannot be read.
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraNodes = 100, brokenNode = true }"));
 
     std::string reply;
@@ -461,7 +425,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ANodeThatCannotBeReadMidw
 }
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMostUsefulLinesSurviveAndTheLeftOutCountIsLogged) {
-    // 25 more specializations of 20 fields each (under the cap of a table): 500 field lines on top of the rest.
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecTables = 25 }"));
 
     RunCommand();
@@ -470,7 +433,7 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
     const std::string leftOutLine = LineWith(lines, { "more lines left out" });
     const int leftOut = LeftOutCount(leftOutLine);
     EXPECT_GT(leftOut, 0) << "the cut is said";
-    const int shown = static_cast<int>(lines.size()) - 1;  // the last line is the left-out line itself
+    const int shown = static_cast<int>(lines.size()) - 1;
     EXPECT_EQ(lines.back(), leftOutLine) << "and it is the last line";
     EXPECT_EQ(lines.size(), 400u) << "the cap is on the run, the left-out line included";
     EXPECT_LT(shown, 500);
@@ -481,8 +444,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
     EXPECT_FALSE(LineWith(lines, { "placement:" }).empty());
 }
 
-// The stub's unreadable node names (brokenSpec, brokenNode) are the tool's: putting the tool away restores the engine's getName,
-// so one test's broken tool cannot make a later read fail (each test also has a Lua state of its own).
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheStubsUnreadableNodeNameIsRestoredWhenTheToolIsPutAway) {
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ brokenSpec = true, brokenNode = true }"));
     ASSERT_EQ(RunLuauChunk(L, "_G.brokenSpecNode = otherTool.spec_otherModBroken.gone; _G.engineGetName = StubHandTool.engineGetName", "=nodes"), 0);
@@ -495,13 +456,8 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheStubsUnreadableNodeNam
     EXPECT_EQ(EvalLua(L, "tostring(getName == engineGetName)"), "true") << "the engine's own function is back, not a wrapper of it";
 }
 
-// ---- the probe only reads -----------------------------------------------------------------------------------------
-
 namespace {
 
-// Everything about the tool and the game's Hand Tool functions that the command could change, as one text: which function each
-// name on the game's classes, the tool's type and the tool's action events is (a wrap would show), the tool's own fields and its
-// place in the scene.
 constexpr const char* kSnapshotHelpers = R"luau(
     function _G.snapshot()
         local parts = {}
@@ -530,7 +486,7 @@ constexpr const char* kSnapshotHelpers = R"luau(
     end
 )luau";
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, RunningTheCommandChangesNothingAboutTheToolNorInstallsAWrapOnTheGamesFunctions) {
     ASSERT_NO_FATAL_FAILURE(StartHolding());
@@ -563,7 +519,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheToolsPlacementLookRayA
     EXPECT_EQ(EvalLua(L, placement), placementBefore) << "the tool stays where the game put it";
     EXPECT_EQ(EvalLua(L, ray), rayBefore) << "the look ray is the head's, as before";
 
-    // The trigger: the game's own binding uses the tool, the Tool Hand's trigger does not (the tool is not supported).
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.useCalls = {}", "=forgetUses"), 0);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);

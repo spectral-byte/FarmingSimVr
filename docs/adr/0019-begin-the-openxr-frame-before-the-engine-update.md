@@ -23,3 +23,5 @@ Accepted. Resolves #18. Amends ADR-0003 and ADR-0015.
 - **Predict the first eye with the runtime's display period** (rejected: `last predictedDisplayTime + predictedDisplayPeriod` only approximates the time `xrWaitFrame` will return, so the two eyes would still be located at different times and the cache would not be shared).
 - **Wait and begin inside `SubmitFramePair`** (rejected: the physical present of the Desktop Mirror Window would then wait behind `xrWaitFrame`).
 - **Wait and begin after the physical present (selected).**
+
+More decisions about this area, from the code comments: [ADR-0056](0056-openxr-decisions.md), [ADR-0057](0057-present-and-desktop-decisions.md).

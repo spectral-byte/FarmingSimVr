@@ -1,22 +1,7 @@
-// Game installation detection for the Installer. Textually #included into the
-// [Code] section of fs25_vr.iss, after IsGameFolder (which it uses). Pascal Script, not ISPP.
-// 
-// Detection is not automated in CI: it reads the real machine. Keep it small and check it by hand
-// with docs\installer-release-checklist.md before each release.
-// 
-// Sources, in order (a folder is only ever listed once, and only if IsGameFolder says it is valid):
-//   Steam   registry InstallPath -> <Steam>\steamapps\libraryfolders.vdf -> every library's
-//           steamapps\common\Farming Simulator 25
-//   Epic    {commonappdata}\Epic\EpicGamesLauncher\Data\Manifests\*.item, "InstallLocation"
-//           (plus the documented default folder)
-//   GIANTS  registry InstallDir, falling back to the default install folders
-// Microsoft Store / Game Pass folders are never listed and are rejected by IsStoreFolder.
-
 const
   SteamGameFolderName = 'Farming Simulator 25';
   SteamKey = 'SOFTWARE\Valve\Steam';
   GiantsKey = 'SOFTWARE\GIANTS Software\FarmingSimulator2025';
-  { AppId in fs25_vr.iss, with the _is1 suffix Inno gives its uninstall key. }
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{C85F7B59-39C3-48F5-94FB-38E291A376AE}_is1';
   StoreFolderMessage =
     'Microsoft Store / Game Pass installations of Farming Simulator 25 are not supported.' + #13#10#13#10 +
@@ -24,11 +9,10 @@ const
     'Choose one of those, or the folder that contains x64\FarmingSimulator2025Game.exe.';
 
 var
-  Installations: array of String;        { valid game folders found, no duplicates }
+  Installations: array of String;
   InstallationSources: array of String;  { parallel to Installations: 'Steam', 'Epic Games', 'GIANTS' }
   InstallPickerPage: TInputOptionWizardPage;
 
-{ Folder as a clean backslash path without a trailing backslash (except for a drive root). }
 function NormalizeDir(Dir: String): String;
 begin
   Result := Trim(Dir);
@@ -36,8 +20,6 @@ begin
   Result := RemoveBackslashUnlessRoot(Result);
 end;
 
-{ Microsoft Store / Game Pass installs live under WindowsApps or XboxGames and carry a
-  MicrosoftGame.config (Xbox app) or appxmanifest.xml (Store package), at the root or in Content. }
 function IsStoreFolder(Dir: String): Boolean;
 var
   D, Lower: String;
@@ -70,9 +52,6 @@ begin
   Log('Detected Farming Simulator 25 (' + Source + '): ' + Dir);
 end;
 
-{ The text between the first and the last quote after a leading quoted key, for both Steam's VDF
-  ("path"		"D:\\SteamLibrary") and Epic's pretty-printed JSON ("InstallLocation": "C:\\Games\\FS25",).
-  Backslashes arrive escaped (\\) and are undone. }
 function QuotedValueAfterKey(Line, Key: String; var Value: String): Boolean;
 var
   S: String;
@@ -98,7 +77,6 @@ begin
   Result := True;
 end;
 
-{ SteamDir's own library plus every "path" in its steamapps\libraryfolders.vdf (libraries on other drives). }
 procedure DetectSteamLibraries(SteamDir: String);
 var
   Lines: TArrayOfString;
@@ -115,8 +93,6 @@ begin
         AddInstallation(NormalizeDir(Value) + '\steamapps\common\' + SteamGameFolderName, 'Steam');
 end;
 
-{ Each Epic Games Launcher manifest records where its game is installed. Whatever the game is, the
-  folder only counts when it holds x64\FarmingSimulator2025Game.exe. }
 procedure DetectEpicManifests(ManifestsDir: String);
 var
   FindRec: TFindRec;
@@ -146,7 +122,6 @@ begin
         Result := '';
 end;
 
-{ The GIANTS installer's registry entry (InstallDir), then the default install folders. }
 procedure DetectGiantsStandalone;
 var
   Dir: String;
@@ -168,8 +143,6 @@ begin
   DetectGiantsStandalone;
 end;
 
-{ The folder a previous FS25 VR was installed to, if that is still a game folder. It wins over
-  detection: an upgrade pre-selects where the player installed before. }
 function PreviousGameFolder: String;
 begin
   if not RegQueryStringValue(HKLM, UninstallKey, 'Inno Setup: App Path', Result) then
@@ -179,9 +152,6 @@ begin
     Result := '';
 end;
 
-{ Called from InitializeWizard. Precedence for the game folder: /DIR= on the command line, then the
-  previous install's folder, then detection (one installation is pre-selected, several get a
-  picker page before the folder page). The folder page and its Browse button always remain. }
 procedure InitGameDetection;
 var
   I: Integer;
@@ -212,7 +182,6 @@ begin
   end;
 end;
 
-{ Called from NextButtonClick: the picked installation becomes the folder shown on the folder page. }
 procedure AcceptPickedInstallation(CurPageID: Integer);
 begin
   if (InstallPickerPage <> nil) and (CurPageID = InstallPickerPage.ID) then

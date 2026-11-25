@@ -1,12 +1,3 @@
-# Verifies that the built Injector does not import the Microsoft C/C++ runtime DLLs
-# (VCRUNTIME140*.dll, MSVCP140*.dll, CONCRT140.dll, api-ms-win-crt-*.dll), i.e. that it is built
-# against the static runtime and needs no VC++ redistributable on the player's machine, and that it
-# does not import version.dll: the game loads the Injector as its version.dll (ADR-0038), so that
-# import would bind to the Injector itself. It does not import dbghelp.dll either: the crash reporter loads the
-# system's dbghelp.dll by its full path at the first DXGI factory call, and an import would load it (or a dbghelp.dll
-# next to the game's exe) from the loader, at process start, before the Injector ran a line.
-# Reads the PE import tables (regular and delay-load) directly, so it needs no
-# Visual Studio tools and checks the built artifact rather than a CMake flag.
 param(
     [string]$Dll = "build\version.dll"
 )
@@ -82,7 +73,6 @@ Write-Host "$Dll imports:"
 foreach ($name in $imports) { Write-Host "  $name" }
 
 $forbidden = @($imports | Where-Object {
-    # Every redistributable DLL: VCRUNTIME140_1/_THREADS, MSVCP140_1/_2/_atomic_wait/_codecvt_ids, ...
     $_ -match '^(VCRUNTIME140(_\w+)?|MSVCP140(_\w+)?|CONCRT140|api-ms-win-crt-.+)\.dll$'
 })
 if ($forbidden.Count -gt 0) {

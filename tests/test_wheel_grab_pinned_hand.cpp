@@ -1,17 +1,3 @@
-// Wheel Grab (spec #89, ticket #91): the Virtual Hand stays on the Steering Wheel while it is held, and the player
-// feels the grab and the end stop. The real Companion Mod runs against the real VRBridge over FakeTrackedHeadset,
-// with the cab vehicle that steers the way the game's does (companion_mod_stubs.h, StubSteer) and the hand model's
-// scene-graph stubs (StubModel). The test moves the fake Motion Controllers, drives frames the way the game would and
-// asserts only what the player would see and feel: where the Virtual Hand node is drawn, how the fingers curl, the
-// haptic pulses the fake runtime recorded, the steering calls that reached the vehicle and the diagnostics line.
-// Prior art: test_wheel_grab.cpp (the same cab), test_virtual_hands.cpp (hand nodes), test_haptics.cpp (pulses).
-//
-// The cab is at the world origin facing +Z with the head at the tracking space origin, so a point at world
-// (x, y, z) is where a hand at tracking (-x, y - 1.5, -z) is. The Steering Wheel hangs 0.5 m in front of the
-// head and 0.3 m below it, leaning toward the driver; a hand "at the rim" is 0.18 m from its axis. A small
-// full-lock rotation (120 degrees, a tracked tractor's) keeps full lock within a hand's reach and makes the game's
-// steering rate lag easy to see: the Steering Wheel moves 0.087 rad per frame at most.
-
 #include "wheel_grab_test_support.h"
 #include <algorithm>
 #include <cmath>
@@ -23,7 +9,6 @@ using namespace wheel_grab_test;
 
 constexpr double kFullLock = 2.0943951;  // rad: 120 degrees, the in-cab rotation of the cab below
 
-// Where a Virtual Hand ("left" or "right") is drawn in the world, nil when there is none.
 constexpr const char* kVirtualHandStubs = R"luau(
     function _G.handPosition(which)
         local node = StubModel.hands()[which]
@@ -36,12 +21,10 @@ constexpr const char* kVirtualHandStubs = R"luau(
     end
 )luau";
 
-// A cab with a steerable vehicle that turns 120 degrees at full lock; `options` are more StubSteer.equip options.
 std::string SteerableCabOf120(const std::string& options = "") {
     return SteerableCab("rotationDeg = 120, " + options);
 }
 
-// This file tests the pull-away rule too, so the pull-away distance is left alone.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& scene = SteerableCabOf120()) {
     StartOptions options;
     options.modelLoading = true;
@@ -49,7 +32,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& scene =
     ASSERT_NO_FATAL_FAILURE(StartWheelGrabMod(L, bridge, scene, options));
 }
 
-// Where the Virtual Hand node of a hand is drawn.
 Point HandDrawnAt(lua_State* L, const char* which) {
     const std::string name = std::string("'") + which + "'";
     return { Number(L, "select(1, handPosition(" + name + "))"), Number(L, "select(2, handPosition(" + name + "))"),
@@ -68,7 +50,7 @@ size_t PulsesTo(const FakeTrackedHeadset& headset, int hand) {
     return count;
 }
 
-} // namespace
+}
 
 
 TEST_F(CompanionModTest, AHoldingVirtualHandStaysOnTheRimWhereItGrabbedAndFollowsTheSteeringWheelNotTheHand) {
@@ -82,7 +64,6 @@ TEST_F(CompanionModTest, AHoldingVirtualHandStaysOnTheRimWhereItGrabbedAndFollow
     EXPECT_LT(Distance(HandDrawnAt(L, "right"), RimPoint(L, kRimRadius, grabAngle)), 1e-3)
         << "the Virtual Hand is on the rim where it grabbed";
 
-    // A sudden yank of the hand runs ahead of the Steering Wheel, which the game turns at a capped rate.
     TURN_HAND_TO(kRight, grabAngle + 0.8);
     const double lagging = WheelAngle(L);
     ASSERT_LT(lagging, 0.4) << "the Steering Wheel has not caught up with the yank yet";
@@ -91,7 +72,7 @@ TEST_F(CompanionModTest, AHoldingVirtualHandStaysOnTheRimWhereItGrabbedAndFollow
     EXPECT_GT(Distance(HandDrawnAt(L, "right"), RimPoint(L, kRimRadius, grabAngle + 0.8)), 0.05)
         << "so the lag shows as the hand staying on the Steering Wheel";
 
-    FRAMES(30);  // the game's steering catches up with the hand
+    FRAMES(30);
     EXPECT_NEAR(WheelAngle(L), 0.8, 0.02);
     EXPECT_LT(Distance(HandDrawnAt(L, "right"), RimPoint(L, kRimRadius, grabAngle + WheelAngle(L))), 1e-3)
         << "and the hand turned with the Steering Wheel to where the real hand is";
@@ -116,7 +97,7 @@ TEST_F(CompanionModTest, AfterLettingGoTheVirtualHandIsDrawnAtTheGripPoseAgain) 
     SetGameTime(10000);
 
     GRAB(kRight, RimPoint(L, kRimRadius, 0.5));
-    TURN_HAND_TO(kRight, 1.3);  // a yank: the pinned hand lags behind the real one
+    TURN_HAND_TO(kRight, 1.3);
     ASSERT_GT(Distance(HandDrawnAt(L, "right"), RimPoint(L, kRimRadius, 1.3)), 0.05);
 
     headset.SetHandInputs(kRight, Grip(0.0f));
@@ -157,14 +138,12 @@ TEST_F(CompanionModTest, PullingTheRealHandAwayFromThePinnedPointEndsTheGrabWith
     GRAB(kRight, RimPoint(L, kRimRadius, 0.5));
     const Point pinned = RimPoint(L, kRimRadius, 0.5);
 
-    // Just inside the pull-away distance (and outside the grab ring, which only matters for grabbing): still holding.
     headset.SetHandPose(kRight, HandAtWorld(RimPoint(L, kRimRadius + 0.9 * pullAway, 0.5)));
     const size_t callsBefore = static_cast<size_t>(Number(L, "#StubSteer.calls"));
     FRAMES(3);
     EXPECT_GT(Number(L, "#StubSteer.calls"), callsBefore) << "the Steering Wheel is still steered";
     EXPECT_LT(Distance(HandDrawnAt(L, "right"), pinned), 1e-3) << "and the Virtual Hand is on the Steering Wheel, not on the hand";
 
-    // Past it: the grab ends as though the grip were let go.
     const Point away = RimPoint(L, kRimRadius + 1.1 * pullAway, 0.5);
     headset.SetHandPose(kRight, HandAtWorld(away));
     FRAMES(1);
@@ -173,7 +152,6 @@ TEST_F(CompanionModTest, PullingTheRealHandAwayFromThePinnedPointEndsTheGrabWith
     EXPECT_EQ(Number(L, "#StubSteer.calls"), callsAfterPull) << "nothing steers the vehicle any more";
     EXPECT_LT(Distance(HandDrawnAt(L, "right"), away), 1e-3) << "the Virtual Hand is at the grip pose again";
 
-    // The grip is still squeezed: coming back to the rim does not take hold again, squeezing afresh does.
     headset.SetHandPose(kRight, HandAtWorld(pinned));
     FRAMES(3);
     EXPECT_LT(Distance(HandDrawnAt(L, "right"), pinned), 1e-3);
@@ -199,7 +177,7 @@ TEST_F(CompanionModTest, AHoldingVirtualHandKeepsCurlingItsFingersWithTheGrip) {
         end
     )luau", "=fingersCurled"), 0);
 
-    headset.SetHandInputs(kRight, Grip(0.5f));  // eased, still above the release threshold: holding
+    headset.SetHandInputs(kRight, Grip(0.5f));
     FRAMES(1);
     EXPECT_EQ(RunLuauChunk(L, R"luau(
         local hand = StubModel.hands().right
@@ -219,8 +197,6 @@ TEST_F(CompanionModTest, AHoldingVirtualHandTurnsWithTheSteeringWheelAsIfGluedTo
     FRAMES(20);
     ASSERT_NEAR(WheelAngle(L), 0.8, 0.02);
 
-    // The hand's forward direction, carried into the frame above the Steering Wheel node (which does not turn with the Steering Wheel),
-    // has turned about the Steering Wheel's axis (that frame's Y) by the angle the Steering Wheel turned, like the hand's position.
     EXPECT_EQ(RunLuauChunk(L, R"luau(
         local base = StubSteer.wheelBase(cab.vehicle)
         local hand = StubModel.hands().right
@@ -242,8 +218,6 @@ TEST_F(CompanionModTest, AHoldingVirtualHandTurnsWithTheSteeringWheelAsIfGluedTo
             string.format("forward turned back (%.3f %.3f %.3f) should be the grab-time forward (%.3f %.3f %.3f)", ox, oy, oz, ux, uy, uz))
     )luau", "=pinnedRotation"), 0);
 }
-
-// ---- Haptics -------------------------------------------------------------------------------------------------
 
 TEST_F(CompanionModTest, GrabbingPulsesTheGrabbingHandOnceAndLettingGoIsSilent) {
     FakeTrackedHeadset headset;
@@ -298,16 +272,14 @@ TEST_F(CompanionModTest, ReachingFullLockPulsesFirmlyOnceAndAgainOnlyAfterLeavin
     EXPECT_GT(lockPulse.duration, grabPulse.duration);
     EXPECT_NEAR(WheelAngle(L), kFullLock, 0.02) << "the Steering Wheel is at the stop";
 
-    // The hand keeps pulling: the stop is dead, the pulse does not repeat.
     TURN_HAND_FROM_TO(kRight, 0.5 + kFullLock + 0.3, 0.5 + kFullLock + 0.45, 0.05);
     FRAMES(10);
     EXPECT_EQ(headset.HapticPulses().size(), 2u) << "no repeat while at the stop";
 
-    // Turning back moves the Steering Wheel at once, leaving the stop; reaching it again pulses again.
     TURN_HAND_FROM_TO(kRight, 0.5 + kFullLock + 0.45, 0.5 + kFullLock - 0.4, 0.05);
     FRAMES(10);
     EXPECT_EQ(headset.HapticPulses().size(), 2u) << "leaving the stop is silent";
-    TURN_HAND_FROM_TO(kRight, 0.5 + kFullLock - 0.4, 0.5 + kFullLock + 0.6, 0.05);  // the 0.85 rad it left by, and more
+    TURN_HAND_FROM_TO(kRight, 0.5 + kFullLock - 0.4, 0.5 + kFullLock + 0.6, 0.05);
     FRAMES(10);
     EXPECT_EQ(headset.HapticPulses().size(), 3u) << "reaching it again";
 
@@ -379,7 +351,6 @@ TEST_F(CompanionModTest, AFirstHandTakingHoldAtTheStopFeelsOnlyItsGrabAndTheStop
     FRAMES(5);
     EXPECT_EQ(PulsesTo(headset, 1), 1u) << "the hand felt its grab and not the stop it was already at";
 
-    // Turning back leaves the stop; reaching it again is the stop.
     TURN_HAND_FROM_TO(kRight, 0.5, 0.1, 0.1);
     FRAMES(10);
     EXPECT_EQ(PulsesTo(headset, 1), 1u) << "leaving the stop is silent";
@@ -387,8 +358,6 @@ TEST_F(CompanionModTest, AFirstHandTakingHoldAtTheStopFeelsOnlyItsGrabAndTheStop
     FRAMES(10);
     EXPECT_EQ(PulsesTo(headset, 1), 2u) << "and reaching it again is felt once";
 }
-
-// ---- Diagnostics ---------------------------------------------------------------------------------------------
 
 TEST_F(CompanionModTest, TheDiagnosticsReportHowFarTheRealHandIsFromItsPinnedPoint) {
     FakeTrackedHeadset headset;

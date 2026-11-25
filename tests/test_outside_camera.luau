@@ -1,10 +1,3 @@
--- ====================================================================
--- Test Suite for the Outside Camera: 6DOF head tracking and stereo on a level base
--- Drives the Companion Mod through the vehicle camera update, the Sequential Dual-Pass
--- mission update (and its eye sync), and asserts on the transforms written to nodes,
--- the camera bound for rendering and the calls made to VRBridge.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -74,8 +67,6 @@ local function axisRotation(axis, angle)
     return { { c, -s, 0 }, { s, c, 0 }, { 0, 0, 1 } }
 end
 
--- How the fake engine reads Euler angles: "YXZ" composes R = Ry * Rx * Rz, "ZYX" composes
--- R = Rz * Ry * Rx. The mod must not depend on which one the engine uses.
 local eulerOrder = "YXZ"
 
 local function rotMatrix(rx, ry, rz)
@@ -88,7 +79,6 @@ local function rotMatrix(rx, ry, rz)
     return m
 end
 
--- Euler angles (rx, ry, rz) of a rotation matrix in the fake engine's convention
 local function eulerOf(m)
     if eulerOrder == "ZYX" then
         local s = math.max(-1, math.min(1, -m[3][1]))
@@ -127,7 +117,6 @@ local function matQuat(m)
     return (m[1][3] + m[3][1]) / s, (m[2][3] + m[3][2]) / s, 0.25 * s, (m[2][1] - m[1][2]) / s
 end
 
--- A node's local rotation: its quaternion when last set by one, else its Euler angles
 local function localRotation(n)
     if n.q ~= nil then return quatMatrix(n.q) end
     return rotMatrix(n.r[1], n.r[2], n.r[3])
@@ -154,7 +143,6 @@ local function worldTransform(id)
     return r, x, y, z
 end
 
--- Euler angles (rx, ry, rz) of a world rotation matrix, for R = Ry * Rx * Rz
 local function worldEuler(id)
     local m = worldTransform(id)
     local s = math.max(-1, math.min(1, -m[2][3]))
@@ -277,10 +265,6 @@ local function installSceneGraph()
     end
     _G.getProjectionOffset = function(node) return 0, 0 end
     _G.setAudioListener = function(node) audioListener = node end
-    -- As in the game: the camera manager renders through the cameras registered with it (the
-    -- game's own, and any added with addCamera) and silently ignores any other camera; the global
-    -- setCamera is the game's deprecation wrapper and binds nothing. `bound` is the camera the
-    -- engine renders through, as getCamera() reports it.
     local registered = {}
     managerActive = nil
     setCameraCalls = 0
@@ -299,7 +283,6 @@ local function installSceneGraph()
     _G.getCamera = function() return bound end
 end
 
--- The game makes one of its own cameras active
 local function gameActivates(node)
     g_cameraManager:setActiveCamera(node)
 end
@@ -333,12 +316,10 @@ local function installOrbitCamera(vehicleRot)
         rotX = -0.35, rotY = 2.4, origRotX = -0.35, origRotY = 2.4, zoom = 14,
     }
     _G.g_currentMission = { controlledVehicle = { rootNode = VEHICLE, getActiveCamera = function() return cam end } }
-    -- The game made this camera active, so the engine renders through it until the mod binds another
     gameActivates(CAMERA)
     return cam
 end
 
--- A fixed camera bolted to the vehicle (a hitch camera), aimed by the game with localRot
 local function installFixedCamera(vehicleRot, localRot)
     addNode(VEHICLE, ROOT, { 120, 4, -60 }, vehicleRot)
     addNode(CAMERA, VEHICLE, { 0, 2.2, -3.5 }, localRot)
@@ -346,13 +327,10 @@ local function installFixedCamera(vehicleRot, localRot)
     engineNodes[CAMERA] = true
     local cam = { isInside = false, isRotatable = false, cameraNode = CAMERA, rotX = localRot[1], rotY = localRot[2] }
     _G.g_currentMission = { controlledVehicle = { rootNode = VEHICLE, getActiveCamera = function() return cam end } }
-    -- The game made this camera active, so the engine renders through it until the mod binds another
     gameActivates(CAMERA)
     return cam
 end
 
--- Fake VRBridge. state.mode is "AFR" or "SequentialDualPass"; state.parity / state.subPass
--- pick the eye; state.pose is the head pose (nil = invalid).
 local function installBridge(state)
     state.discontinuities = 0
     _G.VRBridge = {
@@ -403,7 +381,6 @@ local function cleanup()
     removeSceneGraph()
 end
 
--- Heading of a world direction's horizontal projection (yaw that turns local -Z onto it)
 local function headingOf(x, z)
     return math.atan2(-x, -z)
 end
@@ -455,14 +432,12 @@ test("BoundEyeCameraHeadingIsTheEngineCameraHorizontalHeadingPlusHeadYaw", funct
     cleanup()
 end)
 
--- Head yaw only, with a matching quaternion, so the per-eye offset lies along the eye's own right axis
 local function leaningPose()
     local yaw = 0.3
     return { isValid = true, x = 0.12, y = 0.05, z = -0.2, pitch = 0, yaw = yaw, roll = 0,
         qx = 0, qy = math.sin(yaw / 2), qz = 0, qw = math.cos(yaw / 2) }
 end
 
--- Engine camera world position plus the head translation rotated by the base heading
 local function expectedHeadPosition()
     local bx, by, bz = getWorldTranslation(CAMERA)
     local hx, hy, hz = rotateY(0.12, 0.05, -0.2, engineCameraHeading())
@@ -494,7 +469,6 @@ test("AfrPlacesEachEyeAtTheEngineCameraPlusTheRotatedHeadTranslationAndEyeOffset
         eyeNodes[eye] = bound
         assertEyePlaced(bound, eye, "AFR")
     end
-    -- Temporal upscalers (DLSS, FSR) drop their history whenever the rendering camera changes
     assert(eyeNodes[0] == eyeNodes[1], "both eyes must render through one camera so temporal upscalers keep their history")
 
     local lx, ly, lz = getWorldTranslation(audioListener)
@@ -512,7 +486,6 @@ test("SequentialDualPassPositionsTheCorrectEyeOnBothSubPassesIncludingTheSubPass
     _G.FSBaseMission = {
         update = function(self, dt)
             missionUpdates = missionUpdates + 1
-            -- the engine's vehicle camera update runs inside the mission update on sub-pass 0
             VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     }
@@ -545,13 +518,10 @@ test("HeadRotationComposesOnTheLevelBaseInAnyEngineEulerConvention", function()
         local state = { mode = "AFR", parity = 0,
             pose = { isValid = true, x = 0, y = 0, z = 0, pitch = 0.2, yaw = 0.3, roll = 0.25, qx = 0, qy = 0, qz = 0, qw = 1 } }
         setup(state)
-        -- The orbit looks back at the vehicle, as it does by default
         local cam = installOrbitCamera({ 0, math.pi, 0 })
 
         local ok, err = pcall(function()
             VRCompanion:onVehicleCameraUpdate(cam, 16.6)
-            -- The level base turned to the camera's heading, then the head's rotation as VRBridge
-            -- reports it, R = Ry(yaw) * Rx(pitch) * Rz(roll), whatever the engine's convention
             local head = matMul(axisRotation("Y", 0.3), matMul(axisRotation("X", 0.2), axisRotation("Z", 0.25)))
             local expected = matMul(axisRotation("Y", engineCameraHeading()), head)
             local actual = worldTransform(bound)
@@ -589,7 +559,6 @@ end)
 test("TheBoundEyeCameraClipsLikeTheEngineCameraItReplaces", function()
     local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
     setup(state)
-    -- The eye cameras already exist from another camera with its own clip planes (on foot, say)
     VRCompanion:ensureDualEyeCameraNodes(nil)
     for _, eye in ipairs({ VRCompanion.cameraNodeLeft, VRCompanion.cameraNodeRight }) do
         clipByNode[eye] = { 0.15, 2000 }
@@ -627,7 +596,6 @@ end)
 test("FixedOutsideCameraAimedDownwardStillYieldsALevelBase", function()
     local state = { mode = "AFR", parity = 1, pose = tiltedPose() }
     setup(state)
-    -- A rear hitch camera, turned to face backwards and aimed 0.9 rad down at the drawbar
     local cam = installFixedCamera({ 0.15, 0.7, -0.12 }, { -0.9, math.pi, 0 })
 
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
@@ -650,8 +618,6 @@ test("CameraPointingStraightDownProducesFiniteStableTransforms", function()
     local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
     setup(state)
     local headings = {}
-    -- Exactly straight down, then a hair either side of vertical: the horizontal projection of the
-    -- look direction flips by pi across vertical, the view must not
     for i, pitchOffset in ipairs({ 0, 1e-5, -1e-5, 1e-3, -1e-3 }) do
         local cam = installFixedCamera({ 0, 0.7, 0 }, { -math.pi / 2 + pitchOffset, 0, 0 })
         VRCompanion:onVehicleCameraUpdate(cam, 16.6)
@@ -714,7 +680,6 @@ test("MenuFramesThroughTheCompanionUpdateNeverWriteTheEngineOutsideCameraNodes",
     _G.g_gui = { getIsGuiVisible = function() return guiVisible end }
 
     local ok, err = pcall(function()
-        -- The menu opens, the player keeps moving their head, then closes it
         for frame = 1, 3 do
             state.pose.x = 0.05 * frame
             state.pose.yaw = 0.1 * frame
@@ -734,7 +699,6 @@ test("MenuFramesThroughTheCompanionUpdateNeverWriteTheEngineOutsideCameraNodes",
     assert(ok, tostring(err))
 end)
 
--- The view shows exactly what the engine camera sees: its world position and full world rotation
 local function assertShowsEngineView(node, label)
     local ex, ey, ez = getWorldTranslation(CAMERA)
     local x, y, z = getWorldTranslation(node)
@@ -755,7 +719,6 @@ test("WithAnInvalidHeadPoseTheOutsideCameraShowsTheEngineViewInsteadOfFreezing",
     local cam = installOrbitCamera()
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
 
-    -- Tracking drops out while the vehicle drives on and the player orbits
     state.pose = nil
     scene[VEHICLE].t = { 135, 4.5, -48 }
     scene[ROTATE].r = { -0.5, 1.9, 0 }
@@ -772,7 +735,6 @@ test("WithoutALevelBaseNodeTheOutsideCameraShowsTheEngineView", function()
     local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
     setup(state)
     local cam = installOrbitCamera()
-    -- No transform group can be created for the level base
     _G.createTransformGroup = nil
 
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)

@@ -1,47 +1,20 @@
--- ====================================================================
--- FS25 VR Companion Mod: Dialog probe
---
--- A diagnostic console command for Stereo Dialogs (spec #142, ADR-0032): while a game dialog is open it writes what the game shows
--- to the game log, so that a headset run on a real fish catch (the Highlands Fishing DLC's Lua is encrypted) tells what the
--- Stereo Dialog support needs: the dialog's GUI name, how sell and release are answered (a callback or a method), which input
--- actions answer it, which fish fields it holds (species, weight, price) and where its root sits. Read-only: nothing is called,
--- nothing is written to the game's tables, and any field that cannot be read becomes a line, never an error.
---
--- The game's GUI (Gui.lua): g_gui.currentGuiName is the open SCREEN's name (a dialog does not set it), g_gui.dialogs holds the open
--- dialogs' root GuiElements in the order they opened, and each root's `target` is the dialog's controller object, whose class chain
--- holds the methods (the sell and release handlers, the base dialog's). The newest dialog is the one the player answers.
---
--- PUBLIC SURFACE
---   VRCompanion:getDialogDiagnostics() -> lines   the lines the command writes, without the tag ("no dialog open" when none is)
---   Registered with the core: the console command only; the registry adds it on map load and removes it on map unload
---   Console: vrDialogDiagnostics   logs, tagged "[FS25_VR] dialog probe: " in the game log (Documents\My Games\FarmingSimulator2025\log.txt):
---     g_gui.currentGuiName and currentDialogName, the open dialogs' names, the newest dialog's name and class, its class chain
---     (each class's method names), its root element's fields and its target's own fields (one level deep, functions by name), and
---     every position, size, margin or offset field of the root and of the target's elements, the yes and no buttons and the text
---     element dumped whole (their input action and click handler), and every long string in full (the dialog's text holds the catch)
---
--- The dump's readers are the Hand Tool probe's (VRCompanionHandTools.lua: VRCompanion.HandTools.probeReaders).
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
-local engine = VRCompanion.getEngineGlobal  -- VRCompanionCore.lua, loaded before this file
-local readers = VRCompanion.HandTools.probeReaders  -- VRCompanionHandTools.lua, loaded before this file
+local engine = VRCompanion.getEngineGlobal
+local readers = VRCompanion.HandTools.probeReaders
 local shortValue, sortedKeys, functionNames, globalNameOf = readers.shortValue, readers.sortedKeys, readers.functionNames, readers.globalNameOf
 
 local TAG = "[FS25_VR] dialog probe: "
 
--- The caps. Each cut says how much was left out.
-local MAX_LINES = 1000          -- lines per run, the line that says how many were left out included
-local MAX_FIELDS = 400          -- fields shown per table
-local MAX_NESTED_KEYS = 40      -- a table field with more keys than this is only counted, not opened
-local MAX_CLASS_LEVELS = 8      -- levels of the class chain
-local MAX_POSITION_ELEMENTS = 20  -- elements of the target whose position is shown
-local MAX_COMPACT_ENTRIES = 8   -- entries of a position table shown on one line
-local SHORT_TEXT = 30           -- a string longer than this is cut by the short values, so it is also logged in full
-local MAX_FULL_TEXT = 1000      -- characters of one full text
+local MAX_LINES = 1000
+local MAX_FIELDS = 400
+local MAX_NESTED_KEYS = 40
+local MAX_CLASS_LEVELS = 8
+local MAX_POSITION_ELEMENTS = 20
+local MAX_COMPACT_ENTRIES = 8
+local SHORT_TEXT = 30
+local MAX_FULL_TEXT = 1000
 
--- The target's elements dumped whole: the answer buttons (their input action, click handler) and the text the player reads.
 local DUMPED_ELEMENTS = { "yesButton", "noButton", "dialogTextElement" }
 
 local POSITION_WORDS = { "pos", "size", "margin", "offset", "anchor", "pivot", "scale", "align", "width", "height" }
@@ -55,8 +28,6 @@ local function isPositionKey(key)
     return false
 end
 
--- One short line of text for a value: as the Hand Tool probe shows it, and a small table (a position is two numbers) with its
--- entries, sorted by key.
 local function compactValue(value)
     if type(value) ~= "table" then return shortValue(value) or type(value) end
     local keys = sortedKeys(value)
@@ -71,7 +42,6 @@ local function compactValue(value)
     return "{ " .. table.concat(parts, ", ") .. " }"
 end
 
--- The name the dialog's class has: the engine's own answer, else the global the class is kept under.
 local function classNameOf(object, chain)
     local classUtil = engine("ClassUtil")
     if type(classUtil) == "table" and type(classUtil.getClassNameByObject) == "function" then
@@ -107,12 +77,7 @@ local function classChain(object)
     return chain
 end
 
--- Writes a table's own fields: a line per field with its name, Lua type and short value, a small table field's entries one
--- level further, and the function names in one line (a function is a field like any other, by name). Reads with rawget, so no
--- __index of the game's runs.
 local function dumpTable(label, tbl, add)
-    -- Plain values (numbers, strings, booleans: the fish's species, weight and price) come before tables, so that a dialog with
-    -- hundreds of element tables is cut among those, not among the values.
     local plain, rest = {}, {}
     for _, key in ipairs(sortedKeys(tbl)) do
         local kind = type(rawget(tbl, key))
@@ -154,8 +119,6 @@ local function dumpTable(label, tbl, add)
     end
 end
 
--- The strings of a table that dumpTable's short values cut (a dialog's text holds the catch: species, weight, price), whole, one
--- line each, capped at MAX_FULL_TEXT characters.
 local function fullTexts(label, tbl, add)
     for _, key in ipairs(sortedKeys(tbl)) do
         local value = rawget(tbl, key)
@@ -165,7 +128,6 @@ local function fullTexts(label, tbl, add)
     end
 end
 
--- The position-related fields of a table (position, absPosition, size, margin, offsets, anchors...), one line.
 local function positionLine(label, tbl)
     local parts = {}
     for _, key in ipairs(sortedKeys(tbl)) do
@@ -178,7 +140,6 @@ local function positionLine(label, tbl)
     return string.format("%s position fields: %s", label, table.concat(parts, "; "))
 end
 
--- Every part runs on its own: a failure becomes a line, and the other parts go on.
 local function guarded(what, part, add)
     local ok, err = pcall(part)
     if not ok then add(what .. " could not be read (" .. tostring(err) .. ")") end
@@ -190,7 +151,6 @@ local function readField(tbl, key)
     return ok and value or nil
 end
 
--- The newest open dialog's root element, and how many there are, or nil when no dialog is open.
 local function openDialogs()
     local gui = engine("g_gui")
     if type(gui) ~= "table" then return nil, 0, gui end
@@ -287,7 +247,6 @@ function VRCompanion:consoleCommandDialogDiagnostics()
     return lines[1] == "no dialog open" and "no dialog open" or string.format("dialog probe: %d lines in the game log", #lines)
 end
 
--- Map load and unload: only the console command, which the registry adds and removes. Order: none matters against the others.
 VRCompanion:registerSubsystem("dialogDiagnostics", {
     consoleCommands = {
         { name = "vrDialogDiagnostics", description = "Log the open dialog's GUI name, class, methods and fields to the game log (read-only; says so when no dialog is open): vrDialogDiagnostics", method = "consoleCommandDialogDiagnostics" },

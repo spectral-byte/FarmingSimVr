@@ -17,7 +17,6 @@
 namespace fs25vr {
 namespace {
 
-// A fake FidelityFX loader: it records every call it receives so tests observe what reaches the real API.
 constexpr ffxStructType_t kFrameGenerationCreateType = 0x00020000u;
 constexpr ffxStructType_t kFrameGenerationDispatchType = 0x00020001u;
 constexpr ffxStructType_t kBackendCreateType = 0x00000002u;
@@ -218,7 +217,6 @@ TEST_F(FidelityFxInterceptorTest, UnknownContextTypesPassThroughUntouched) {
     EXPECT_FALSE(m_ffx.IsVirtualContext(context));
     EXPECT_EQ(m_ffx.GetActiveVirtualContextCount(), 0u);
 
-    // Its dispatch, configure, query and destroy reach the loader with the context the game holds.
     ffxApiHeader dispatchDesc{kFrameGenerationDispatchType, nullptr};
     EXPECT_EQ(MockDispatch(&context, &dispatchDesc), FFX_API_RETURN_OK);
     ASSERT_EQ(s_dispatched.size(), 1u);
@@ -311,7 +309,6 @@ TEST_F(FidelityFxInterceptorTest, ADiscontinuityFlushSetsTheResetFlagForBothCont
     ffxContext context = CreateUpscaler();
     m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
     auto desc = MakeUpscaleDispatchDesc();
-    // First dispatches latch the current Stereo Presentation Mode and drain any earlier flush.
     m_bridge.SetSubPassIndex(0);
     Dispatch(context, desc);
     m_bridge.SetSubPassIndex(1);
@@ -479,7 +476,7 @@ TEST(FfxMvConventionsTest, ReadsTheProjectionFromTheDispatchCameraFields) {
     desc.cameraFovAngleVertical = 1.0f;
     FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags, desc);
     ASSERT_TRUE(c.hasProjection);
-    EXPECT_NEAR(c.tanHalfFovY, 0.5463025f, 1e-6f); // tan(0.5 rad)
+    EXPECT_NEAR(c.tanHalfFovY, 0.5463025f, 1e-6f);
     EXPECT_FLOAT_EQ(c.nearClip, 0.1f);
     EXPECT_FLOAT_EQ(c.farClip, 1000.0f);
 }
@@ -508,7 +505,7 @@ TEST(FfxMvConventionsTest, NearAndFarGivenSwappedForReverseDepthAreNormalised) {
 }
 
 TEST(FfxMvConventionsTest, UnusableCameraFieldsLeaveTheProjectionToTheCameraRecord) {
-    auto desc = MakeUpscaleDispatchDesc(); // the camera fields are all zero
+    auto desc = MakeUpscaleDispatchDesc();
     EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, desc).hasProjection);
     desc.cameraNear = 0.1f;
     desc.cameraFar = std::numeric_limits<float>::max(); // an infinite far plane
@@ -524,7 +521,6 @@ TEST(FfxMvConventionsTest, InfiniteDepthTakesTheNearPlaneWhicheverFieldCarriesIt
     auto desc = MakeUpscaleDispatchDesc();
     desc.cameraFovAngleVertical = 1.0f;
     desc.viewSpaceToMetersFactor = 2.0f;
-    // The far field is meaningless with an infinite far plane: FLT_MAX, zero, or the near plane swapped in.
     desc.cameraNear = 0.1f;
     desc.cameraFar = std::numeric_limits<float>::max();
     FfxMvConventions c = ReadFfxMvConventions(kInfiniteFlags, desc);
@@ -546,7 +542,7 @@ TEST(FfxMvConventionsTest, InfiniteDepthTakesTheNearPlaneWhicheverFieldCarriesIt
 
 TEST(FfxMvConventionsTest, ANegativeXMotionVectorScaleIsReadWithItsSign) {
     auto desc = MakeUpscaleDispatchDesc();
-    desc.motionVectorScale = {-3004.0f, 1690.0f}; // -width/2, +height/2 of a 6008x3380 render, as seen in game
+    desc.motionVectorScale = {-3004.0f, 1690.0f};
     FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, desc);
     EXPECT_EQ(c.unsupportedReason, nullptr);
     EXPECT_FLOAT_EQ(c.mvScaleX, -3004.0f);
@@ -567,8 +563,6 @@ TEST(FfxMvConventionsTest, ConventionsTheCorrectionCannotHonourAreReportedAsUnsu
                   .unsupportedReason, nullptr);
     EXPECT_EQ(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE, desc).unsupportedReason, nullptr);
 }
-
-// ---- Motion vector correction ----
 
 class FfxFakeMvPass : public IMotionVectorPass {
 public:
@@ -630,10 +624,8 @@ protected:
         FidelityFxInterceptorTest::TearDown();
     }
 
-    // Sequential Dual-Pass, the left eye rendering after the right eye 0.064 m away, one frame after its own
-    // previous render: all three cameras resolve.
     void SetUpSdpWithRecords(VRRenderingMode mode = VRRenderingMode::SequentialDualPass) {
-        m_bridge.SetRenderingMode(mode); // switching mode drops camera records, so it comes first
+        m_bridge.SetRenderingMode(mode);
         CameraRecordStore& cameras = m_bridge.GetCameraRecords();
         ASSERT_TRUE(cameras.Report(FfxCamera(0, 10.0)));
         cameras.AdvanceFrame();
@@ -671,7 +663,6 @@ TEST_F(FfxMvCorrectionTest, FsrReceivesTheInjectorsTextureAndTheGamesDescription
     ASSERT_EQ(s_dispatchMotionVectors.size(), 1u);
     EXPECT_EQ(s_dispatchMotionVectors[0], m_pass->output);
     EXPECT_EQ(s_dispatchMotionVectorStates[0], FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
-    // The game's description is back as it was.
     EXPECT_EQ(desc.motionVectors.resource, m_engineMv);
     EXPECT_EQ(desc.motionVectors.state, 2u);
 }
@@ -815,7 +806,6 @@ TEST_F(FfxMvCorrectionTest, AZeroMotionVectorScalePassesTheEnginesVectorsThrough
 }
 
 TEST_F(FfxMvCorrectionTest, ConventionsThePassCannotHonourKeepTheEnginesVectorsAndSkipThePass) {
-    // A context created with display-resolution motion vectors.
     ffxContext context = nullptr;
     auto createDesc = MakeUpscaleCreateDesc(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS);
     ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
@@ -829,7 +819,6 @@ TEST_F(FfxMvCorrectionTest, ConventionsThePassCannotHonourKeepTheEnginesVectorsA
 }
 
 TEST_F(FfxMvCorrectionTest, InfiniteDepthContextsAreCorrectedAndTheRequestSaysSo) {
-    // The game's FSR3 flags: HDR | DepthInverted | DepthInfinite (0x19), with a negative x scale.
     ffxContext context = nullptr;
     auto createDesc = MakeUpscaleCreateDesc(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE);
     ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
@@ -928,7 +917,7 @@ TEST_F(FfxMvProjectionDiagTest, TheDispatchAndRecordProjectionsAreLoggedOncePerA
     ffxContext context = nullptr;
     auto createDesc = MakeUpscaleCreateDesc(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE);
     ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
-    m_ffx.ArmDiagnostics(0); // creating a context arms the diagnostics
+    m_ffx.ArmDiagnostics(0);
     SetUpSdpWithRecords();
     m_ngxShared->SetMvFixEnabled(true);
     auto desc = MakeDesc();
@@ -944,7 +933,6 @@ TEST_F(FfxMvProjectionDiagTest, TheDispatchAndRecordProjectionsAreLoggedOncePerA
     const size_t first = log.find("[Diag] MvProjection");
     ASSERT_NE(first, std::string::npos) << log;
     EXPECT_EQ(log.find("[Diag] MvProjection", first + 1), std::string::npos) << "once per arming";
-    // The dispatch says near 0.2, fovY 0.8; the record says near 0.15, fovY 1.0 rad.
     EXPECT_NE(log.find("used=dispatch-desc nearClip=0.200"), std::string::npos) << log;
     EXPECT_NE(log.find("depthModel=infinite depthSource=create-flags"), std::string::npos) << log;
     EXPECT_NE(log.find("record{nearClip=0.150 farClip=2000.000 fovY=1.000"), std::string::npos) << log;
@@ -999,7 +987,7 @@ TEST_F(FfxMvCorrectionTest, ACorrectionComposesWithADiscontinuityResetAndBothAre
     SetUpSdpWithRecords();
     m_ngxShared->SetMvFixEnabled(true);
     auto desc = MakeDesc();
-    Dispatch(m_context, desc); // latches the mode
+    Dispatch(m_context, desc);
     m_ffx.TriggerDiscontinuityFlush();
     Dispatch(m_context, desc);
     EXPECT_TRUE(s_dispatchReset.back());
@@ -1022,7 +1010,6 @@ TEST_F(FfxMvCorrectionTest, ArmedDiagnosticsAskForASelfCheckOfTheCorrectedVector
     EXPECT_FLOAT_EQ(r.mvScaleX, 2.0f);
     EXPECT_NEAR(r.current.tanHalfFovY, std::tan(0.4f), 1e-6f);
     EXPECT_FLOAT_EQ(r.current.farClip, 3000.0f);
-    // The vectors scored are the corrected ones: they should land on the same eye's previous camera.
     EXPECT_NEAR(r.toPrevious.c[0], 0.0f, 1e-5f);
 }
 
@@ -1050,5 +1037,5 @@ TEST_F(FidelityFxInterceptorTest, AttachDirectRejectsMissingEntryPoints) {
     EXPECT_FALSE(m_ffx.IsAttached());
 }
 
-} // namespace
-} // namespace fs25vr
+}
+}

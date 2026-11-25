@@ -49,17 +49,6 @@ DXGI_FORMAT MvPassDepthViewFormat(DXGI_FORMAT resourceFormat) {
 }
 
 const char* MvPassShaderSource() {
-    // "main" is the pass-through: the output is the engine's motion vector, unchanged.
-    // "correct" mirrors mv_reprojection.cpp (CorrectMotionVector): it unprojects the pixel from reverse-Z
-    // depth through the current camera and adds project(same eye's previous camera) - project(previous
-    // rendered frame's camera), in pixels divided by the MV scale, to the engine's vector. The sky is a
-    // point on the far plane. Where a projection is impossible the engine's vector is copied.
-    // "selfcheck" mirrors mv_reprojection.cpp (EvaluateSample): per sample on a sparse grid it unprojects
-    // the pixel from reverse-Z depth through the current camera, projects it through the previous rendered
-    // frame's camera and writes the error of the engine's vector (times the MV scale DLSS receives)
-    // against that prediction, under both sign conventions, and also the scaled and raw engine vectors and the
-    // prediction themselves (summed on the CPU into mean magnitudes and least-squares ratios). It writes only
-    // to the results buffer.
     return R"hlsl(
 Texture2D<float>  gDepth   : register(t0);
 Texture2D<float2> gMv      : register(t1);
@@ -262,8 +251,6 @@ bool MvPassCompileShader(std::string& bytecode, std::string& error, const char* 
     }
     code.Reset();
     messages.Reset();
-    // The compiler stays loaded for the process: its COM objects were released above, and a later
-    // Record never needs it again, but unloading buys nothing.
     return ok;
 }
 
@@ -361,8 +348,6 @@ public:
         ReadTimings();
         ReleaseRetired();
 
-        // Descriptors for this call: a ring slot, so the two eyes recorded in one frame do not overwrite
-        // each other before the GPU has run them.
         const UINT slot = static_cast<UINT>(m_calls % kSlotCount);
         const UINT inc = m_descriptorSize;
         D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_heap->GetCPUDescriptorHandleForHeapStart();
@@ -380,7 +365,7 @@ public:
         srv.Format = mvFormat;
         device->CreateShaderResourceView(in.motionVectors, &srv, cpu);
         cpu.ptr += inc;
-        device->CreateShaderResourceView(m_output.Get(), &srv, cpu); // corrected vectors, read by the self-check
+        device->CreateShaderResourceView(m_output.Get(), &srv, cpu);
         cpu.ptr += inc;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
         uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -390,15 +375,12 @@ public:
         D3D12_UNORDERED_ACCESS_VIEW_DESC resultsUav = {};
         resultsUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         resultsUav.Format = DXGI_FORMAT_UNKNOWN;
-        resultsUav.Buffer.NumElements = kSelfCheckSamples * 4; // four uint4 per sample (sizeof(SampleResult))
+        resultsUav.Buffer.NumElements = kSelfCheckSamples * 4;
         resultsUav.Buffer.StructureByteStride = 4 * sizeof(uint32_t);
         device->CreateUnorderedAccessView(m_results.Get(), nullptr, &resultsUav, cpu);
 
         ID3D12GraphicsCommandList* cl = in.cmdList;
-        // `vrPerfTrace`: GPU timestamps around the whole pass, the self-check included.
         const int timingSlot = BeginTiming(cl);
-        // Our own texture: shader resource (as the upscaler reads it) -> UAV for the write -> back.
-        // The engine's depth and motion vectors are only read, in the state the upscaler already needs.
         Transition(cl, m_output.Get(), m_outputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ID3D12DescriptorHeap* heaps[] = {m_heap.Get()};
         cl->SetDescriptorHeaps(1, heaps);
@@ -415,9 +397,6 @@ public:
         Transition(cl, m_output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kUpscalerInputState);
         m_outputState = kUpscalerInputState;
 
-        // The self-check only measures: it reads the engine's depth and vectors and writes the results
-        // buffer, which is copied to a readback buffer that is read a few evaluations later.
-        // A near plane estimate always reads the engine's original vectors, even when the correction ran.
         if (in.selfCheck && EnsureReadbackBuffers()) {
             RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting && !in.selfCheck->nearEstimate);
         }
@@ -441,8 +420,6 @@ public:
                 continue;
             }
             const auto* samples = static_cast<const mvreproj::SampleResult*>(mapped);
-            // Every element carries the stamp of the evaluation that wrote it; a mismatch means the GPU
-            // has not run that copy yet (or a later one overwrote it), so look again later.
             bool ready = true;
             for (UINT i = 0; i < kSelfCheckSamples && ready; ++i) ready = samples[i].sequence == p.sequence;
             if (ready) {
@@ -478,8 +455,6 @@ private:
         float assumedNear = 0.0f;
     };
 
-    // The pass records on the game's command list, so no fence says when its timestamps are written: they are
-    // read many calls later, and a slot whose start stamp is unchanged since its last read has not run yet.
     struct TimingSlot {
         bool pending = false;
         uint64_t recordedAtCall = 0;
@@ -517,11 +492,10 @@ private:
         return true;
     }
 
-    // The timestamp slot this call is timed in, or -1 when it is not timed.
     int BeginTiming(ID3D12GraphicsCommandList* cl) {
         if (!PerfTrace::Instance().IsActive() || !EnsureTiming()) return -1;
         const UINT slot = static_cast<UINT>(m_timedCalls++ % kTimingSlots);
-        if (m_timing[slot].pending) return -1;  // not read back yet
+        if (m_timing[slot].pending) return -1;
         cl->EndQuery(m_timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
         return static_cast<int>(slot);
     }
@@ -577,7 +551,6 @@ private:
                                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                                            IID_PPV_ARGS(&m_readback[i]));
             if (FAILED(hr)) {
-                // The self-check is a diagnostic: losing it must not cost the pass itself.
                 LogWarn("MvPass: self-check readback buffer creation failed (" + HrString(hr) + "); the self-check is off");
                 m_readbackFailed = true;
                 return false;
@@ -591,7 +564,7 @@ private:
         c.b[0] = req.mvScaleX;
         c.b[1] = req.mvScaleY;
         c.b[2] = req.current.tanHalfFovY;
-        c.b[3] = static_cast<float>(width) / static_cast<float>(height); // the render aspect
+        c.b[3] = static_cast<float>(width) / static_cast<float>(height);
         c.c[0] = req.current.nearClip;
         c.c[1] = req.current.farClip;
         c.c[3] = req.previousFrame.tanHalfFovY;
@@ -614,12 +587,12 @@ private:
         PassConstants c = {};
         c.a[0] = width;
         c.a[1] = height;
-        c.a[2] = readCorrected ? 1u : 0u; // the output is in the upscaler-input (shader resource) state here
+        c.a[2] = readCorrected ? 1u : 0u;
         c.a[3] = sequence;
         c.b[0] = req.mvScaleX;
         c.b[1] = req.mvScaleY;
         c.b[2] = req.current.tanHalfFovY;
-        c.b[3] = static_cast<float>(width) / static_cast<float>(height); // the render aspect
+        c.b[3] = static_cast<float>(width) / static_cast<float>(height);
         c.c[0] = req.current.nearClip;
         c.c[1] = req.current.farClip;
         c.c[2] = static_cast<float>(kSelfCheckGrid);
@@ -837,13 +810,13 @@ private:
     uint64_t m_timedCalls = 0;
 };
 
-} // namespace
+}
 
 std::unique_ptr<IMotionVectorPass> CreateD3D12MotionVectorPass() {
     return std::make_unique<D3D12MotionVectorPass>();
 }
 
-} // namespace fs25vr
+}
 
 namespace fs25vr {
 
@@ -871,7 +844,6 @@ bool BuildMvSelfCheckRequest(const ResolvedCameras& resolved, uint32_t eye, uint
     request.previous.farClip = resolved.previousFrame->farClip;
     request.toPrevious = mvreproj::MakeRelativeTransform(*resolved.previousFrameRelative);
     if (corrected && corrected->decision == mvreproj::CorrectionDecision::Correct) {
-        // The vectors being scored are the corrected ones: they should land on the same eye's previous camera.
         request.previous = corrected->sameEye;
         request.toPrevious = corrected->toSameEye;
     }
@@ -910,7 +882,7 @@ void AppendNumber(std::stringstream& ss, float v) {
     else ss << v;
 }
 
-} // namespace
+}
 
 std::string FormatMvProjectionLine(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
                                    const MvProjectionDiag& d) {
@@ -967,4 +939,4 @@ std::string FormatMvSelfCheckSkipped(const char* logPrefix, const char* unit, ui
            std::to_string(eye) + ": " + reason;
 }
 
-} // namespace fs25vr
+}

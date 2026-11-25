@@ -7,7 +7,6 @@
 
 namespace fs25vr {
 
-// NGX Result Codes
 using NVSDK_NGX_Result = int32_t;
 constexpr NVSDK_NGX_Result NVSDK_NGX_Result_Success = 1;
 constexpr NVSDK_NGX_Result NVSDK_NGX_Result_Fail = static_cast<int32_t>(0x80004005);
@@ -23,7 +22,6 @@ constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_FeatureAlreadyExists = static_c
 #define NVSDK_NGX_FAILED(res) (!NVSDK_NGX_SUCCEED(res))
 #endif
 
-// NGX Feature Enums
 enum NVSDK_NGX_Feature {
     NVSDK_NGX_Feature_Reserved = 0,
     NVSDK_NGX_Feature_SuperSampling = 1,
@@ -36,7 +34,6 @@ enum NVSDK_NGX_Feature {
     NVSDK_NGX_Feature_Count = 8
 };
 
-// NGX Perf Quality Enums
 enum NVSDK_NGX_PerfQuality_Value {
     NVSDK_NGX_PerfQuality_Value_MaxPerf = 0,
     NVSDK_NGX_PerfQuality_Value_Balanced = 1,
@@ -46,7 +43,6 @@ enum NVSDK_NGX_PerfQuality_Value {
     NVSDK_NGX_PerfQuality_Value_DLAA = 5
 };
 
-// NGX DLSS Render Preset Hint Enums
 enum NVSDK_NGX_DLSS_Hint_Render_Preset {
     NVSDK_NGX_DLSS_Hint_Render_Preset_Default = 0,
     NVSDK_NGX_DLSS_Hint_Render_Preset_A = 1,
@@ -61,12 +57,10 @@ enum NVSDK_NGX_DLSS_Hint_Render_Preset {
     NVSDK_NGX_DLSS_Hint_Render_Preset_L = 12
 };
 
-// NGX Handle
 struct NVSDK_NGX_Handle {
     unsigned int Id = 0;
 };
 
-// Forward declaration of parameters interface
 struct NVSDK_NGX_Parameter {
     virtual void Set(const char* InName, unsigned long long InValue) = 0;
     virtual void Set(const char* InName, float InValue) = 0;
@@ -89,7 +83,6 @@ struct NVSDK_NGX_Parameter {
     virtual void Reset() = 0;
 };
 
-// Common NGX Parameter Names
 inline constexpr const char* NVSDK_NGX_Parameter_Width = "Width";
 inline constexpr const char* NVSDK_NGX_Parameter_Height = "Height";
 inline constexpr const char* NVSDK_NGX_Parameter_OutWidth = "OutWidth";
@@ -191,10 +184,8 @@ inline DlssRenderResolution DeriveDlssRenderResolution(
     return res;
 }
 
-// Progress Callback
 using PFN_NVSDK_NGX_ProgressCallback = void (*)(float InProgress, bool* OutShouldCancel);
 
-// NGX Function Signatures
 using PFN_NVSDK_NGX_D3D12_CreateFeature = NVSDK_NGX_Result (*)(
     ID3D12GraphicsCommandList* InCmdList,
     NVSDK_NGX_Feature InFeatureID,
@@ -225,4 +216,4 @@ using PFN_NVSDK_NGX_D3D12_DestroyParameters = NVSDK_NGX_Result (*)(
     NVSDK_NGX_Parameter* InParameters
 );
 
-} // namespace fs25vr
+}

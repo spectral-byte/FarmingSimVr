@@ -1,11 +1,3 @@
-// Hand Tools, the Tool Hand's trigger (ADR-0029), seen from outside: the real Companion Mod runs
-// against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
-// StubHandTool). The test moves the fake Motion Controllers, drives frames the way the game would and asserts what the game
-// would see: the calls of the lance's own use handler (the one the game's ACTIVATE_HANDTOOL binding calls), what XInput
-// answers for the Virtual Gamepad's triggers, which hand is the Pointer Hand. Never the mod's own state.
-// Prior art: test_virtual_gamepad_cab_use.cpp (an input the mod uses reads released on XInput; the held-input rule),
-// test_pointer_hand_switch.cpp (Pointer Hand rules) and test_hand_tools_lance.cpp (the lance in the hand).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <string>
@@ -14,13 +6,11 @@ namespace {
 
 using namespace hand_tools_test;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsTriggerTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // The mod started with a player on foot, the Virtual Gamepad on and the game clock set (the in-use timeout is on it).
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
@@ -28,7 +18,6 @@ protected:
         SetGameTime(10000);
     }
 
-    // The lance in the right Tool Hand, the hand picked up with the trigger let go.
     void StartWithLanceInTheRightHand() {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldLance(L));
@@ -37,14 +26,12 @@ protected:
         ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
     }
 
-    // What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
     XINPUT_GAMEPAD Pad() {
         XINPUT_STATE state{};
         EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
         return state.Gamepad;
     }
 
-    // The lance's own use handler, as the game's binding calls it: how many calls so far and the value of the last one.
     int UseCalls() { return static_cast<int>(Number(L, "#StubHandTool.useCalls")); }
     double LastUseValue() { return Number(L, "StubHandTool.useCalls[#StubHandTool.useCalls].value"); }
     bool Spraying() { return EvalLua(L, "lance.spec_highPressureWasherLance.isActivated") == "true"; }
@@ -52,7 +39,7 @@ protected:
     std::string PointerHand() { return EvalLua(L, "VRCompanion:getPointerHand()"); }
 };
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadHandToolsTriggerTest, HoldingTheToolHandsTriggerCallsTheLancesUseHandlerAsHeldAndLettingGoEndsTheUse) {
     StartWithLanceInTheRightHand();
@@ -117,16 +104,14 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, TheToolHandsTriggerReadsReleasedOnXIn
     EXPECT_EQ(Pad().bRightTrigger, 0);
 }
 
-// The held-input rule of every Virtual Gamepad use: an input already held when the use would begin keeps its binding until it
-// is let go, and the use does not act on it.
 TEST_F(VirtualGamepadHandToolsTriggerTest, ATriggerAlreadyHeldWhenTheLanceComesIntoTheHandKeepsItsBindingAndDoesNotSprayUntilLetGoAndPulledAgain) {
     ASSERT_NO_FATAL_FAILURE(Start());
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for a binding, with no Hand Tool in the player's hands
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
-    ASSERT_NO_FATAL_FAILURE(HoldLance(L));  // the player takes the lance
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));
     FRAMES(3);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
     EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
@@ -146,7 +131,7 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, ATriggerAlreadyHeldWhenTheLanceComesI
 TEST_F(VirtualGamepadHandToolsTriggerTest, ATriggerHeldWhenTheToolHandIsPickedUpWithTheLanceInHandKeepsItsBindingToo) {
     ASSERT_NO_FATAL_FAILURE(Start());
     ASSERT_NO_FATAL_FAILURE(HoldLance(L));
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // the controller is lifted with the trigger squeezed
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(2);
 
@@ -155,7 +140,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, ATriggerHeldWhenTheToolHandIsPickedUp
     EXPECT_EQ(Pad().bRightTrigger, 255);
 }
 
-// The game's own binding (X on a pad, the mouse, the keyboard) calls the same handler.
 TEST_F(VirtualGamepadHandToolsTriggerTest, TheGamesOwnUseToolBindingStillCallsTheLancesHandlerWhileTheLanceIsInTheToolHand) {
     StartWithLanceInTheRightHand();
     ForgetUseCalls();
@@ -169,8 +153,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, TheGamesOwnUseToolBindingStillCallsTh
     EXPECT_FALSE(Spraying());
 }
 
-// The Tool Hand does not stay "in use" holding a tool (a hand lying still for 3 s is set down); a held-still spray must not
-// drop the lance while the trigger is down.
 TEST_F(VirtualGamepadHandToolsTriggerTest, AHeldStillSprayDoesNotDropTheLanceAndAfterLettingGoTheHandIsSetDownAsAlways) {
     StartWithLanceInTheRightHand();
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -231,8 +213,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, PuttingTheLanceAwayWhileSprayingEndsT
     EXPECT_EQ(Pad().bRightTrigger, 255) << "pulled afresh with an unsupported tool in hand it is the pad's";
 }
 
-// ---- Pointer Hand ---------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsTriggerTest, InTheWorldTheToolHandHoldingTheLanceIsNeverThePointerHandAndTheOtherHandIs) {
     StartWithLanceInTheRightHand();
     EXPECT_EQ(PointerHand(), "nil") << "the only hand in use holds the lance";
@@ -240,7 +220,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, InTheWorldTheToolHandHoldingTheLanceI
     PICK_UP(kLeft, -0.25f, -0.10f, -0.30f);
     EXPECT_EQ(PointerHand(), "0") << "the other hand points at Click Points";
 
-    // The Tool Hand's pull would switch the Pointer Hand to it, were it not holding a tool.
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     headset.SetHandInputs(kRight, Trigger(0.0f));
@@ -274,8 +253,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, InAMenuEitherHandCanPointEvenWhileThe
     EXPECT_EQ(PointerHand(), "0") << "back in the world the Tool Hand holds the lance again and the other hand points";
 }
 
-// A Stereo Dialog (spec #142, story 10) is answered with the pad's buttons: the Tool Hand's trigger uses nothing while it
-// shows, so a button press for the dialog is not also a Hand Tool action.
 TEST_F(VirtualGamepadHandToolsTriggerTest, WhileAStereoDialogShowsTheToolHandsTriggerDoesNotUseTheLanceAndReachesThePad) {
     StartWithLanceInTheRightHand();
     ForgetUseCalls();
@@ -303,7 +280,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, WhileAStereoDialogShowsTheToolHandsTr
     FRAMES(2);
     EXPECT_TRUE(Spraying()) << "and the trigger uses the lance again once the dialog has closed";
 }
-// ---- Nothing changes when the tool is not in a tracked Tool Hand ------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsTriggerTest, WithAnUnsupportedHandToolTheTriggerIsThePadsAndThePointerHandRulesAreAsBefore) {
     ASSERT_NO_FATAL_FAILURE(Start());
@@ -336,7 +312,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, WithTheToolHandSetDownTheTriggerIsThe
     PICK_UP(kLeft, -0.25f, -0.10f, -0.30f);
     ASSERT_EQ(PointerHand(), "0");
 
-    // The right hand lies still for the in-use timeout while the left one is moved.
     for (int step = 0; step < 4; ++step) {
         AdvanceGameTime(1000);
         MOVE_HAND(kLeft, -0.25f + 0.05f * static_cast<float>(step + 1), -0.10f, -0.30f);
@@ -347,7 +322,6 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, WithTheToolHandSetDownTheTriggerIsThe
     EXPECT_EQ(Pad().bRightTrigger, 255);
     EXPECT_FALSE(Spraying());
 
-    // Picked up again it holds the lance and is not the Pointer Hand.
     headset.SetHandInputs(kRight, Trigger(0.0f));
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");

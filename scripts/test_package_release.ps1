@@ -1,13 +1,4 @@
-# Runs scripts\package_release.ps1 against a scratch copy of the repo and inspects what it leaves in the
-# scratch build\release, so the real build\release is never touched. Needs a built Injector and a
-# configured build tree (build\version.dll, build\version.pdb, build\CMakeCache.txt); a run that has to
-# succeed also needs Inno Setup, because packaging compiles the Installer. Fails (non-zero exit) if any
-# assertion fails. No Pester.
-#
-# Extending: add a Test-Case at the bottom. New-ScratchRepo builds the world, Invoke-Packaging runs the
-# script in it, the Assert-* helpers check what it left behind.
 param(
-    # Only run the cases whose name matches this wildcard (e.g. "*PDB*"); all cases when empty.
     [string]$Filter = ""
 )
 $ErrorActionPreference = "Stop"
@@ -23,8 +14,6 @@ foreach ($file in "version.dll", "version.pdb", "CMakeCache.txt") {
 
 $failures = New-Object System.Collections.Generic.List[string]
 
-# A copy of everything package_release.ps1 reads from the repo, with the real build's outputs in its
-# build\ folder. CMakeCache.txt still names the real dependency sources, which the licence notices come from.
 function New-ScratchRepo {
     $root = Join-Path ([IO.Path]::GetTempPath()) ("fs25vr-package-test-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path "$root\build" -Force | Out-Null
@@ -42,7 +31,6 @@ function Remove-ScratchRepo([string]$root) {
     if ($root -and (Test-Path $root)) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# Runs one of the scratch copy's scripts in a child shell and returns its exit code and output.
 function Invoke-ScratchScript([string]$root, [string]$script) {
     $out = Join-Path $root "$script.out.txt"
     $err = Join-Path $root "$script.err.txt"
@@ -58,10 +46,8 @@ function Invoke-ScratchScript([string]$root, [string]$script) {
 
 function Invoke-Packaging([string]$root) { Invoke-ScratchScript $root "package_release" }
 
-# What CI runs after packaging, against the scratch release folder and the scratch build's PDB.
 function Invoke-SymbolsCheck([string]$root) { Invoke-ScratchScript $root "check_release_symbols" }
 
-# Replaces the symbols zip in the scratch release folder with one holding exactly these files (name -> bytes).
 function Set-SymbolsZip([string]$root, [hashtable]$files) {
     $release = Join-Path $root "build\release"
     $zipPath = (Get-ChildItem $release -File -Filter "FS25_VR_v*_Symbols.zip" | Select-Object -First 1).FullName
@@ -75,7 +61,6 @@ function Set-SymbolsZip([string]$root, [hashtable]$files) {
     } finally { $zip.Dispose() }
 }
 
-# The four-part version that names every release file (FS25_VR_v<version>...), read from modDesc.xml.
 function Get-ReleaseVersion([string]$root) {
     [xml]$modDesc = Get-Content (Join-Path $root "mods\FS25_VRCompanion\modDesc.xml") -Raw
     $modDesc.modDesc.version
@@ -129,7 +114,6 @@ Test-Case "Packaging produces a symbols zip next to the zip bundle and the Setup
     $zippedPdb = (Get-ZipEntryHash $symbolsZip "version.pdb") -replace "-", ""
     Assert-True ($zippedPdb -eq $linkerPdb) "version.pdb in the symbols zip is not the PDB the linker wrote."
 
-    # scripts\test_installer.ps1 stages its newer Installers from the one FS25_VR_v* folder in build\release.
     $stagingFolders = @(Get-ChildItem $release -Directory -Filter "FS25_VR_v*")
     Assert-True ($stagingFolders.Count -eq 1) "build\release should hold exactly one FS25_VR_v* folder, it holds $($stagingFolders.Count)."
 }
@@ -170,9 +154,6 @@ Test-Case "The symbols check accepts a packaged release and rejects one whose sy
     Assert-True ($check.Output -match "Symbols\.zip") "The message should name the missing symbols zip:`n$($check.Output)"
 }
 
-# A PDB belongs to a DLL when both carry the GUID and age the linker stamped them with. These cases make a DLL
-# that names another PDB than the one it was linked with, by changing its CodeView record, so that the real PDB
-# in the scratch build no longer belongs to it.
 . (Join-Path $PSScriptRoot "symbols_identity.ps1")
 function Set-DllPdbIdentity([string]$dllPath, [ValidateSet("GUID", "age")][string]$Change) {
     $offset = (Get-DllPdbIdentity $dllPath).Offset
@@ -181,7 +162,6 @@ function Set-DllPdbIdentity([string]$dllPath, [ValidateSet("GUID", "age")][strin
     [IO.File]::WriteAllBytes($dllPath, $bytes)
 }
 
-# The console wraps an error message at its own width: compare the message with its line breaks folded away.
 function Get-OneLine([string]$text) { $text -replace '\s+', ' ' }
 
 foreach ($change in "GUID", "age") {

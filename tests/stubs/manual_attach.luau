@@ -1,28 +1,3 @@
--- Manual Attach (ADR-0035)
--- StubManualAttach.install(variant)   defines what Manual Attach has, in its mod environment (_G.FS25_manualAttach, with g_modIsLoaded):
---   g_manualAttach (canPlayerPerformManualAttachment, vehicleAttachmentHandler), the VehicleAttachmentHandler class (the constants
---   MAX_ATTACH_DISTANCE_SQ, MAX_ATTACH_ANGLE and PLAYER_MIN_DISTANCE_SQ; the static getAttachableInJointRange and isVehicleValid; the instance
---   methods updateCandidates, executeAttachment and getTargetImplement, and the five candidate fields), and the three attachments of the handler
---   (vehicleJointAttachment, powerTakeOffAttachment, connectionHosesAttachment, each with getActionEventInfo and performAttachment). The
---   mission's vehicleSystem.inputAttacherJoints, accessHandler:canFarmAccess and showBlinkingWarning are the game's.
---   variant   how Manual Attach is in this "release": nil / "ok", "globalFallback" (g_manualAttach and the class are plain globals, not in the
---   mod environment), "notLoaded" (the mod is not loaded), "instanceMissing" (no g_manualAttach), "handlerMissing" (no attachment handler on it),
---   "classMissing" (no VehicleAttachmentHandler class), "rangeHelperMissing" / "rangeHelperReshaped" (getAttachableInJointRange renamed / taking
---   fewer parameters), "validHelperMissing" / "validHelperReshaped" (isVehicleValid), "constantsMissing" (PLAYER_MIN_DISTANCE_SQ gone),
---   "actionInfoMissing" / "actionInfoReshaped" (the joint attachment's getActionEventInfo), "executeMissing" / "executeReshaped"
---   (executeAttachment), "performMissing" (the joint attachment's performAttachment), "detectedMissing" (the handler has no detectedVehicles),
---   "handlerFlagMissing" (the handler has no playerCanPerformManualAttachment, which its candidate update reads),
---   "ptoActionInfoMissing" / "ptoActionInfoReshaped" / "ptoPerformMissing" and "hoseActionInfoMissing" / "hoseActionInfoReshaped" /
---   "hosePerformMissing" (the same of the PTO and the hoses attachments), "ptoLookupReshaped" (the game's vehicles have the PTO specialization
---   without getOutputPowerTakeOffs), "hoseTargetsReshaped" (the game's vehicles have spec_connectionHoses without targetNodes).
--- StubManualAttach.tick()   Manual Attach's update for one game frame: the flag is true when the player is on foot, has no Hand Tool in hand and
---   the hands hold nothing; the handler's candidate update then picks its nearest candidates (as its own does).
--- StubManualAttach.detect(...) / detectAll()   the vehicles Manual Attach's detection has found (the handler's detectedVehicles).
--- StubManualAttach.performs   every performAttachment of an attachment, in order: { kind ("joint", "pto", "hoses"), attacherVehicle, jointIndex,
---   attachable, attachedImplement }. StubManualAttach.warnings   every blinking warning, as the text key (info_lower_warning,
---   info_detach_pto_warning, info_detach_hoses_warning). StubManualAttach.performCount(kind)
--- The vehicles (manual_attach_vehicles.luau): vehicle(name, joints, options), tractor(options), trailer(options), implement(name, options), lineUp, attachTo, ...
-
     StubManualAttach = {}
     local S = StubManualAttach
 
@@ -37,7 +12,6 @@
         mission.accessHandler = { canFarmAccess = function(_, farm, object) return object.farmId == nil or object.farmId == farm end }
         mission.showBlinkingWarning = function(_, text, ms) table.insert(S.warnings, text) end
 
-        -- ManualAttach.shouldHandleJoint (ManualAttach.lua): the stand-in's joints are all manual ones
         local function shouldHandleJoint(vehicle, object, jointIndex, playerCan, canToggle)
             if vehicle == nil or object == nil then return false end
             local jointDesc
@@ -47,7 +21,6 @@
             return (jointDesc.isManual ~= false) == playerCan
         end
 
-        -- ---- the joint attachment (VehicleJointAttachment.lua)
         local Joint = {}
         Joint.__index = Joint
         function Joint:canPerformAttachment(attacherVehicle, attachable, jointDescIndex)
@@ -97,7 +70,6 @@
             end
             return info
         end
-        -- getContextInfo: the text of the context box, the name of the Implement the prompts are about
         function Joint:getContextInfo(attacherVehicle, attachable, attachedImplement, jointIndex, playerCan)
             local target = attachable or attachedImplement
             if target == nil then return nil, nil end
@@ -108,10 +80,6 @@
         elseif variant == "actionInfoReshaped" then Joint.getActionEventInfo = function(self) return { visibility = true } end
         else Joint.getActionEventInfo = actionInfo end
 
-        -- ---- the PTO and hoses attachments (PowerTakeOffAttachment.lua, ConnectionHosesAttachment.lua): they act on the attached Implement
-        -- alone (its attacher vehicle is where the PTO and hoses go), as the real ones do: a connect when it can be connected, else a disconnect.
-        -- The Implement has a PTO or hoses when it says so (hasPto, hasHoses) and its vehicle has the outputs or targets for them.
-        -- `prefix` names the variants: <prefix>PerformMissing, <prefix>ActionInfoMissing, <prefix>ActionInfoReshaped.
         local function other(kind, prefix)
             local connectedKey, hasKey = kind == "pto" and "ptoConnected" or "hosesConnected", kind == "pto" and "hasPto" or "hasHoses"
             local attachment = {}
@@ -147,7 +115,6 @@
             return attachment
         end
 
-        -- ---- the handler (VehicleAttachmentHandler.lua)
         local Handler = {}
         Handler.__index = Handler
         Handler.MAX_ATTACH_DISTANCE_SQ = 0.7 * 0.7
@@ -178,7 +145,6 @@
         elseif variant == "rangeHelperReshaped" then Handler.getAttachableInJointRange = function(a) return nil, nil end
         else Handler.getAttachableInJointRange = inJointRange end
 
-        -- getCandidatesInAttachRange for the player: the nearest hitch with an Implement lined up, or the nearest attached Implement
         local function updateCandidates(self)
             if #S.detectedList == 0 then return end
             local player = self.playerCanPerformManualAttachment and _G.g_localPlayer or nil
@@ -235,7 +201,6 @@
         handler.attachments = { handler.vehicleJointAttachment, handler.powerTakeOffAttachment, handler.connectionHosesAttachment }
         S.handler, S.Handler = handler, Handler
 
-        -- ---- the mod (ManualAttach.lua, init.lua)
         local instance = { canPlayerPerformManualAttachment = false, vehicleAttachmentHandler = handler }
         if variant == "handlerMissing" then instance.vehicleAttachmentHandler = nil end
         if variant == "flagMissing" then instance.canPlayerPerformManualAttachment = nil end
@@ -255,7 +220,6 @@
         end
     end
 
-    -- ManualAttach:update for one game frame
     function S.tick()
         local instance, handler = S.instance, S.handler
         if instance == nil then return end
@@ -274,8 +238,6 @@
         S.drawPrompts()
     end
 
-    -- VehicleAttachmentHandler:draw: the input help prompt of each attachment ({ text, visible } by kind: joint, pto, hoses) and the context box
-    -- (the text of the last attachment that has one), for the candidate fields as the update left them.
     function S.drawPrompts()
         local handler = S.handler
         S.prompts, S.contextBox = {}, nil
@@ -293,7 +255,6 @@
         end
     end
 
-    -- Manual Attach's own key: the handler's execute path for an attachment (joint, pto, hoses), on whatever its candidate fields are now
     function S.pressKey(kind)
         local handler = S.handler
         local attachment = ({ joint = handler.vehicleJointAttachment, pto = handler.powerTakeOffAttachment, hoses = handler.connectionHosesAttachment })[kind]

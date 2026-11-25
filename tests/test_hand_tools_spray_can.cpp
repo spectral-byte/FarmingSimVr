@@ -1,13 +1,3 @@
-// Hand Tools, the spray can (ADR-0030), seen from outside: the real Companion Mod runs against the real VRBridge over
-// FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot, the game's
-// HandToolSprayCan with its update, its marker events and its targeter target type, trees to mark). A test moves the fake Motion
-// Controllers and the game clock, drives frames the way the game would and asserts what the player or the game would see: where
-// the can is, the ray the targeter cast and which tree it found, the marker events the can sent, what XInput answers for the
-// Tool Hand's trigger, the game's blinking warnings. Never the mod's own state.
-// Prior art: test_hand_tools_lance.cpp (a supported tool in the hand), test_hand_tools_look_ray.cpp (the targeter's ray),
-// test_hand_tools_trigger.cpp (the trigger, the pad's release and handover, the Pointer Hand) and test_hand_tools_chainsaw.cpp
-// (a tool whose target comes from the game's targeter).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <string>
@@ -16,15 +6,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers: where the can is and what the targeter did, as the game would know it. Each ray is { x, y, z, dirX, dirY, dirZ } in
-// the world.
-//   isWhereTheGamePutsIt(tool)   the tool is below the camera's pitch node at the game's placement
-//   isInTheHand(tool, which)     the tool hangs below the Virtual Hand
-//   canRay()                     where the can sprays from and along (its visual node)
-//   headRay()                    the first person camera: the ray the game casts without a Hand Tool
-//   targeterRay()                what the targeter cast in the last game frame
-//   sameRay(a, b), apart(a, b)   the two rays are the same / metres between where they start
-//   found()                      the trunk the can's targeter found in the last game frame, nil for none
 constexpr const char* kSprayCanHelpers = R"luau(
     function _G.isWhereTheGamePutsIt(tool)
         if getParent(tool.rootNode) ~= foot.cam.pitchNode then return false end
@@ -46,20 +27,15 @@ constexpr const char* kSprayCanHelpers = R"luau(
     function _G.rayText(r) return r[1] and string.format("(%.3f %.3f %.3f) -> (%.3f %.3f %.3f)", table.unpack(r)) or "none" end
 )luau";
 
-// The hand held so that the can points level (the grip frame's fingers, which the can is held along, level) and well away from the way the
-// head looks (down -Z).
 constexpr float kAimPitch = 1.4f;
 constexpr float kAimYaw = 1.2f;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsSprayCanTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string stubs;
 
-    // The mod started with a player on foot who has the game's spray can class, the Virtual Gamepad on and the game clock set
-    // (the in-use timeout is on it).
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         stubs = StubChunk("xml_settings") + SprayCanStubs();
@@ -71,7 +47,6 @@ protected:
         SetGameTime(10000);
     }
 
-    // The can held on foot with the right Motion Controller picked up and a few frames run: the common start of the tests below.
     void StartWithTheCanInTheRightHand() {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldSprayCan(L));
@@ -81,7 +56,6 @@ protected:
         ASSERT_EQ(EvalLua(L, "isInTheHand(can, 'right')"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
     }
 
-    // Both the aim and the grip pose of the hand set (the Virtual Hand follows the grip pose), turned as kAimPitch and kAimYaw say.
     void AimTheHand(uint32_t hand, float x, float y, float z) {
         headset.SetHandPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
         headset.SetHandGripPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
@@ -91,8 +65,6 @@ protected:
     std::string WhereTheGamePutsIt() { return EvalLua(L, "isWhereTheGamePutsIt(can)"); }
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
 
-    // Whether the game's targeter, in the game frame that follows, finds a trunk whose surface the ray (a Lua expression) meets
-    // `distance` metres along it. Any trunk planted before is taken away.
     bool FindsATrunkAt(const std::string& ray, double distance) {
         EXPECT_EQ(RunLuauChunk(L, ("StubHandTool.trees = {}; _G.trunk = StubHandTool.treeAt(" + ray + ", " + std::to_string(distance) + ", 0.15)").c_str(), "=plantTrunk"), 0);
         FRAMES(1);
@@ -100,9 +72,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Placement ------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsSprayCanTest, TheCanHeldOnFootHangsBelowTheRightVirtualHandAndFollowsItAcrossFramesAndARenderWithNoUpdate) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
@@ -120,7 +90,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, TheCanHeldOnFootHangsBelowTheRightVi
             "the can stayed where it was in the hand")
     )luau", "=follows"), 0);
 
-    // The second eye of an alternate frame render: the player moved and the camera followed, but no update ran.
     ASSERT_EQ(RunLuauChunk(L, "_G.canBefore = { getWorldTranslation(can.rootNode) }", "=canBefore"), 0);
     ASSERT_EQ(RunLuauChunk(L, "setTranslation(foot.parent, 0.12, 0, 0.05); StubScene.updateCamera()", "=moveWithoutUpdate"), 0);
     EXPECT_EQ(RunLuauChunk(L, R"luau(
@@ -133,7 +102,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, TheCanHeldOnFootHangsBelowTheRightVi
 TEST_F(VirtualGamepadHandToolsSprayCanTest, TheCanIsWhereTheGamePutsItWhileTheToolHandIsSetDownOrUntrackedAndBackInTheHandWhenItIsUsedAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
 
-    // Set down: the Motion Controller lies still for longer than the in-use timeout.
     AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_EQ(WhereTheGamePutsIt(), "true") << "set down: the game's own attachToolToCamera put the can in front of the view";
@@ -161,8 +129,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, WithTheLeftHandChosenAsTheToolHandTh
     EXPECT_EQ(InTheHand("left"), "true") << "the other hand being picked up does not take it";
     EXPECT_EQ(InTheHand("right"), "false");
 }
-
-// ---- The look ray and the reach ---------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsSprayCanTest, WithTheCanInTheToolHandTheTargetersRayRunsAlongTheNozzleStartingHalfAMetreBehindItAndFollowsTheHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
@@ -221,21 +187,17 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, WhileTheToolHandIsSetDownOrUntracked
     FRAMES(2);
     EXPECT_NEAR(Number(L, "apart(targeterRay(), canRay())"), 0.5, 1e-3) << "tracked again: the nozzle's ray";
 
-    AdvanceGameTime(3100);  // set down
+    AdvanceGameTime(3100);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "set down: the head's ray";
 }
 
-// ---- The trigger: one pull, one marker ----------------------------------------------------------------------------------------
-
 namespace {
 
-// A trunk 0.4 m along the nozzle's ray, found by the can's targeter in the game frames that follow.
 constexpr const char* kPlantATrunkAtTheNozzle = "StubHandTool.trees = {}; _G.trunk = StubHandTool.treeAt(canRay(), 0.4, 0.15)";
 
-}  // namespace
+}
 
-// The fixture's helpers for the markers the game sent, and the pad.
 #define SPRAY_CAN_TRIGGER_HELPERS() \
     auto markers = [&]() { return static_cast<int>(Number(L, "#StubHandTool.markers")); }; \
     auto pad = [&]() { \
@@ -266,7 +228,7 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, OnePullOfTheToolHandsTriggerSendsOne
     EXPECT_EQ(EvalLua(L, "tostring(#StubHandTool.placedMarkers == 1 and StubHandTool.placedMarkers[1].shape == trunk.node)"), "true")
         << "which the game then puts on the tree";
 
-    FRAMES(60);  // a second of holding: longer than the spray, which ends by itself
+    FRAMES(60);
     EXPECT_EQ(EvalLua(L, "tostring(can.spec_sprayCan.isSpraying)"), "false");
     EXPECT_EQ(markers(), 1) << "held, the trigger makes no more";
 
@@ -278,7 +240,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, OnePullOfTheToolHandsTriggerSendsOne
     EXPECT_EQ(markers(), 2) << "a second pull makes a second marker";
 }
 
-// The order of the mod's call and the can's own update, which clears its pressed flag, must not lose a pull however short.
 TEST_F(VirtualGamepadHandToolsSprayCanTest, APullAsShortAsOneFrameStillSendsItsMarker) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
     SPRAY_CAN_TRIGGER_HELPERS();
@@ -302,7 +263,7 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AnEmptyCanAndATreeThePlayerMayNotMar
     ASSERT_EQ(InTheHand("right"), "true");
     ASSERT_EQ(RunLuauChunk(L, kPlantATrunkAtTheNozzle, "=trunk"), 0);
     FRAMES(2);
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.warnings = {}", "=forgetTheMarkerTypeMessage"), 0);  // taking the can in hand names its marker type
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.warnings = {}", "=forgetTheMarkerTypeMessage"), 0);
 
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);
@@ -310,7 +271,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AnEmptyCanAndATreeThePlayerMayNotMar
     EXPECT_EQ(Number(L, "#StubHandTool.warnings"), 1.0) << "and warns, once for the pull";
     EXPECT_EQ(EvalLua(L, "StubHandTool.warnings[1].text"), "warning_sprayCanIsEmpty");
 
-    // A can with markers, a tree that is not the player's.
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(can); _G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can); StubHandTool.forbid(trunk)", "=fullCanForbiddenTree"), 0);
@@ -340,14 +300,12 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, TheToolHandsTriggerReadsReleasedOnXI
     EXPECT_EQ(pad().bRightTrigger, 0);
 }
 
-// The held-input rule of every Virtual Gamepad use: an input already held when the use would begin keeps its binding until it is let
-// go, and the use does not act on it.
 TEST_F(VirtualGamepadHandToolsSprayCanTest, ATriggerAlreadyHeldWhenTheCanComesIntoTheHandKeepsItsBindingAndSendsNoMarkerUntilLetGoAndPulledAgain) {
     ASSERT_NO_FATAL_FAILURE(Start());
     SPRAY_CAN_TRIGGER_HELPERS();
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for a binding, with no Hand Tool in the player's hands
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(pad().bRightTrigger, 255);
 
@@ -367,7 +325,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, ATriggerAlreadyHeldWhenTheCanComesIn
     EXPECT_EQ(pad().bRightTrigger, 0) << "and is not a binding";
 }
 
-// The game's own binding (X on a pad, the mouse, the keyboard) calls the same handler.
 TEST_F(VirtualGamepadHandToolsSprayCanTest, TheGamesOwnUseToolBindingStillMarksTreesWhileTheCanIsInTheToolHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
     SPRAY_CAN_TRIGGER_HELPERS();
@@ -382,7 +339,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, TheGamesOwnUseToolBindingStillMarksT
     EXPECT_EQ(markers(), 1);
 }
 
-// The Tool Hand does not stay "in use" holding a tool (a hand lying still for 3 s is set down); a held-still pull must not drop the can.
 TEST_F(VirtualGamepadHandToolsSprayCanTest, AHeldStillTriggerDoesNotDropTheCanAndAfterLettingGoTheHandIsSetDownAsAlways) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -399,8 +355,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AHeldStillTriggerDoesNotDropTheCanAn
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false") << "set down after three still seconds without the trigger";
 }
-
-// ---- The Pointer Hand ------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsSprayCanTest, InTheWorldTheToolHandHoldingTheCanIsNeverThePointerHandAndInAMenuEitherHandCanPoint) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
@@ -420,8 +374,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, InTheWorldTheToolHandHoldingTheCanIs
     FRAMES(2);
     EXPECT_EQ(pointerHand(), "1") << "in a menu a pull on the right hand points with it, as ever";
 }
-
-// ---- Nothing changes when the can is not in a tracked Tool Hand ---------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsSprayCanTest, WithVrHandToolsOffTheCanTheRayTheReachAndTheTriggerAreTheGamesAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());
@@ -461,8 +413,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AnotherModsToolIsPlacedAndAimedByThe
     EXPECT_EQ(Number(L, "#StubHandTool.useCalls"), 0.0);
 }
 
-// Multiplayer: the game attaches a Hand Tool of every player in the session through the same function. Only the local player's
-// tool goes into the Tool Hand.
 TEST_F(VirtualGamepadHandToolsSprayCanTest, AnotherPlayersCanIsNeverTakenIntoTheToolHandAndDoesNotChangeTheRay) {
     ASSERT_NO_FATAL_FAILURE(Start());
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
@@ -484,8 +434,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AnotherPlayersCanIsNeverTakenIntoThe
     FRAMES(2);
     EXPECT_EQ(Number(L, "#StubHandTool.useCalls"), 0.0) << "and the trigger does not use it";
 }
-
-// ---- Tuning and diagnostics -------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsSprayCanTest, VrHandToolOffsetSprayCanMovesTheCanInTheHandAndResetPutsItBack) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanInTheRightHand());

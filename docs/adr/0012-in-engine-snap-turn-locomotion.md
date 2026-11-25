@@ -29,3 +29,5 @@ Accepted
 - **Camera-only local offset without updating character `yawNode`** (rejected: causes character movement $W/A/S/D$ to move diagonally/sideways relative to the snapped view).
 - **Continuous / Animated Smooth Pan** (rejected: causes severe vestibular conflict and motion sickness for VR users).
 - **In-Engine `yawNode` and `cam.rotY` discrete stepping** (selected: maintains movement collinearity, zero motion sickness, seamless integration with vanilla input binding system).
+
+More decisions about this area, from the code comments: [ADR-0045](0045-actions-locomotion-and-seat-decisions.md).

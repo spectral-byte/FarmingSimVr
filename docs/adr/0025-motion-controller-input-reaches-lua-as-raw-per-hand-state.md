@@ -22,3 +22,5 @@ Proposed. Partly replaced by ADR-0028: buttons, triggers and sticks also reach t
 - The SteamVR binding screen shows the raw inputs (trigger, grip, thumbstick and so on), not game actions. The Companion Mod is where players change what a button does.
 - An OpenXR runtime that refuses the action set, or a session with no Motion Controllers, must leave head tracking and presentation working: VRBridge reports the hands as untracked and the Companion Mod does nothing with them, as with Pass-Through Mode in ADR-0004.
 - Adding a raw input later (for example, a touch sensor) changes the action set, so it needs an Injector release. Changing what an existing input does does not.
+
+More decisions about this area, from the code comments: [ADR-0046](0046-motion-controller-and-pointer-decisions.md), [ADR-0047](0047-virtual-hand-decisions.md), [ADR-0056](0056-openxr-decisions.md).

@@ -5,7 +5,6 @@
 
 namespace {
 
-// We use __declspec(noinline) so the compiler generates standard function prologues
 __declspec(noinline) int AddNumbers(int a, int b) {
     volatile int x = a;
     volatile int y = b;
@@ -49,7 +48,7 @@ uint64_t DetourMultiParam(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64
     return 0;
 }
 
-} // anonymous namespace
+}
 
 class DetourTest : public ::testing::Test {
 protected:
@@ -75,7 +74,6 @@ TEST_F(DetourTest, HooksAndForwardsFunctionCall) {
     s_originalAddNumbers = reinterpret_cast<int(*)(int, int)>(detour.GetOriginal());
     ASSERT_NE(s_originalAddNumbers, nullptr);
 
-    // DetourAddNumbers multiplies a by 2 and b by 3, then calls original: 2*2 + 3*3 = 4 + 9 = 13
     int result = AddNumbers(2, 3);
     EXPECT_EQ(result, 13);
     EXPECT_EQ(s_detourCallCount, 1);
@@ -83,10 +81,9 @@ TEST_F(DetourTest, HooksAndForwardsFunctionCall) {
     detour.Uninstall();
     EXPECT_FALSE(detour.IsInstalled());
 
-    // After uninstall, original behavior must be restored
     int restoredResult = AddNumbers(2, 3);
     EXPECT_EQ(restoredResult, 5);
-    EXPECT_EQ(s_detourCallCount, 1); // Not called again
+    EXPECT_EQ(s_detourCallCount, 1);
 }
 
 TEST_F(DetourTest, PreservesRegisterAndStackState) {
@@ -100,7 +97,6 @@ TEST_F(DetourTest, PreservesRegisterAndStackState) {
     ASSERT_NE(s_originalMultiParam, nullptr);
 
     uint64_t res = MultiParamFunction(10, 20, 30, 40, 50, 60);
-    // Captured parameters in detour
     EXPECT_EQ(s_capturedParams[0], 10ULL);
     EXPECT_EQ(s_capturedParams[1], 20ULL);
     EXPECT_EQ(s_capturedParams[2], 30ULL);
@@ -108,7 +104,6 @@ TEST_F(DetourTest, PreservesRegisterAndStackState) {
     EXPECT_EQ(s_capturedParams[4], 50ULL);
     EXPECT_EQ(s_capturedParams[5], 60ULL);
 
-    // MultiParamFunction returns sum (210) + 1000 = 1210
     EXPECT_EQ(res, 1210ULL);
 
     detour.Uninstall();
@@ -117,8 +112,6 @@ TEST_F(DetourTest, PreservesRegisterAndStackState) {
 TEST_F(DetourTest, SafelyRejectsShortFunctionsContainingRet) {
     fs25vr::FunctionDetour detour;
 
-    // Simulate a 3-byte stub: xor eax, eax (31 C0); ret (C3)
-    // Surrounding bytes are non-padding (push rbp) so MinHook cannot fall back to a hot-patch hook.
     auto* page = static_cast<uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     ASSERT_NE(page, nullptr);
     std::memset(page, 0x55, 4096);
@@ -152,7 +145,7 @@ TEST_F(DetourTest, TrampolineIsExecutable) {
 namespace {
 int (*s_originalRelJump)(int) = nullptr;
 int DetourRelJump(int a) { return s_originalRelJump(a * 2); }
-} // namespace
+}
 
 TEST_F(DetourTest, HooksFunctionWhosePrologueContainsRelativeJump) {
     // int f(int a) { return a + 5; } laid out so the prologue holds a rel32 jmp:
@@ -179,8 +172,8 @@ TEST_F(DetourTest, HooksFunctionWhosePrologueContainsRelativeJump) {
     s_originalRelJump = reinterpret_cast<int (*)(int)>(detour.GetOriginal());
     ASSERT_NE(s_originalRelJump, nullptr);
 
-    EXPECT_EQ(fn(3), 11);               // hooked: (3*2) + 5
-    EXPECT_EQ(s_originalRelJump(3), 8); // trampoline relocated the jmp correctly
+    EXPECT_EQ(fn(3), 11);
+    EXPECT_EQ(s_originalRelJump(3), 8);
 
     detour.Uninstall();
     EXPECT_EQ(fn(3), 8);
@@ -207,10 +200,9 @@ TEST_F(DetourTest, TargetCanBeHookedAgainAfterFailedRemoval) {
         fs25vr::FailNextHookRemovalForTesting();
         EXPECT_FALSE(first.Uninstall());
         EXPECT_FALSE(first.IsInstalled());
-        EXPECT_EQ(AddNumbers(2, 3), 5);  // disabled, though MinHook still holds the hook
+        EXPECT_EQ(AddNumbers(2, 3), 5);
     }
 
-    // A different FunctionDetour, as after a reattach or a re-created runtime.
     fs25vr::FunctionDetour second;
     ASSERT_TRUE(second.Install(reinterpret_cast<void*>(&AddNumbers),
                                reinterpret_cast<void*>(&DetourAddNumbers)));
@@ -231,7 +223,6 @@ TEST_F(DetourTest, SecondDetourOnLiveTargetIsRefused) {
                                   reinterpret_cast<void*>(&DetourAddNumbers)));
     EXPECT_FALSE(intruder.IsInstalled());
 
-    // The owner's hook and trampoline are untouched.
     EXPECT_TRUE(owner.IsInstalled());
     EXPECT_EQ(owner.GetOriginal(), reinterpret_cast<void*>(s_originalAddNumbers));
     EXPECT_EQ(AddNumbers(2, 3), 13);

@@ -73,7 +73,6 @@ bool D3D12EyeCopy::EnsureTimestamps() {
         FAILED(m_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
                                                  nullptr, IID_PPV_ARGS(&m_timestampReadback))) ||
         FAILED(m_queue->GetTimestampFrequency(&frequency)) || frequency == 0) {
-        // The trace still has its CPU timings; only the GPU eye copy lines are missing.
         LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU eye copy timing");
         m_timestampHeap.Reset();
         m_timestampReadback.Reset();
@@ -101,7 +100,6 @@ void D3D12EyeCopy::ReportTimestamps(uint32_t ringSlot) {
     m_timestampReadback->Unmap(0, &written);
     if (end < start) return;
 
-    // The GPU and CPU clocks drift apart slowly; recalibrating every few dozen copies keeps the lag exact.
     if (m_copiesSinceCalibration++ % 64 == 0) {
         UINT64 gpuTicks = 0;
         UINT64 cpuQpc = 0;
@@ -132,7 +130,6 @@ void D3D12EyeCopy::Copy(ID3D12Resource* backBuffer, ID3D12Resource* destTexture,
         m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocators[ringSlot]));
     }
     if (!m_copyCommandLists[ringSlot] && m_copyAllocators[ringSlot]) {
-        // A new list is created open. Close it so every use starts from a closed list that can be reset.
         if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot])))) {
             m_copyCommandLists[ringSlot]->Close();
         }
@@ -141,13 +138,10 @@ void D3D12EyeCopy::Copy(ID3D12Resource* backBuffer, ID3D12Resource* destTexture,
     auto& curAllocator = m_copyAllocators[ringSlot];
     auto& curCommandList = m_copyCommandLists[ringSlot];
 
-    // A copy with no destination texture records nothing: the slot's list stays closed, nothing is
-    // executed and its fence value is not advanced.
     if (!(curCommandList && curAllocator && destTexture)) {
         return;
     }
 
-    // Synchronize with previous execution on this specific ring slot if GPU has not finished it
     uint64_t waitVal = m_copyFenceValues[ringSlot];
     {
         PerfScope fenceTiming(PerfSection::CopyFenceWait);
@@ -160,11 +154,9 @@ void D3D12EyeCopy::Copy(ID3D12Resource* backBuffer, ID3D12Resource* destTexture,
             }
         }
     }
-    // The slot's earlier copy has run, so its timestamps are written.
     ReportTimestamps(ringSlot);
     const bool timed = PerfTrace::Instance().IsActive() && EnsureTimestamps();
 
-    // The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset.
     curAllocator->Reset();
     curCommandList->Reset(curAllocator.Get(), nullptr);
 
@@ -177,8 +169,6 @@ void D3D12EyeCopy::Copy(ID3D12Resource* backBuffer, ID3D12Resource* destTexture,
 
     barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barriers[1].Transition.pResource = destTexture;
-    // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
-    // returned to RENDER_TARGET before release.
     barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
     barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
@@ -269,7 +259,6 @@ bool D3D12EyeCopy::ClearToBlack(ID3D12Resource* backBuffer) {
         return false;
     }
 
-    // The previous clear's allocator is reusable only once the GPU has finished with it.
     if (m_clearFenceValue > 0 && m_fence->GetCompletedValue() < m_clearFenceValue && m_fenceEvent.IsValid()) {
         m_fence->SetEventOnCompletion(m_clearFenceValue, m_fenceEvent.Get());
         WaitForSingleObject(m_fenceEvent.Get(), INFINITE);
@@ -280,8 +269,6 @@ bool D3D12EyeCopy::ClearToBlack(ID3D12Resource* backBuffer) {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_clearRtvHeap->GetCPUDescriptorHandleForHeapStart();
     m_device->CreateRenderTargetView(backBuffer, nullptr, rtv);
 
-    // The game hands the back buffer to Present in the PRESENT state (as Copy assumes);
-    // it goes back to that state after the clear.
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = backBuffer;
@@ -303,4 +290,4 @@ bool D3D12EyeCopy::ClearToBlack(ID3D12Resource* backBuffer) {
     return true;
 }
 
-} // namespace fs25vr
+}

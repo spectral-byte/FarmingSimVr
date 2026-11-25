@@ -52,7 +52,6 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
         return m_lastPredictedDisplayTime;
     }
 
-    // Before the first frame: let the runtime convert the counter into its own time base.
     if (m_runtimeInfo.win32TimeConversionEnabled && m_instance != XR_NULL_HANDLE) {
         LARGE_INTEGER counter;
         counter.QuadPart = now.counter;
@@ -63,8 +62,6 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
         }
     }
 
-    // No runtime conversion: the counter in nanoseconds, computed without overflow. Runtimes that
-    // back XrTime with the performance counter share this time base, and the counter is monotonic.
     return QpcTicksToNanoseconds(now.counter, now.frequency);
 }
 
@@ -76,8 +73,6 @@ OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
 }
 
 OpenXrManager::~OpenXrManager() {
-    // At termination the runtime DLL may already be detached and a GPU fence wait could hang:
-    // leave the session and instance to the OS (see IsProcessTerminating).
     if (IsProcessTerminating()) return;
     Shutdown();
 }
@@ -325,8 +320,6 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
 
     XrResult res = m_dispatch->CreateSession(m_instance, &sessionInfo, &m_session);
     if (XR_FAILED(res)) {
-        // Final, like a lost session (ADR-0004): the session is attempted once the game's device is known, and a
-        // runtime that refuses that device refuses it again. The swap chain hooks see Pass-Through and change nothing.
         m_session = XR_NULL_HANDLE;
         LogError("OpenXrManager: The OpenXR runtime refused to create the session (result " + std::to_string(res) +
                  "). Continuing in Pass-Through Mode.");
@@ -336,8 +329,6 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
     m_sessionState = XR_SESSION_STATE_IDLE;
     LogInfo("OpenXrManager: Session created successfully; waiting for the runtime to report READY.");
 
-    // Motion Controllers (ADR-0025): declared and attached once per session. A runtime that refuses
-    // any step leaves both hands untracked; it never fails the session.
     m_input.Create(*m_dispatch, m_instance, m_session);
     return true;
 }
@@ -347,7 +338,6 @@ void OpenXrManager::PollEvents() {
         return;
     }
 
-    // Bounded drain so a misbehaving runtime can never stall the present path.
     for (int i = 0; i < 64; ++i) {
         XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
         XrResult res = m_dispatch->PollEvent(m_instance, &event);
@@ -369,9 +359,6 @@ void OpenXrManager::PollEvents() {
             break;
         }
         case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING: {
-            // The runtime's own recenter (holding the Meta button, SteamVR's Reset Seated Position).
-            // Before a savegame loads it is the only recenter there is, since the Recenter Action
-            // comes with the Companion Mod. Poses respect it from changeTime on.
             const auto* change = reinterpret_cast<const XrEventDataReferenceSpaceChangePending*>(&event);
             if (change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
                 m_menuQuad.AwaitHeadAfter(change->changeTime);
@@ -391,16 +378,12 @@ void OpenXrManager::PollEvents() {
         }
     }
 
-    // READY is delivered only once. If xrBeginSession failed then, keep retrying until it succeeds
-    // or the runtime moves the session on.
     if (m_sessionState == XR_SESSION_STATE_READY && !m_sessionRunning) {
         BeginRunningSession();
     }
 }
 
 bool OpenXrManager::EnterPassThroughIfLost(XrResult res) {
-    // A crashed or restarted runtime may fail frame calls with *_LOST without ever queueing a
-    // LOSS_PENDING event; treat it the same way.
     if (res == XR_ERROR_SESSION_LOST) {
         ReleaseAndEnterPassThrough("session lost");
         return true;
@@ -421,8 +404,6 @@ void OpenXrManager::HandleSessionStateChanged(XrSessionState state) {
         BeginRunningSession();
         break;
     case XR_SESSION_STATE_FOCUSED:
-        // The headset tracks before it is worn, so the first menu can be placed from wherever it
-        // rests. The first focus of a running session is when the player has it on.
         if (!m_focusedSinceBegin) {
             m_focusedSinceBegin = true;
             m_menuQuad.AwaitHeadAfter(0);
@@ -451,7 +432,6 @@ void OpenXrManager::BeginRunningSession() {
     beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     XrResult res = m_dispatch->BeginSession(m_session, &beginInfo);
     if (XR_FAILED(res)) {
-        // Retried once per poll while READY; log the first failure and then periodically.
         if (m_beginSessionFailures++ % 300 == 0) {
             LogError("OpenXrManager: BeginSession failed (result " + std::to_string(res) + ", attempt " +
                      std::to_string(m_beginSessionFailures) + ")");
@@ -469,7 +449,6 @@ void OpenXrManager::EndRunningSession() {
     if (m_session == XR_NULL_HANDLE || !m_sessionRunning) {
         return;
     }
-    // Any frame still in flight is abandoned; the runtime discards it when the session ends.
     m_frameBegun = false;
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
@@ -488,8 +467,6 @@ void OpenXrManager::EndRunningSession() {
 void OpenXrManager::ReleaseAndEnterPassThrough(const char* reason) {
     LogInfo(std::string("OpenXrManager: Releasing OpenXR resources (") + reason + "). Continuing in Pass-Through Mode.");
     m_frameBegun = false;
-    // Keeps Shutdown from calling xrEndSession, which is valid only once the runtime has moved the
-    // session to STOPPING; xrDestroySession is valid in any state and ends it.
     m_sessionRunning = false;
     Shutdown();
     m_state = OpenXrState::PassThrough;
@@ -651,15 +628,11 @@ HandState OpenXrManager::GetHandState(uint32_t hand) {
     }
 
     if (m_frameBegun && m_handsFrameSerial == m_frameSerial) {
-        // Inside a frame every read sees the snapshot taken at frame begin; only a Recenter moves
-        // the reference space under it.
         if (m_handPosesStale) {
-            RefreshHandState(m_frameState.predictedDisplayTime, /*resync=*/false);
+            RefreshHandState(m_frameState.predictedDisplayTime, false);
         }
     } else {
-        // No frame snapshot (before the first frame, or between frames): sync now and locate at the
-        // same time PollHeadPose uses.
-        RefreshHandState(GetCurrentXrTime(), /*resync=*/true);
+        RefreshHandState(GetCurrentXrTime(), true);
     }
     return m_input.Get(hand);
 }
@@ -718,8 +691,8 @@ void OpenXrManager::Recenter() {
     }
 
     m_lastPolledTime = 0;
-    m_handPosesStale = true;  // the hands are located against the local space that was just re-created
-    PollHeadPose(time);       // the head in the re-created local space, which the menu quad is placed from
+    m_handPosesStale = true;
+    PollHeadPose(time);
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
 }
@@ -730,7 +703,6 @@ float OpenXrManager::ClampFovOverscan(float percent) {
 }
 
 void OpenXrManager::SetFovOverscan(float percent) {
-    // The bridge clamps too, this keeps the manager safe on its own.
     m_requestedFovOverscan.store(ClampFovOverscan(percent));
 }
 
@@ -763,11 +735,6 @@ EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov, float s
         proj.aspectRatio = tanWidth / tanHeight;
     }
 
-    // The rendered FOV (ADR-0005): symmetric, and wide enough to cover every edge of the headset FOV. Its vertical
-    // half-angle tangent is the largest of the up tangent, the down tangent and the wider horizontal tangent divided
-    // by the aspect of the image it is rendered into (the eye swapchain; the headset FOV's own aspect before the
-    // swapchains exist). The horizontal half-angle follows from the aspect. FOV Overscan multiplies that tangent, so
-    // both axes widen by the same factor and the pixels stay square.
     const float aspect = (swapchainAspect > 1e-6f) ? swapchainAspect : proj.aspectRatio;
     const float widerTanX = std::max(std::abs(proj.tanLeft), std::abs(proj.tanRight));
     const float coveringTanHalfY = std::max({ std::abs(proj.tanUp), std::abs(proj.tanDown), widerTanX / aspect });
@@ -792,7 +759,6 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
         }
     }
 
-    // With no frame in flight there is no pair to keep on its FOV, so a new overscan shows at once.
     if (!m_frameBegun) {
         LatchFovOverscan();
     }
@@ -841,7 +807,7 @@ void OpenXrManager::LatchFovOverscan() {
     const float wanted = m_fovOverscanSuspended.load() ? 0.0f : m_requestedFovOverscan.load();
     if (wanted != m_fovOverscan) {
         m_fovOverscan = wanted;
-        m_lastLocatedViewsTime = 0;  // the views already located were computed with the old overscan
+        m_lastLocatedViewsTime = 0;
     }
 }
 
@@ -958,10 +924,6 @@ void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQu
 }
 
 DXGI_FORMAT OpenXrManager::SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported) {
-    // Candidates in preference order. An 8-bit back buffer holds sRGB-encoded colour even when its
-    // format is UNORM (flip-model swap chains can't be _SRGB), and runtimes treat a UNORM swapchain
-    // as linear and encode it again, which washes the headset image out. So the sRGB member of the
-    // family comes first and UNORM is only a fallback; other formats must match exactly.
     DXGI_FORMAT candidates[2] = { backBufferFormat, DXGI_FORMAT_UNKNOWN };
     switch (backBufferFormat) {
     case DXGI_FORMAT_R8G8B8A8_UNORM:
@@ -988,8 +950,6 @@ DXGI_FORMAT OpenXrManager::SelectCompatibleSwapchainFormat(DXGI_FORMAT backBuffe
 }
 
 DXGI_FORMAT OpenXrManager::NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFormat) {
-    // The eye image is filled by a straight copy from the back buffer, so the negotiated
-    // format must be copy-compatible with it. Never fall back to an incompatible format.
     std::vector<int64_t> supportedFormats;
     uint32_t formatCount = 0;
     XrResult res = m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr);
@@ -999,7 +959,6 @@ DXGI_FORMAT OpenXrManager::NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFor
         supportedFormats.resize(XR_SUCCEEDED(res) ? formatCount : 0);
     }
     if (supportedFormats.empty()) {
-        // A failed query says nothing about compatibility; let swapchain creation decide.
         LogWarn("OpenXrManager: Could not enumerate swapchain formats (result " + std::to_string(res) +
                 "); requesting back buffer format " + std::to_string(backBufferFormat) + " unchanged.");
         return backBufferFormat;
@@ -1010,8 +969,6 @@ DXGI_FORMAT OpenXrManager::NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFor
 void OpenXrManager::EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat) {
     LogError("OpenXrManager: OpenXR runtime offers no swapchain format compatible with back buffer format " +
              std::to_string(backBufferFormat) + ".");
-    // Pass-Through Mode means no OpenXR session, so destroy the session and release everything
-    // rather than leave a begun session with no frames ever submitted.
     ReleaseAndEnterPassThrough("no copy-compatible swapchain format");
 }
 
@@ -1078,7 +1035,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
     }
 
     m_hasEyeSwapchains = true;
-    RefreshRenderedFov();  // the coverage now uses the swapchain aspect
+    RefreshRenderedFov();
     LogInfo("OpenXrManager: Created stereoscopic eye swapchains (" + std::to_string(m_eyeSwapchains[0].width) + "x" + std::to_string(m_eyeSwapchains[0].height) + ").");
     return true;
 }
@@ -1098,7 +1055,7 @@ void OpenXrManager::DestroyEyeSwapchains() {
         EndFrame();
     }
     m_hasEyeSwapchains = false;
-    RefreshRenderedFov();  // back to the headset FOV's own aspect
+    RefreshRenderedFov();
 }
 
 const EyeSwapchain& OpenXrManager::GetEyeSwapchain(uint32_t eyeIndex) const {
@@ -1147,8 +1104,6 @@ void OpenXrManager::RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose) {
 }
 
 void OpenXrManager::ClearRenderPoses() {
-    // A record not consumed by its frame's copy (shouldRender false, a skipped copy, a recenter)
-    // belongs to an older frame or tracking space; never let a later frame submit it.
     m_hasRenderPose[0] = false;
     m_hasRenderPose[1] = false;
 }
@@ -1179,7 +1134,6 @@ bool OpenXrManager::BeginFrame() {
         EnterPassThroughIfLost(res);
         return false;
     }
-    // The rest of the frame begin, up to whichever return ends it.
     PerfScope beginTiming(PerfSection::FrameBegin);
 
     if (m_frameState.predictedDisplayTime != 0) {
@@ -1195,17 +1149,13 @@ bool OpenXrManager::BeginFrame() {
         return false;
     }
 
-    // A FOV Overscan set meanwhile takes effect with this frame; the views located below use it for the whole pair.
     LatchFovOverscan();
     m_frameBegun = true;
     ++m_frameSerial;
-    // Motion Controllers: one sync per frame, located at the predicted display time like the head.
     if (m_input.IsReady()) {
-        RefreshHandState(m_frameState.predictedDisplayTime != 0 ? m_frameState.predictedDisplayTime : GetCurrentXrTime(), /*resync=*/true);
+        RefreshHandState(m_frameState.predictedDisplayTime != 0 ? m_frameState.predictedDisplayTime : GetCurrentXrTime(), true);
     }
 
-    // OpenXR specification: actively locate views and update projections and head pose
-    // for predictedDisplayTime within the active frame lifecycle boundary.
     if (m_frameState.shouldRender) {
         LocateActiveViews(m_frameState.predictedDisplayTime);
         PollHeadPose(m_frameState.predictedDisplayTime);
@@ -1215,8 +1165,6 @@ bool OpenXrManager::BeginFrame() {
         }
     }
 
-    // The list this frame began with: an observer may add or clear observers (or another thread may), which shows from the
-    // next frame on. Holding a reference copies nothing.
     std::shared_ptr<const FrameBeginObserverList> observers;
     {
         std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
@@ -1270,23 +1218,17 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         return false;
     }
 
-    // Enforce active frame lifecycle: swapchain image acquisition and release
-    // must occur strictly within active frame begin and frame end boundaries.
     if (!m_frameBegun) {
         if (!BeginFrame()) {
             return false;
         }
     }
 
-    // OpenXR specification: suppress swapchain image acquisition and rendering passes
-    // when runtime indicates shouldRender is false.
     if (!m_frameState.shouldRender) {
         m_eyeSwapchains[eyeIndex].hasCopiedFrame = true;
         return true;
     }
 
-    // Submit the eye with the pose the engine rendered it with (recorded when VRBridge handed
-    // it to the Companion Mod). Fall back to the pose polled at frame begin if none was recorded.
     if (m_hasRenderPose[eyeIndex]) {
         m_capturedEyePoses[eyeIndex] = m_renderPoses[eyeIndex];
         m_hasRenderPose[eyeIndex] = false;
@@ -1303,7 +1245,6 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
     uint32_t imageIndex = 0;
     XrResult res;
     {
-        // Acquire and wait together: the image the compositor still holds can block either.
         PerfScope swapchainTiming(PerfSection::SwapchainWait);
         res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
         if (XR_SUCCEEDED(res)) {
@@ -1323,8 +1264,6 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         return false;
     }
 
-    // If backBuffer, device, and queue are present, the eye copy module records and submits the copy on the
-    // game's queue into the acquired image's texture (none when the runtime gave an index past its images).
     if (backBuffer && m_device && m_queue) {
         ID3D12Resource* destTexture = nullptr;
         if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
@@ -1357,7 +1296,6 @@ bool OpenXrManager::SubmitFramePair() {
         return false;
     }
 
-    // Verified pair completion: enforce both eyes have copied a frame before submitting
     if (!m_eyeSwapchains[0].hasCopiedFrame || !m_eyeSwapchains[1].hasCopiedFrame) {
         return false;
     }
@@ -1372,14 +1310,9 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
         projViews[i].next = nullptr;
 
-        // The submitted FOV is the rendered FOV the eye projection publishes, which is also the vertical FOV the
-        // Companion Mod gives the engine camera: the engine renders with that vertical FOV and scales the horizontal
-        // one by the backbuffer aspect (W / H), so the submitted frustum matches the rendered one exactly and keeps
-        // square pixels (ADR-0005).
         float halfFovY = m_eyeProjections[i].fovY * 0.5f;
         float halfFovX = m_eyeProjections[i].fovX * 0.5f;
         if (halfFovY <= 0.01f || halfFovX <= 0.01f) {
-            // No usable headset FOV yet: a safe ~90 degree vertical FOV at the swapchain aspect.
             halfFovY = 0.785398f;
             const float swapchainAspect = SwapchainAspect(i);
             const float aspect = (swapchainAspect > 0.0f) ? swapchainAspect : 1.0f;
@@ -1398,7 +1331,6 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].pose.position.y = eyePos.y;
         projViews[i].pose.position.z = eyePos.z;
 
-        // Orientation fallback: ensure quaternion is normalized and never degenerate (length 0)
         float qMagSq = eyePose.orientation.x * eyePose.orientation.x +
                        eyePose.orientation.y * eyePose.orientation.y +
                        eyePose.orientation.z * eyePose.orientation.z +
@@ -1468,9 +1400,6 @@ bool OpenXrManager::SubmitFramePair() {
 }
 
 void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
-    // The head as located in m_localSpace, the space SubmitMenuQuad() submits the quad in. The raw
-    // pose is in the runtime's own local space, which after a Recenter Action is offset by wherever
-    // the head was in it: about 24 m on Pimax OpenXR, enough to put the menu out of sight (issue 238).
     m_menuQuad.AlignToHeadPose(customPose ? *customPose : m_lastPose);
 }
 
@@ -1486,8 +1415,6 @@ PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
     if (!state.tracked || !state.aim.isValid) {
         return {};
     }
-    // The hand is located in the local space the quad layer is submitted in, so the pose and size
-    // SubmitMenuQuad() uses are the ones to test against.
     return MenuQuad::RayHit(m_menuQuad.Pose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
 }
 
@@ -1593,4 +1520,4 @@ XrPosef OpenXrManager::ComputeCursorQuadPose(const XrPosef& menuQuadPose, const 
     return OpenXrCursorOverlay::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, normX, normY, cursorWidth, cursorHeight);
 }
 
-} // namespace fs25vr
+}

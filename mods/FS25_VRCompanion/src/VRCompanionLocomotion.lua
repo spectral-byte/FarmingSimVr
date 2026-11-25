@@ -1,12 +1,5 @@
--- ====================================================================
--- FS25 VR Companion Mod: Locomotion Subsystem
--- Manages snap-turning, recentering, driver seat realignments, and
--- vehicle entry/exit orientation transitions.
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
--- Recenter VR Tracking Space Configuration
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
 if VRCompanion.recenterVrTrackingSpace == nil then
     VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
@@ -17,12 +10,11 @@ VRCompanion.RECENTER_MODES = VRCompanion.RECENTER_MODES or {
     VEHICLE_ONLY = "VehicleOnly"
 }
 
--- VR Snap Turn Locomotion Configuration
-VRCompanion.DEFAULT_SNAP_TURN_ANGLE = math.pi * 0.5 -- 90 degrees (pi/2 radians)
+VRCompanion.DEFAULT_SNAP_TURN_ANGLE = math.pi * 0.5
 if VRCompanion.snapTurnAngle == nil then
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
 end
-VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS = 250 -- Minimum 250ms debounce cooldown
+VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS = 250
 if VRCompanion.snapTurnDebounceMs == nil then
     VRCompanion.snapTurnDebounceMs = VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS
 end
@@ -157,9 +149,6 @@ function VRCompanion:initVehicleCameraState(veh, cam)
     self:recordHeadTrackingForward(cam)
 end
 
--- Records the cab's forward yaw on its head tracking node, once: the node's own yaw before the mod
--- first turns it, or the camera's neutral yaw when the node has none. Never read again, since from
--- then on the node is turned by the look yaw every frame and reading it would take that up as forward.
 function VRCompanion:recordHeadTrackingForward(cam)
     if cam.headTrackingNode == nil or cam.headTrackingNode == 0 or cam.origHeadTrackingRotY ~= nil then
         return
@@ -177,9 +166,6 @@ function VRCompanion:recordHeadTrackingForward(cam)
     cam.origHeadTrackingRotZ = 0
 end
 
--- Records an Outside Camera's default orbit yaw and pitch ("forward" for the Recenter Action) the first
--- time it becomes active, the way the cab records its forward direction. The engine's own origRotX/origRotY,
--- when present, already are that default. No per-vehicle orbit memory: the game's camera-reset setting owns it.
 function VRCompanion:recordOutsideCameraDefaults(cam)
     if cam.origRotY == nil then
         cam.origRotY = cam.rotY or 0
@@ -332,8 +318,6 @@ end
 
 function VRCompanion:onVehicleCameraChanged(veh, camIndex)
     if veh ~= nil then
-        -- Any camera switch of the controlled vehicle (cab or Outside Camera, either direction) jumps
-        -- to an unrelated viewpoint, so the temporal upscaler must drop its history.
         if veh == self:getControlledVehicle() then
             self:signalDiscontinuityFlush()
         end
@@ -410,7 +394,6 @@ function VRCompanion:updateVehicleCameraTrackingNode(cam)
         end
         return targetHeadRotY
     elseif cam.cameraNode ~= nil and type(setRotationFn) == "function" then
-        -- Fallback vehicle camera without tracking node
         local combYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
         pcall(setRotationFn, cam.cameraNode, 0, combYaw, 0)
         return combYaw
@@ -482,21 +465,16 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
     return false, "no_active_camera"
 end
 
--- Snap Turn in an Outside Camera steps the engine's orbit yaw around the vehicle (VehicleCamera.update
--- applies cam.rotY to its rotate node). A fixed Outside Camera (hitch, header) has no orbit to step.
 function VRCompanion:snapTurnOutsideCamera(cam, direction, angleOverride, t)
     if not cam.isRotatable then
         return false, "fixed_outside_camera"
     end
     local angle = angleOverride or self:getSnapTurnAngle()
-    -- The orbit yaw turns the opposite way to the in-cab view yaw, so the sign is flipped
     cam.rotY = self:normalizeAngle((cam.rotY or 0) + direction * angle)
     self:completeSnapTurn(t, "Outside camera", direction, angle, "orbit rotY", cam.rotY)
     return true, cam.rotY
 end
 
--- Shared tail of every handled Snap Turn (in-cab, Outside Camera, on foot): starts the debounce
--- cooldown, flushes the temporal upscaler's history across the jump and logs the new yaw.
 function VRCompanion:completeSnapTurn(t, viewLabel, direction, angle, yawLabel, newYaw)
     self.lastSnapTurnTime = t
     self:signalDiscontinuityFlush()
@@ -512,17 +490,6 @@ function VRCompanion:snapTurnRight(angleOverride, curTime)
     return self:snapTurn(1, angleOverride, curTime)
 end
 
--- Where the head rests in a cab, in the in-cab camera's parent space (camParent): the position
--- (x, y, z) and the base rotation (qx, qy, qz, qw) the head pose is composed on. The in-cab
--- camera update and the Recenter Action's realign to the seat both take it from here, so the
--- head tracking node path and the fallback without one are worked out in one place.
--- With a head tracking node, that is the node's position and rotation (the rotation read as a
--- quaternion, see getRotationInSpace) and targetHeadRotY is the node's yaw. Without one, it is
--- the camera's own eye point turned by the camera's neutral yaw (cam.origRotY, or defaultRotY
--- when the camera has none yet: the camera update takes 0 there and the realign pi)
--- plus lookYaw. The Seat Offset moves the position either way.
--- Also gives what cabPointFromHead needs to carry a head-space vector into the cab: rest.yaw and,
--- with a node, rest.node. The returned table is reused: read it before asking again.
 function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, defaultRotY)
     local localToLocalFn = localToLocal or (_G and _G.localToLocal)
     local getTranslationFn = getTranslation or (_G and _G.getTranslation)
@@ -552,7 +519,6 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, def
         rest.z = cam.origTransZ or cam.transZ or 0
         rest.yaw = self:normalizeAngle((cam.origRotY or defaultRotY or 0) + (lookYaw or 0))
     end
-    -- The Seat Offset moves the rest position in the cab, whatever the look yaw (VRCompanionSeatOffset.lua)
     rest.seatX, rest.seatY, rest.seatZ = self:getCabSeatOffset(cam, camParent)
     rest.x, rest.y, rest.z = rest.x + rest.seatX, rest.y + rest.seatY, rest.z + rest.seatZ
     if rest.qw == nil then
@@ -561,12 +527,9 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, def
     return rest
 end
 
--- A point of the head's space (the head pose's lean and eye offsets) in camParent's space, given
--- the cab rest pose from getCabRestPose
 function VRCompanion:cabPointFromHead(rest, camParent, x, y, z)
     local localToLocalFn = localToLocal or (_G and _G.localToLocal)
     if rest.node ~= nil and type(localToLocalFn) == "function" then
-        -- From the head tracking node, which sits at the vehicle's own eye point: the Seat Offset moves it on
         local cx, cy, cz = localToLocalFn(rest.node, camParent, x, y, z)
         return cx + rest.seatX, cy + rest.seatY, cz + rest.seatZ
     end
@@ -579,7 +542,6 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
         return
     end
 
-    -- In-engine VR Recenter action resets cam.rotY back to cam.origRotY and re-centers the in-cab tracking reference frame
     if cam.origRotY ~= nil then
         cam.rotY = cam.origRotY
     end
@@ -637,8 +599,6 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
     self:setRealignedRotation(cam.cameraNode, cabQx, cabQy, cabQz, cabQw)
 end
 
--- Gives an engine camera, the Dual Eye Camera Nodes and the Cyclopean Audio Listener Node the
--- same local rotation
 function VRCompanion:setRealignedRotation(camNode, qx, qy, qz, qw)
     self:setNodeQuaternion(camNode, qx, qy, qz, qw)
     if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
@@ -664,7 +624,6 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
     end
 
     local finalTx, finalTy, finalTz = 0, 0, 0
-    -- The head tracking node's rotation in camParent's space, else a half turn to face forward
     local finalQx, finalQy, finalQz, finalQw = nil, nil, nil, nil
 
     if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
@@ -697,8 +656,6 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
     self:setRealignedRotation(activeCamNode, finalQx, finalQy, finalQz, finalQw)
 end
 
--- Swings an Outside Camera's orbit back to forward: orbit yaw and pitch go back to the camera's
--- default, the way the cab's Recenter resets mouse look. Zoom is left alone.
 function VRCompanion:resetOutsideCameraOrbit(cam)
     self:recordOutsideCameraDefaults(cam)
     cam.rotY = cam.origRotY
@@ -710,8 +667,6 @@ function VRCompanion:onRecenterAction()
     self:recenterView(false)
 end
 
--- What the Recenter Action does. alwaysRecenterTracking re-zeroes the tracking space whatever the Recenter mode is (VehicleOnly
--- leaves it alone otherwise): the Seat Set Action needs the head back at the tracking space's origin to rest where it leaned.
 function VRCompanion:recenterView(alwaysRecenterTracking)
     print("[FS25_VR] Recenter Action triggered.")
     self:signalDiscontinuityFlush()
@@ -736,14 +691,12 @@ function VRCompanion:recenterView(alwaysRecenterTracking)
         print("[FS25_VR] VehicleOnly mode: OpenXR tracking space recenter bypassed.")
     end
 
-    -- Realign vehicle cockpit driver seat origin if seated in a vehicle
     local vehCam = self:getActiveVehicleCamera()
     if vehCam and vehCam.isInside then
         if recenterTracking then
             self:realignVehicleCameraToSeat(vehCam)
             print("[FS25_VR] Cockpit head pose realigned to driver seat reference origin.")
         else
-            -- In VehicleOnly mode, reset only in-cab mouse/controller look yaw (cam.rotY = cam.origRotY)
             if vehCam.origRotY ~= nil then
                 vehCam.rotY = vehCam.origRotY
             end
@@ -755,11 +708,9 @@ function VRCompanion:recenterView(alwaysRecenterTracking)
             print("[FS25_VR] VehicleOnly mode: Cockpit vehicle camera look yaw reset to origRotY.")
         end
     elseif vehCam and vehCam.isRotatable then
-        -- A fixed Outside Camera (hitch, header) has no orbit to reset
         self:resetOutsideCameraOrbit(vehCam)
     end
 
-    -- Realign on-foot player camera relative to character root
     if recenterTracking then
         local playerCam = self:getPlayerCamera()
         if playerCam and playerCam.firstPersonCamera ~= nil then
@@ -779,10 +730,6 @@ function VRCompanion:onSnapTurnRightAction()
     self:snapTurnRight()
 end
 
--- ---- Locomotion in the subsystem registry -----------------------------------------------------------------------------------
--- Map unload: the rotation states kept for each vehicle are forgotten (after the core lifted the camera hooks that read them). Snap Turn
--- and the Recenter Action are driven by the Input subsystem's action events and the console commands in the core's list; the
--- core tells Locomotion when the controlled vehicle changes (onVehicleTransition), which is part of its own update.
 VRCompanion:registerSubsystem("locomotion", {
     mapUnload = function(self)
         self.vehicleRotationStates = {}

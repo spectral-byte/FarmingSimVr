@@ -1,10 +1,3 @@
--- ====================================================================
--- Test Suite: Discontinuity Flush on every vehicle camera switch
--- ====================================================================
--- Drives the Companion Mod through the engine's vehicle camera change hook
--- (Enterable.setActiveCameraIndex, wrapped by hookEnterable) and asserts on the
--- discontinuity signals VRBridge receives.
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -29,7 +22,6 @@ end
 
 print("Running Camera Switch Discontinuity Flush Tests...")
 
--- A vehicle with one cab camera and two Outside Cameras (an orbit camera and a fixed hitch camera).
 local function makeVehicle()
     local veh = {
         spec_enterable = {
@@ -45,9 +37,6 @@ local function makeVehicle()
     return veh
 end
 
--- Installs a fake Enterable whose setActiveCameraIndex switches the vehicle's active camera like the
--- engine does, hooks it through the Companion Mod, and makes `veh` the controlled vehicle.
--- Returns the signal log and a cleanup function.
 local function setUpScene(veh)
     local signals = { discontinuity = 0, resetTemporalHistory = 0 }
     _G.VRBridge = {
@@ -109,7 +98,6 @@ end)
 
 test("CabToCabSwitchSignalsDiscontinuity", function()
     local veh = makeVehicle()
-    -- A second inside camera (e.g. a passenger-seat view).
     table.insert(veh.spec_enterable.cameras, { isInside = true, isRotatable = true, rotY = -0.2, rotX = 0.0, cameraNode = 104 })
     local signals, cleanup = setUpScene(veh)
 
@@ -137,12 +125,10 @@ test("SwitchingBackToTheCabStillRestoresThePerVehicleLookYaw", function()
     local signals, cleanup = setUpScene(veh)
     local cab = veh.spec_enterable.cameras[1]
 
-    -- The player enters looking out of the side window: that is the vehicle's remembered cab look
     cab.rotY, cab.rotX = 0.9, -0.05
     local ok, err = pcall(function()
         VRCompanion:onEnterVehicle(veh, true)
         Enterable.setActiveCameraIndex(veh, 2)
-        -- The engine resets the inactive cab camera's look while the Outside Camera is active
         cab.rotY, cab.rotX = 0.3, 0.1
         Enterable.setActiveCameraIndex(veh, 1)
     end)

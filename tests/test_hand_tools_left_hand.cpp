@@ -1,11 +1,3 @@
-// Hand Tools, choosing the left hand as the Tool Hand (ADR-0029), seen from outside: the real Companion
-// Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
-// StubHandTool). The pressure washer lance is the tool: whatever the Tool Hand does for it, it does for every supported tool.
-// The test moves the fake Motion Controllers, drives frames the way the game would and asserts what the player or the game
-// would see: which Virtual Hand the lance hangs below, the calls of the lance's own use handler, what XInput answers for the
-// Virtual Gamepad's triggers (the left one is LT), which hand is the Pointer Hand, what is written to the settings file.
-// Prior art: test_hand_tools_trigger.cpp (the right hand), test_wheel_grab.cpp (a setting saved across sessions).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <string>
@@ -14,13 +6,11 @@ namespace {
 
 using namespace hand_tools_test;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsLeftHandTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // The mod started with a player on foot, the Virtual Gamepad on and the game clock set (the in-use timeout is on it).
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         StartOptions options;
@@ -31,7 +21,6 @@ protected:
         SetGameTime(10000);
     }
 
-    // The lance in hand, both Motion Controllers picked up, the triggers let go; the Tool Hand is the one given.
     void StartWithLanceAndBothHandsUp(const char* toolHand) {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldLance(L));
@@ -54,9 +43,7 @@ protected:
     std::string Diagnostics() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
 };
 
-}  // namespace
-
-// ---- The setting --------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsLeftHandTest, TheToolHandIsTheRightHandByDefaultAndTheCommandReportsIt) {
     ASSERT_NO_FATAL_FAILURE(Start());
@@ -88,7 +75,6 @@ TEST_F(VirtualGamepadHandToolsLeftHandTest, TheToolHandIsSavedAcrossSessions) {
         EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.toolHand']"), "left") << "the choice is written to the settings file";
     }
 
-    // A fresh game session reads it back.
     lua_close(L);
     L = luaL_newstate();
     luaL_openlibs(L);
@@ -106,8 +92,6 @@ TEST_F(VirtualGamepadHandToolsLeftHandTest, TheToolHandIsSavedAcrossSessions) {
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrToolHand', 'right')", "=right"), 0);
     EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.toolHand']"), "right");
 }
-
-// ---- The left hand is the Tool Hand -------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsLeftHandTest, WithTheLeftChosenTheLanceHangsBelowTheLeftVirtualHandAndFollowsIt) {
     ASSERT_NO_FATAL_FAILURE(Start());
@@ -180,7 +164,6 @@ TEST_F(VirtualGamepadHandToolsLeftHandTest, WithTheLeftChosenAndTheLanceInHandTh
     ASSERT_TRUE(InTheHand("left")) << Diagnostics();
     EXPECT_EQ(PointerHand(), "1") << "the free right hand points at Click Points";
 
-    // The Tool Hand's pull would move the Pointer Hand to it, were it not holding a tool.
     headset.SetHandInputs(kLeft, Trigger(1.0f));
     FRAMES(2);
     headset.SetHandInputs(kLeft, Trigger(0.0f));
@@ -199,8 +182,6 @@ TEST_F(VirtualGamepadHandToolsLeftHandTest, WithTheLeftChosenInAMenuEitherHandCa
     FRAMES(2);
     EXPECT_EQ(PointerHand(), "1");
 }
-
-// ---- Changing the setting while a tool is held --------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsLeftHandTest, SwitchingToTheLeftWhileHoldingTheLanceMovesTheToolTheTriggerUseAndThePointingRuleOnTheNextFrame) {
     ASSERT_NO_FATAL_FAILURE(StartWithLanceAndBothHandsUp("right"));

@@ -14,9 +14,6 @@
 
 namespace fs25vr {
 
-// The Injector calls its own Luau VM on the game's lua_State, so its struct layouts must match the engine's.
-// The host's layout cannot be read from the binary; these pin the Injector's side to stock 0.662 defaults,
-// which the in-game check (ADR-0002 amendment) confirmed the engine uses.
 static_assert(LUA_VECTOR_SIZE == 3, "TValue layout differs from the engine's");
 static_assert(LUA_EXTRA_SIZE == 1, "TValue layout differs from the engine's");
 static_assert(LUA_UTAG_LIMIT == 128 && LUA_LUTAG_LIMIT == 128, "global_State layout differs from the engine's");
@@ -25,7 +22,6 @@ static_assert(LUA_SIZECLASSES == 40 && LUA_MEMORY_CATEGORIES == 256, "global_Sta
 bool HostEmbedsMatchingLuau(const uint8_t* rdataBase, size_t rdataSize) {
     if (!rdataBase) return false;
 
-    // One pass over the section, trying each marker only where a NUL-delimited string starts.
     constexpr size_t markerCount = std::size(kHostLuauFingerprint);
     bool found[markerCount] = {};
     size_t remaining = markerCount;
@@ -127,8 +123,6 @@ bool LuauInterceptor::AttachToEngine() {
 }
 
 bool LuauInterceptor::AttachToHostSections(const uint8_t* rdataBase, size_t rdataSize, const uint8_t* textBase, size_t textSize) {
-    // The Injector calls its own statically linked Luau VM on the game's lua_State, which is only safe
-    // when the engine embeds the same release. Refuse before any detour can reach VRBridge injection.
     if (!HostEmbedsMatchingLuau(rdataBase, rdataSize)) {
         LogError(std::string("LuauInterceptor: Host Luau does not match the linked Luau ") + kExpectedLuauVersion +
                  " (fingerprint not found in .rdata). Skipping VRBridge injection to avoid corrupting game memory.");
@@ -295,4 +289,4 @@ int LuauInterceptor::DetourEntryPoint(lua_State* L) {
     return runtime ? runtime->GetLuauInterceptor().HandleQuery(L) : 0;
 }
 
-} // namespace fs25vr
+}

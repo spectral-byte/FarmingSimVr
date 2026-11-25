@@ -1,10 +1,3 @@
-// Virtual Hands (spec #82), seen from outside: the real Companion Mod runs against the real VRBridge
-// over FakeTrackedHeadset, with scene-graph stubs that record the loaded hand model, its clones,
-// visibility, scale, world transforms and shadow flags (companion_mod_stubs.h, StubModel). The test moves
-// the fake Motion Controllers, the game clock and the game state, drives frames the way the game would
-// and asserts what the player would see: whether each hand is shown, where it is in the world, and what
-// the log says. Prior art: the Pointer Ray tests (test_pointer_ray.cpp).
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 #include <array>
@@ -53,7 +46,6 @@ FakeOpenXrControllers::Inputs Squeeze(float trigger, float grip) {
     return inputs;
 }
 
-// The engine's console and settings globals the Companion Mod registers into.
 constexpr const char* kConsoleStubs = R"luau(
     _G.registeredCommands = {}
     _G.addConsoleCommand = function(name, desc, method, target)
@@ -99,8 +91,6 @@ constexpr const char* kExpectedWorldMath = R"luau(
     end
 )luau";
 
-// The mod started on a map with a given scene (a cab at the world origin by default), the hand model
-// available, and Interactive Control installed (the Pointer Ray and Click Points must keep working).
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const char* scene = "StubScene.cab({})") {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -114,8 +104,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const char* scene = "StubS
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
 }
 
-// What the game does each frame before the Companion Mod's update: the camera update that places the
-// head in the world, and Interactive Control's own update of its Click Points.
 void PreFrame(lua_State* L) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         if StubScene.updateCamera then StubScene.updateCamera() end
@@ -131,7 +119,7 @@ int CountLogLines(const std::string& text) {
     return count;
 }
 
-} // namespace
+}
 
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
@@ -201,7 +189,6 @@ TEST_F(CompanionModTest, VirtualHandsAppearAtTheGripPosesInAnOutsideCamera) {
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
     PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
 
-    // The head is carried on a level base at the engine camera, turned by its heading.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(handIsShown('right') and handIsShown('left'), VRCompanion:getVirtualHandsDiagnostics())
         local x, y, z = handPosition('right')
@@ -222,8 +209,6 @@ TEST_F(CompanionModTest, VirtualHandsAppearAtTheGripPosesOnFootWhicheverWayTheBo
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
     PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
 
-    // With the head at the origin of tracking space, a hand is where it is in tracking space as the head
-    // sees it, whichever way the player's body faces.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(handIsShown('right') and handIsShown('left'), VRCompanion:getVirtualHandsDiagnostics())
         local node = VRCompanion.cyclopeanAudioListenerNode
@@ -253,14 +238,12 @@ TEST_F(CompanionModTest, AVirtualHandHidesWhenSetDownOrUntrackedAndComesBackAsSo
     EXPECT_EQ(shown("right"), "true");
     EXPECT_EQ(shown("left"), "false") << "a Motion Controller nobody picked up has no hand";
 
-    // Set down: it lies still for longer than the in-use timeout.
     AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_EQ(shown("right"), "false") << "a Motion Controller left lying still has no hand";
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
     EXPECT_EQ(shown("right"), "true") << "back as soon as it moves again";
 
-    // Tracking lost.
     headset.SetHandTracked(kRight, false);
     FRAMES(1);
     EXPECT_EQ(shown("right"), "false") << "an untracked Motion Controller leaves no frozen hand";
@@ -268,12 +251,11 @@ TEST_F(CompanionModTest, AVirtualHandHidesWhenSetDownOrUntrackedAndComesBackAsSo
     FRAMES(1);
     EXPECT_EQ(shown("right"), "true");
 
-    // Only the grip pose lost: the aim pose still works, but there is nowhere to put the hand.
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), false);
     FRAMES(1);
     EXPECT_EQ(shown("right"), "false");
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true") << "the Motion Controller itself is still in use";
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), /*tracked=*/true);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), true);
     FRAMES(1);
     EXPECT_EQ(shown("right"), "true");
 }
@@ -294,7 +276,7 @@ TEST_F(CompanionModTest, VirtualHandsHideInAMenuIn2DModeInPassThroughModeAndWith
         { "a menu", "g_gui.visible = true", "g_gui.visible = false", false },
         { "2D Floating Window Mode", "VRCompanion:set2DViewActive(true)", "VRCompanion:set2DViewActive(false)", false },
         { "Pass-Through Mode", "VRCompanion:setPassThroughMode(true)", "VRCompanion:setPassThroughMode(false)", false },
-        { "vrMotionControllers off", "runCommand('vrMotionControllers', 'off')", "runCommand('vrMotionControllers', 'on')", true },  // switching them off forgets what was in use
+        { "vrMotionControllers off", "runCommand('vrMotionControllers', 'off')", "runCommand('vrMotionControllers', 'on')", true },
         { "another camera shown", "_G.otherCamera = StubScene.newNode('other', 0); _G.g_cameraManager = { getActiveCamera = function() return otherCamera end }",
           "_G.g_cameraManager = nil", false },
     };
@@ -326,8 +308,6 @@ TEST_F(CompanionModTest, VirtualHandsStayOnTheHandsAfterASnapTurnTheRecenterActi
     PICK_UP(kRight, 0.50f, 0.10f, -0.30f, 0.45f, 0.05f, -0.20f);
     FRAMES(2);
 
-    // What must not change while the hand and head are held still is the Virtual Hand's position and
-    // direction in the head's own frame (the Cyclopean Audio Listener Node is the head in the world).
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local function inverseRotate(qx, qy, qz, qw, x, y, z)
             qx, qy, qz = -qx, -qy, -qz
@@ -355,7 +335,6 @@ TEST_F(CompanionModTest, VirtualHandsStayOnTheHandsAfterASnapTurnTheRecenterActi
             string.format("hand offset in the head frame %.3f %.3f %.3f", before[1], before[2], before[3]))
     )luau", "=baseline"), 0);
 
-    // Snap Turn: the view turns, the hand turns with it.
     ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion:snapTurnRight(nil, 20000) == true, 'snap turn happened')", "=snapTurn"), 0);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -365,12 +344,10 @@ TEST_F(CompanionModTest, VirtualHandsStayOnTheHandsAfterASnapTurnTheRecenterActi
         _G.before = after
     )luau", "=afterSnapTurn"), 0);
 
-    // The Recenter Action moves the head and the hand in tracking space together.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenter"), 0);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "sameAs(handInHeadFrame(), before)", "=afterRecenter"), 0);
 
-    // The vehicle drives 5 m east and 3 m north: the hand goes along.
     ASSERT_EQ(RunLuauChunk(L, "_G.before = handInHeadFrame(); setTranslation(cabScene.parent, 5, 0, 3)", "=drive"), 0);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -381,9 +358,6 @@ TEST_F(CompanionModTest, VirtualHandsStayOnTheHandsAfterASnapTurnTheRecenterActi
     )luau", "=afterDriving"), 0);
 }
 
-// In the game the vehicle moves AFTER the Companion Mod's update in a frame, and its camera (and the head with it)
-// follows before the frame is drawn. A hand placed at a world position in the update would then be drawn where the
-// cab was, a frame's travel behind: a ghost trailing along the direction of travel. The hand must ride with the cab.
 TEST_F(CompanionModTest, AVirtualHandRidesWithTheCabWhenTheVehicleMovesAfterTheModsUpdate) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -406,9 +380,6 @@ TEST_F(CompanionModTest, AVirtualHandRidesWithTheCabWhenTheVehicleMovesAfterTheM
     )luau", "=movedAfterUpdate"), 0);
 }
 
-// A vehicle file may keep its cameras in a transform group marked invisible: a camera there still renders, but a
-// shape below it is hidden. The head hangs below the cab camera's parent, so a hand linked below the head would
-// vanish in such a cab. It hangs below the deepest visible node above the head instead, and still rides with the cab.
 TEST_F(CompanionModTest, AVirtualHandIsShownAndRidesWithTheCabWhenTheCabCamerasHangInAnInvisibleGroup) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -444,7 +415,6 @@ TEST_F(CompanionModTest, AVirtualHandIsShownAndRidesWithTheCabWhenTheCabCamerasH
     EXPECT_EQ(CountLogLines(" on cab "), 1) << "the geometry line names it too";
 }
 
-// A component hidden as a whole leaves the hands nothing visible to ride on in the vehicle: they stay at the scene root.
 TEST_F(CompanionModTest, AVirtualHandIsStillShownWhenTheNodeCarryingTheHeadIsHidden) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -461,15 +431,9 @@ TEST_F(CompanionModTest, AVirtualHandIsStillShownWhenTheNodeCarryingTheHeadIsHid
     EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands ride on root"), 1);
 }
 
-// The game runs the mod's update once per AFR pair but renders each eye: the second eye's frame is rendered after the
-// vehicle moved again with no update between (vrVirtualHandsTrace, headset check). A hand placed only in the update was
-// a sharp copy lagging behind in that eye, and placing it in the draw came too late for the frame (the hand was right
-// at draw time in both eyes, the copy stayed). The camera update, which places the eyes before every rendered frame,
-// places the hands too.
 TEST_F(CompanionModTest, AVirtualHandIsPlacedAgainWhenAFrameIsRenderedWithoutAnUpdateAfterTheVehicleMoved) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
-    // A hidden component leaves the hands on the scene root, as the headset check found them in the cab.
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "_G.cabScene = StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 }); setVisibility(cabScene.parent, false)"));
     SetGameTime(10000);
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
@@ -490,9 +454,6 @@ TEST_F(CompanionModTest, AVirtualHandIsPlacedAgainWhenAFrameIsRenderedWithoutAnU
     EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands ride on root (cab is hidden)"), 1) << "the line says why the hands are on the root";
 }
 
-// A hand drawn stale in one eye only (a headset check under AFR) is found by where it is relative to the camera that
-// renders each frame: vrVirtualHandsTrace logs that after the update and again at draw time, with the eye, for the
-// frames asked for, then stops by itself.
 TEST_F(CompanionModTest, VrVirtualHandsTraceLogsEachShownHandRelativeToTheRenderingCameraAfterTheUpdateAndAtDrawTime) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -552,7 +513,6 @@ TEST_F(CompanionModTest, VirtualHandsAreOnePlacementForBothPassesUnderSequential
     PICK_UP(kRight, 0.30f, -0.10f, -0.40f, 0.25f, -0.10f, -0.20f);
     FRAMES(2);
 
-    // One update per logical frame; the camera is placed and the scene drawn in each of the two passes.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local seen = {}
         for pass = 0, 1 do
@@ -565,12 +525,6 @@ TEST_F(CompanionModTest, VirtualHandsAreOnePlacementForBothPassesUnderSequential
     )luau", "=sameInBothPasses"), 0);
 }
 
-// The engine ignores a scale (a size or a mirror) on a node above a skinned mesh, so the hands are real-world size
-// and handed in the FILES: the left Virtual Hand is the left file, the right one the right file (the left model
-// mirrored across the model's X plane). The result in the grip pose frame is still the mirror image across the grip
-// frame's X plane (both hands' grip frames have the same axes), which turns a left hand into a right hand and leaves
-// the finger and thumb directions of the frame alone. Nothing at or above a model is scaled, and nothing is mirrored by
-// a negative scale.
 TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandMirroredAcrossTheGripFrameWithNoScaleAnywhereAndNeitherCastsShadows) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -629,9 +583,6 @@ TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandMirroredAcrossTheGripFr
     )luau", "=mirrored"), 0);
 }
 
-// The grip pose frame (OpenXR, as ticket #84 states it): origin at the centre of the tube the closed non-thumb
-// fingers form, -Z from the little finger toward the thumb, +X the palm normal pointing INTO the palm for a right
-// hand (so out of the palm for a left hand). The fingers then point along -Y. The hand is real-world size.
 TEST_F(CompanionModTest, BothVirtualHandsSitInTheGripPoseFrameAtRealHandSize) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -713,15 +664,12 @@ TEST_F(CompanionModTest, EachHandModelFileIsLoadedOncePerMapAndDeletedWhenTheMap
         << "the clones and both loaded models are gone";
     EXPECT_EQ(EvalLua(L, "next(StubModel.hands()) == nil"), "true");
 
-    // The next map loads it again.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('y')", "=loadAnotherMap"), 0);
     SetGameTime(20000);
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
     EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "4");
     EXPECT_EQ(EvalLua(L, "handIsShown('right')"), "true");
 }
-
-// ---- A model that is missing or fails to load ----
 
 TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePointingStillWorks) {
     FakeTrackedHeadset headset;
@@ -745,7 +693,6 @@ TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePo
     EXPECT_EQ(CountLogLines("VirtualHandRight.i3d"), 0) << "one line for the two files";
     EXPECT_NE(EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')").find("model not loaded"), std::string::npos);
 
-    // The Pointer Ray and Click Points are unaffected.
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lights");
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
@@ -804,8 +751,6 @@ TEST_F(CompanionModTest, AHandModelThatFailsToLoadLogsOnceAndLeavesNoVirtualHand
     EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights");
 }
 
-// ---- Log line and diagnostics ----
-
 TEST_F(CompanionModTest, TheVirtualHandsLogLineChangesOnlyWhenTheReasonChanges) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -845,7 +790,7 @@ TEST_F(CompanionModTest, TheDiagnosticsCommandsReportEachVirtualHandAndWhyItIsHi
     EXPECT_NE(pointer.find("Right Virtual Hand: shown"), std::string::npos) << "the Motion Controller diagnostics carry it too: " << pointer;
     EXPECT_NE(pointer.find("Pointer Ray:"), std::string::npos) << "next to the existing report: " << pointer;
 
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), false);
     FRAMES(1);
     report = EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')");
     EXPECT_NE(report.find("Right Virtual Hand: hidden (grip pose not tracked)"), std::string::npos) << report;
@@ -861,17 +806,12 @@ TEST_F(CompanionModTest, TheDiagnosticsCommandsReportEachVirtualHandAndWhyItIsHi
     report = EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')");
     EXPECT_NE(report.find("Virtual Hands: Motion Controllers off"), std::string::npos) << report;
 
-    // The command goes with the map.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=unloadMap"), 0);
     EXPECT_EQ(EvalLua(L, "registeredCommands['vrVirtualHandsDiagnostics']"), "nil");
 }
 
-// ---- Finger curl (ticket #86) ----
-
 namespace {
 
-// Reads how far each finger of a Virtual Hand is curled, from the joints' rotations away from the model's rest
-// pose (StubModel.curl: radians toward the palm).
 constexpr const char* kCurlReaders = R"luau(
     _G.FINGERS = { "thumb", "index", "middle", "ring", "little" }
     -- the curl of the three joints of one finger of "left" / "right", as { joint1, joint2, joint3 }
@@ -894,7 +834,7 @@ constexpr const char* kCurlReaders = R"luau(
     function _G.assertStill(which, finger, message) assertFinger(which, finger, function() return 0 end, message) end
 )luau";
 
-} // namespace
+}
 
 TEST_F(CompanionModTest, TheIndexFingerCurlsInProportionToTheTriggerAndNoOtherFingerMoves) {
     FakeTrackedHeadset headset;
@@ -931,7 +871,6 @@ TEST_F(CompanionModTest, TheMiddleRingAndLittleFingersCurlInProportionToTheGripI
     SetGameTime(10000);
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
 
-    // A full squeeze with the trigger left alone.
     headset.SetHandInputs(kRight, Squeeze(0.0f, 1.0f));
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -947,7 +886,6 @@ TEST_F(CompanionModTest, TheMiddleRingAndLittleFingersCurlInProportionToTheGripI
         assertStill('right', 'thumb', 'grip only')
     )luau", "=fullGrip"), 0);
 
-    // Both at once, each at its own amount: the trigger and the grip do not influence each other.
     headset.SetHandInputs(kRight, Squeeze(0.25f, 0.75f));
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1048,7 +986,6 @@ TEST_F(CompanionModTest, AHiddenVirtualHandIsCurledCorrectlyAsSoonAsItReappears)
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, "_G.fist = fingerCurl('right', 'index')", "=fist"), 0);
 
-    // In a menu the hand is hidden and the player lets go: when the menu closes the hand is open.
     ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
     FRAMES(2);
     headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
@@ -1060,7 +997,6 @@ TEST_F(CompanionModTest, AHiddenVirtualHandIsCurledCorrectlyAsSoonAsItReappears)
         for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'let go while hidden') end
     )luau", "=openOnReturn"), 0);
 
-    // And the other way round: pulled while hidden, curled the moment it is back.
     ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
     FRAMES(2);
     headset.SetHandInputs(kRight, Squeeze(0.5f, 1.0f));
@@ -1142,14 +1078,6 @@ std::map<std::string, std::string> TransformGroupParents(const std::string& xml)
     return parents;
 }
 
-// The world position of every bone of an .i3d's scene, composed the way the engine composes node transforms:
-// translation and rotation in degrees (Euler, R = Rz * Ry * Rx when zyx is true, the convention the GIANTS
-// exporter writes, else R = Ry * Rx * Rz) of each TransformGroup below its parent. The scene's first group (the
-// hand's root) is the identity. The skinned mesh's bind pose is this composed skeleton (the .shapes file holds
-// no bind matrices), so it is the skeleton the mesh was modelled around or the hand is distorted in the game.
-// extraXDegrees turns the named bones further about their own X axis (a finger curl). Besides each bone's position the
-// result holds the point endLength along its -Z axis (the way the bones run) under "<bone>@end". The models are in
-// metres, so positions and lengths are metres.
 std::map<std::string, std::array<double, 3>> ComposedBonePositions(const std::string& xml, bool zyx,
                                                                    const std::map<std::string, double>& extraXDegrees = {},
                                                                    double endLength = 0.25 * 0.0875) {
@@ -1212,8 +1140,6 @@ double Distance(const std::array<double, 3>& a, const std::array<double, 3>& b) 
     return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
 }
 
-// The shipped models are the Gloved Hand in metres: its original units times this (VRCompanion's scale is gone, the
-// files carry the size). The right file is the left one mirrored across X = 0.
 constexpr double kMetresPerUnit = 0.0875;
 
 std::string ShippedModel(bool right) {
@@ -1222,7 +1148,7 @@ std::string ShippedModel(bool right) {
 
 const char* HandLabel(bool right) { return right ? "right model file" : "left model file"; }
 
-} // namespace
+}
 
 TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEveryFingerInBothShippedModels) {
     FakeTrackedHeadset headset;
@@ -1264,9 +1190,6 @@ TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEver
     }
 }
 
-// The Gloved Hand's bones as the Blender armature has them at rest ("Gloved Hand LP.blend": each bone's head, in the
-// exporter's Y-up axes x, z, -y), in the mesh's original units. The models' bone transforms must compose to these
-// times 0.0875 m per unit, mirrored across X = 0 for the right hand.
 TEST_F(CompanionModTest, TheShippedModelsBoneTransformsComposeToTheSkeletonTheMeshWasModelledAroundInMetres) {
     const std::map<std::string, std::array<double, 3>> armature = {
         { "Wrist", { 0.0630, 0.0551, 0.9691 } },        { "Hand", { 0.0630, 0.0551, 0.5246 } },
@@ -1306,8 +1229,6 @@ TEST_F(CompanionModTest, TheShippedModelsAreRealHandSizeWristToFingertipChainAsL
         const std::string model = ShippedModel(right);
         ASSERT_FALSE(model.empty());
         const auto bones = ComposedBonePositions(model, true);
-        // 2.25 and 2.33 units times 0.0875 m per unit: 0.197 and 0.204 m, the length of a real hand from the wrist to the
-        // middle fingertip joint. The first export of the model composed to 0.46 units (0.040 m): a fifth of the mesh.
         EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.001")), 0.197, 0.005);
         EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.002")), 0.204, 0.005);
         // across the knuckles (the metacarpals are 0.99 units apart, 0.086 m; the first finger joints are closer)
@@ -1327,10 +1248,6 @@ TEST_F(CompanionModTest, TheShippedModelsAreRealHandSizeWristToFingertipChainAsL
     }
 }
 
-// The size and the handedness are in the files: no node of either model carries a scale (the engine ignores one above
-// a skinned mesh), and the right model is the left one mirrored across X = 0 with the same bone names and the same
-// parents, each bone's rotation D R D (Euler X as it was, Euler Y and Z negated: a proper rotation, a small bend
-// like the left one's, never a 90 degree pile-up) and each position with its x negated.
 TEST_F(CompanionModTest, TheRightModelFileIsTheLeftOneMirroredWithTheSameBonesAndNoNodeOfEitherCarriesAScale) {
     const std::string left = ShippedModel(false), right = ShippedModel(true);
     ASSERT_FALSE(left.empty());
@@ -1352,7 +1269,6 @@ TEST_F(CompanionModTest, TheRightModelFileIsTheLeftOneMirroredWithTheSameBonesAn
         EXPECT_LT(Distance(rightBones.at(name), mirrored), 0.0005) << name << " of the right model is the left one's with x negated";
     }
 
-    // every local rotation: read straight from the attributes
     const auto rotations = [](const std::string& xml) {
         std::map<std::string, std::array<double, 3>> found;
         const std::regex tag(R"re(<TransformGroup\s+([^>]*?)/?>)re");
@@ -1382,11 +1298,6 @@ TEST_F(CompanionModTest, TheRightModelFileIsTheLeftOneMirroredWithTheSameBonesAn
     }
 }
 
-// The curl the mod applies (VRCompanion.FINGER_CURL_DIRECTION * FINGER_CURL_DEGREES about each joint's own X), played
-// on the shipped models' composed bones, for both hands. The models' axes: fingers run along -Z, the palm faces -Y in
-// BOTH files (the right file is mirrored across X, which leaves Y and Z alone). The knuckle line of the fingers is
-// 0.17 units (0.015 m) behind the palm plane (the palm surface is at y -0.115, the knuckles at 0.055). One direction
-// number serves both hands because the right file's bone frames are proper-rotation mirrors of the left's.
 TEST_F(CompanionModTest, AFullCurlOfEachShippedModelFoldsEveryFingerTowardThePalmAndRestsItsTipOnIt) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -1417,18 +1328,13 @@ TEST_F(CompanionModTest, AFullCurlOfEachShippedModelFoldsEveryFingerTowardThePal
             const double knuckleY = rest.at(finger[0])[1], knuckleZ = rest.at(finger[0])[2];
             const auto inFront = [&](const std::map<std::string, std::array<double, 3>>& pose, const std::string& point) { return knuckleY - pose.at(point)[1]; };
 
-            // toward the palm: the middle and the top joint swing to the palm side (-Y) as the curl grows, the most at full
             EXPECT_GT(inFront(partly, finger[1]), inFront(rest, finger[1]) + 0.05 * kMetresPerUnit) << "the middle joint at half curl";
             EXPECT_GT(inFront(curled, finger[1]), inFront(partly, finger[1])) << "the middle joint at full curl";
             EXPECT_GT(inFront(curled, finger[2]), inFront(rest, finger[2]) + 0.1 * kMetresPerUnit) << "the top joint";
-            // and back toward the wrist, not out past the fingertips
             EXPECT_GT(curled.at(finger[2] + "@end")[2], knuckleZ + 0.2 * kMetresPerUnit) << "the fingertip folds back over the palm";
-            // the tip rests on the palm: 0.05 to 0.45 units (0.004 to 0.039 m) in front of the knuckle line (the palm plane
-            // is at 0.17 units), not through the back of the hand (an earlier 80, 100, 65 degrees ended the index tip behind the line)
             const double tipFront = inFront(curled, finger[2] + "@end");
             EXPECT_GT(tipFront, 0.05 * kMetresPerUnit) << "the tip does not go through the palm";
             EXPECT_LT(tipFront, 0.45 * kMetresPerUnit) << "the tip does not stick out of the palm";
-            // and the right hand folds exactly as the left one does
             if (!right) leftTipFront[finger[0]] = tipFront;
             else EXPECT_NEAR(tipFront, leftTipFront[finger[0]], 0.0005) << "the right hand curls like the left one";
         }
@@ -1458,7 +1364,7 @@ TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRay
         StubIC.addPoint('lights', ray.ox + ray.dx * 2, ray.oy + ray.dy * 2, ray.oz + ray.dz * 2)
     )luau", "=rayBefore"), 0);
 
-    headset.SetHandInputs(kRight, Squeeze(0.45f, 1.0f));  // a trigger part way down: curled, but not a click
+    headset.SetHandInputs(kRight, Squeeze(0.45f, 1.0f));
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local ray = VRCompanion:getPointerRay()
@@ -1474,10 +1380,6 @@ TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRay
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
 }
 
-// The Pointer Ray starts at the index fingertip of the glove and runs along its finger from the knuckle
-// (VRCompanion.VIRTUAL_HAND_POINTER). The table is derived offline from the glove's mesh with the same model-to-grip offset
-// the hand is drawn with, so it must still agree with the knuckle bone, as the hand puts it into the grip frame, and with
-// the glove's mesh. Nudging VIRTUAL_HAND_MODEL_TO_GRIP without deriving the table again fails here.
 TEST_F(CompanionModTest, TheRaysFingertipAndDirectionAreTheIndexFingerOfTheGloveFromItsKnuckleInBothGripFrames) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

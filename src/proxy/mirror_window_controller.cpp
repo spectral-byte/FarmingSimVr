@@ -26,7 +26,7 @@ static HWND GetRootWindow(HWND hWnd) {
     return hAncestor ? hAncestor : hWnd;
 }
 
-} // anonymous namespace
+}
 
 MirrorWindowController* MirrorWindowController::ForHook(FunctionDetour MirrorWindowController::*detour) {
     InjectorRuntime* runtime = InjectorRuntime::ForHook([detour](InjectorRuntime& r) {
@@ -491,8 +491,6 @@ bool MirrorWindowController::IsGameWindowForeground() const {
 void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager) {
     if (!openXrManager) return;
 
-    // The Pointer Ray has control: the cursor is drawn where the ray lands on the panel, whatever the
-    // desk mouse is doing or which window has focus.
     const PointerCursorOverride& pointer = openXrManager->GetPointerCursorOverride();
     if (pointer.active) {
         openXrManager->SetMenuCursorState({ true, pointer.u, pointer.v, MenuCursorState::kDefaultCursorSize });
@@ -542,10 +540,6 @@ bool MirrorWindowController::GetGamePicture(RECT& outPicture) const {
 
 void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state) {
     if (state != MouseConfinementState::Holding) {
-        // The latest cause is recorded whether or not it was holding, so the line for the next start names
-        // what actually ended last (a setting turned on while focus is lost is not why it holds again).
-        // Until it has held once, the first start is just the headset coming into use, whatever kept it from
-        // holding before (the window not in front yet, the session not running); only the setting is kept.
         if (m_hasHeldMouse || state == MouseConfinementState::TurnedOffByCommand) m_lastMouseRelease = state;
         if (!m_holdingMouse) return;
         const char* reason = "focus lost";
@@ -568,15 +562,12 @@ void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state)
         if (m_lastMouseRelease == MouseConfinementState::TurnedOffByCommand) reason = "turned on by command";
         LogInfo(std::string("MirrorWindowController: Mouse Confinement holds the Desk Mouse to the game picture (") + reason + ").");
 
-        // A Desk Mouse that is off the picture when holding starts comes to the middle of the physical client
-        // area, through the port's original SetCursorPos. Only at the start: never while it keeps holding.
         POINT cursor{};
         if (m_cursorPort->GetCursorPos(cursor) && !PtInRect(&picture, cursor)) {
             m_cursorPort->SetCursorPos((picture.left + picture.right) / 2, (picture.top + picture.bottom) / 2);
         }
     }
 
-    // Set again only when the clip differs from the picture: Windows or another program may have cleared it.
     RECT current{};
     if (!m_cursorPort->GetClip(current) || !EqualRect(&current, &picture)) {
         SetPictureClip(picture);
@@ -593,7 +584,6 @@ std::optional<RECT> MirrorWindowController::GameClipOnScreen() const {
     RECT clip = *m_gameClip;
     RECT picture{};
     if (m_gameClipOrigin && m_gameHwnd && GetGamePicture(picture)) {
-        // The window may have moved since the game asked: the clip keeps its place in the picture.
         OffsetRect(&clip, picture.left - m_gameClipOrigin->x, picture.top - m_gameClipOrigin->y);
     }
     return clip;
@@ -603,9 +593,6 @@ void MirrorWindowController::StopHoldingMouse(const char* reason) {
     if (!m_holdingMouse) return;
     m_holdingMouse = false;
     LogInfo(std::string("MirrorWindowController: Mouse Confinement released the Desk Mouse (") + reason + ").");
-    // Put back what the game last asked for, so its own mouse-look capture survives. Only a clip that is
-    // still the picture it set itself is its to release: one the game, Windows or another program put
-    // there since (or took away) stays as it is.
     const std::optional<RECT> set = m_setMousePicture;
     m_setMousePicture.reset();
     RECT current{};
@@ -633,10 +620,8 @@ bool MirrorWindowController::HandleGameClipCursor(const RECT* lpRect) {
     }
 
     if (!clip && m_holdingMouse && havePicture) {
-        // The game lets go (it does in a menu) but the Desk Mouse stays on the picture.
         return SetPictureClip(picture);
     }
-    // The game's own clip is on the desktop now: not one Mouse Confinement set, so not its to release.
     m_setMousePicture.reset();
     return m_cursorPort->SetClip(clip);
 }
@@ -791,8 +776,6 @@ BOOL WINAPI MirrorWindowController::Intercept_GetClientRect(HWND hWnd, LPRECT lp
     if (t_isInternalWindowQuery) {
         return orig ? orig(hWnd, lpRect) : ::GetClientRect(hWnd, lpRect);
     }
-    // Cheap conditions first: the root-window walk only runs once VR is active and a target
-    // render resolution is set.
     if (ctrl && lpRect && ctrl->IsActive() && ctrl->m_gameHwnd
         && ctrl->m_targetRenderWidth > 0 && ctrl->m_targetRenderHeight > 0) {
         if (hWnd == ctrl->m_gameHwnd || GetRootWindow(hWnd) == ctrl->m_gameHwnd) {
@@ -845,7 +828,6 @@ BOOL WINAPI MirrorWindowController::Intercept_SetCursorPos(int X, int Y) {
     auto orig = reinterpret_cast<BOOL(WINAPI*)(int, int)>(
         ctrl ? ctrl->m_detourSetCursorPos.GetOriginal() : nullptr
     );
-    // With a live runtime the move goes through the desktop cursor port; without one, straight to user32.
     auto invokeOrig = [orig, ctrl](int x, int y) -> BOOL {
         if (ctrl) return ctrl->m_cursorPort->SetCursorPos(x, y) ? TRUE : FALSE;
         return orig ? orig(x, y) : ::SetCursorPos(x, y);
@@ -871,7 +853,6 @@ BOOL WINAPI MirrorWindowController::Intercept_ClipCursor(const RECT* lpRect) {
     auto orig = reinterpret_cast<BOOL(WINAPI*)(const RECT*)>(
         ctrl ? ctrl->m_detourClipCursor.GetOriginal() : nullptr
     );
-    // With a live runtime the clip goes through the desktop cursor port; without one, straight to user32.
     if (ctrl) {
         if (t_isInternalWindowQuery) return ctrl->m_cursorPort->SetClip(lpRect) ? TRUE : FALSE;
         return ctrl->HandleGameClipCursor(lpRect) ? TRUE : FALSE;
@@ -879,4 +860,4 @@ BOOL WINAPI MirrorWindowController::Intercept_ClipCursor(const RECT* lpRect) {
     return orig ? orig(lpRect) : ::ClipCursor(lpRect);
 }
 
-} // namespace fs25vr
+}

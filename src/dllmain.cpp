@@ -9,7 +9,6 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
             fs25vr::StartInjector();
             break;
         case DLL_PROCESS_DETACH:
-            // Only on FreeLibrary: at process termination other threads may still be inside the hooks.
             if (lpReserved == nullptr) fs25vr::StopInjector();
             fs25vr::OnProcessDetach(lpReserved);
             break;

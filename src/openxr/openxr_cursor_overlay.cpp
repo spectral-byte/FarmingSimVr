@@ -42,7 +42,7 @@ static const char* const s_arrowCursorPattern[32] = {
     "                                "
 };
 
-} // anonymous namespace
+}
 
 namespace fs25vr {
 
@@ -59,9 +59,9 @@ std::vector<uint32_t> OpenXrCursorOverlay::GenerateCursorPixels(uint32_t width, 
             char ch = (srcX < rowLen) ? rowStr[srcX] : ' ';
             uint32_t color = 0x00000000;
             if (ch == 'X') {
-                color = 0xFF000000; // Black outline
+                color = 0xFF000000;
             } else if (ch == '.') {
-                color = 0xFFFFFFFF; // White interior
+                color = 0xFFFFFFFF;
             }
             pixels[y * width + x] = color;
         }
@@ -79,13 +79,9 @@ XrPosef OpenXrCursorOverlay::ComputeCursorQuadPose(const XrPosef& menuQuadPose, 
     float u = std::max(0.0f, std::min(1.0f, normX));
     float v = std::max(0.0f, std::min(1.0f, normY));
 
-    // Map normalized [0, 1] to local quad surface coordinates
     float localX = (u - 0.5f) * menuQuadSize.width;
     float localY = (0.5f - v) * menuQuadSize.height;
 
-    // Hotspot offset: tip of cursor is top-left corner of cursor quad
-    // Center of cursor quad is offset by (+cursorWidth/2, -cursorHeight/2)
-    // Forward offset of 2mm (+Z in local quad space, towards player) eliminates z-fighting
     Vector3 localOffset(
         localX + 0.5f * cursorWidth,
         localY - 0.5f * cursorHeight,
@@ -268,8 +264,6 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
                 D3D12_RESOURCE_BARRIER barrier{};
                 barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
                 barrier.Transition.pResource = destRes;
-                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
-                // returned to RENDER_TARGET before release.
                 barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
                 barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
@@ -350,4 +344,4 @@ bool OpenXrCursorOverlay::PrepareCompositionLayer(const XrCompositionLayerQuad& 
     return true;
 }
 
-} // namespace fs25vr
+}

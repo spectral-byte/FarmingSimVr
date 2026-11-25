@@ -1,174 +1,31 @@
--- ====================================================================
--- FS25 VR Companion Mod: Motion Controller Subsystem
---
--- Makes the player's Motion Controllers visible to the rest of the mod: it polls each hand's state
--- from the Injector once per update, decides which hands are in use, picks the Pointer Hand, and owns
--- the `vrMotionControllers` setting and the status console command. Motion Controller input is optional;
--- everything here is inert when VRBridge.getHandState is missing or the runtime offers no Motion Controllers.
---
--- PUBLIC SURFACE (other modules build on it; see ADR-0025)
---
---   Hand ids          VRCompanion.MOTION_HAND_LEFT = 0, VRCompanion.MOTION_HAND_RIGHT = 1.
---                     The same ids VRBridge.getHandState and VRBridge.pulseHaptic use. Anywhere a
---                     hand is a parameter it is one of these two numbers.
---
---   VRBridge.getHandState(hand [, out]) -> table   (the bridge call, filled in place like getHeadPose)
---     tracked            boolean  aim pose valid and the Motion Controller active (false when the
---                                 runtime has no Motion Controllers, refused the action set, or it is off)
---     x, y, z            metres   aim pose position, tracking space, SAME convention, reference space
---     pitch, yaw, roll   radians  and predicted display time as VRBridge.getHeadPose (follows the
---     qx, qy, qz, qw              Recenter Action). Compose it into the world exactly like the head.
---     isValid, isPositionTracked, isOrientationTracked   booleans, as in getHeadPose
---     gripPoseTracked    boolean  the grip pose (where a Virtual Hand is drawn) is located; its own flag, independent
---                                 of the aim pose's: false when the hand is untracked, when the runtime refuses the grip pose
---                                 or when it can not locate it
---     gripPoseX/Y/Z, gripPosePitch/Yaw/Roll, gripPoseQx/Qy/Qz/Qw   the grip pose, same conventions, reference
---                                 space and predicted display time as the aim pose above (identity when untracked)
---     trigger, grip      0..1     analog value (Khronos simple controller profile: select/click as trigger)
---     thumbX, thumbY     -1..1    thumbstick (Vive: trackpad); +X right, +Y up
---     thumbClick         boolean  thumbstick (Vive: trackpad) click
---     buttonLower        boolean  lower face button: Touch X (left) / A (right), Index A
---     buttonUpper        boolean  upper face button: Touch Y (left) / B (right), Index B
---     menu               boolean  menu button (Touch: left hand only; Index has none)
---     An untracked hand reports tracked = false, isValid = false, an identity aim pose and zeroed inputs.
---
---   Per-frame cached state (updated once per VRCompanion:update by updateMotionControllers(dt)):
---     VRCompanion:getHandState(hand) -> table   the bridge fields above, the same table every frame
---                                               (filled in place; read it, never keep or edit it).
---                                               Untracked defaults when Motion Controllers are off.
---     VRCompanion:isHandInUse(hand) -> boolean  tracked and moved within MOTION_CONTROLLER_IN_USE_MS
---     VRCompanion:getPointerHand() -> 0 | 1 | nil
---     VRCompanion.pointerHand                    mirror of getPointerHand() (read-only for others)
---       Pointer Hand rule of this module: exactly one hand in use -> that hand; none in use -> nil;
---       both in use -> the previous Pointer Hand, until a trigger pull on the other hand moves it
---       there (with no previous Pointer Hand, a pull on either hand picks that hand). That switching
---       pull is consumed: getPointerTrigger() reports it as neither pressed nor held until the
---       trigger is let go, so it never clicks in a menu either.
---
---   VRCompanion.motionControllersEnabled  boolean, default true, saved (`vrMotionControllers on|off`).
---     When false the mod ignores Motion Controller input: hands report untracked, none is in use, there is
---     no Pointer Hand. The Injector session and its action set are never touched by this setting.
---
---   Who controls the pointer (read by menus and by Interactive Control selection)
---     The pointer is the cursor / selection the player aims: either the desk mouse or the Pointer Ray.
---     Whichever moved last controls it. Starts with the mouse; the ray takes control when the Pointer
---     Hand moves (the same "moved" that puts a hand in use), the mouse takes it back when it moves.
---     VRCompanion:getPointerOwner() -> "mouse" | "ray"   (VRCompanion.POINTER_CONTROL_MOUSE / _RAY)
---       "ray" only while the ray is the last mover AND a Pointer Hand is in use (so Motion Controllers
---       off, an untracked hand and the 3 s idle timeout all read as "mouse").
---     VRCompanion:isPointerRayInControl() -> boolean   (getPointerOwner() == "ray")
---     VRCompanion:notePointerRayMoved() / VRCompanion:notePointerMouseMoved()   hand the control over;
---       called by this module (hand moves; mouseEvent listener; sampling g_inputBinding:getMousePosition)
---       and callable from tests or other modules that see either one move.
---
---   The Pointer Ray (see "The Pointer Ray" below, and VRCompanionInteractiveControl.lua)
---     VRCompanion:getPointerRay() -> table | nil   world origin / direction of the ray this update: it starts at the
---                                                  Pointer Hand's index fingertip and runs along the finger
---     VRCompanion:getPointerRayInTrackingSpace(hand) -> ox, oy, oz, dx, dy, dz, source | nil   the same ray before
---                                                  the head carries it into the world (for the menu / 2D panel hit)
---     VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): along the finger; false: keeps the aim direction
---     VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger (hysteresis 0.6 / 0.4)
---     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
---     VRCompanion:placePointerRayForRender()      the line and dot, drawn before every rendered frame from the update's
---                                                  end points relative to the head (called by placeAndBindEyes)
---
---   Haptics (VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
---     VRCompanion:pulseHand(hand, durationMs, strength) -> boolean   one hand; false when off or the runtime refuses
---     VRCompanion:pulsePointerHand(durationMs, strength) -> boolean   Pointer Hand only; false when off
---     VRCompanion:onClickPointEvent(kind, clickPoint)   "selected" (non-nil point) and "clicked" pulse
---
---   Time: every time in this module is VRCompanion:getCurrentTimeMs(), i.e. the global g_time in
---   milliseconds (a wall clock only when g_time is nil). Tests drive it by assigning _G.g_time.
---
---   Hooks into the rest of the mod:
---     Core.lua    registers this subsystem (see the end of this file): the poll is its update hook (updateMotionControllers(dt)),
---                 the four commands below are its console commands, and it resets at map unload (resetMotionControllers())
---     Config.lua  saveConfiguration / loadConfiguration run its saveSettings / loadSettings hooks
---                 (saveMotionControllerSettings / loadMotionControllerSettings)
---     Locomotion  onRecenterAction -> resetMotionControllerMovement() (a recenter moves every pose)
---     MenuPointer updateMotionControllers -> updateMenuPointer(dt) at the end of every update; it registers its own unload (resetMenuPointer())
---                 (VRCompanionMenuPointer.lua)
---     VirtualHands updateMotionControllers -> updateVirtualHands(dt) at the end of every update (also when input is
---                 ignored, so the hands hide); it registers its own console commands and unload (VRCompanionVirtualHands.lua).
---                 The Virtual Hands place the grip pose through VRCompanion:headRelativePoseToWorld, the transform the Pointer Ray uses too.
---     WheelGrab   updateMotionControllers -> updateWheelGrab(dt) after the hands are polled and before the Pointer Hand is chosen
---                 (also when input is ignored, or the Injector offers no hand states, so a held Steering Wheel is let go), and it registers its own
---                 settings hooks (saveWheelGrabSetting / loadWheelGrabSetting), console commands, map load (the Drivable wrap) and unload (VRCompanionWheelGrab.lua). A hand
---                 holding the Steering Wheel (isHandHoldingSteeringWheel) stays in use but is never a Pointer Hand
---                 candidate, so it casts no Pointer Ray; Interactive Control's auto-on keeps its state while it holds.
---     HandTools   updateMotionControllers -> updateHandTools(dt) on every path, after the hands are polled and before the Pointer Hand
---                 is chosen (also when input is ignored, or the Injector offers no hand states, so a Hand Tool goes back to
---                 where the game puts it); the settings hooks (saveHandToolsSetting / loadHandToolsSetting), the map-load and
---                 unload hooks and the console commands are registered
---                 with the core by the file itself, its unload before the Virtual Hands go (VRCompanionHandTools.lua, ADR-0029). The Tool Hand holding a
---                 supported Hand Tool (isHandHoldingHandTool) is never a Pointer Hand candidate in the world, as a hand on the
---                 Steering Wheel is not; in a menu either hand can. While its Hand Tool keeps it in use
---                 (isHandKeptInUseByHandTool) the Tool Hand stays in use however still it is held, so a held-still cut or spray
---                 does not drop the tool.
---     ObjectGrab  updateMotionControllers -> updateObjectGrab(dt) on every path (the grip edges and the carry), updatePointerRay ->
---                 peekObjectGrabRayTarget() and settleObjectGrabRayTarget() (VRCompanionObjectGrab.lua, ADR-0033; the object is looked
---                 at first, settled once the nearer of it and an Animated Object is known). A hand carrying a Held Object
---                 (isHandCarryingHeldObject) stays in use however still it is held and is never a Pointer Hand candidate.
---     AnimatedObjects (wraps the game's trigger callback to follow the zones, at map load, from its own registered hook),
---                 updatePointerRay -> updateAnimatedObjects(dt, suppressed, rivalDistance) after
---                 Interactive Control, between Object Grab's peek and settle (the nearer wins; also, as suppressed, on the paths
---                 where input is ignored, so the selection clears), getPointerDiagnostics -> getAnimatedObjectsDiagnostics()
---                 (VRCompanionAnimatedObjects.lua, ADR-0034). While the
---                 ray is on one, the Pointer Hand's trigger is taken off the Virtual Gamepad and a pull runs the game's own toggle.
---     ManualAttach updatePointerRay -> peekInteractiveControlTarget() (the angle of the best Click Point), updateManualAttach(dt, suppressed,
---                 clickCos) (the Coupling Point nearer the ray's centre than that Click Point is the target), then updateInteractiveControl(dt,
---                 selectNone) (told to select none when the Coupling Point won), all before Animated Objects and Object Grab (either one selected
---                 suppresses both; also, as suppressed, on the paths where input is ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics()
---                 (VRCompanionManualAttach.lua, ADR-0035; its unload hook is registered by the file). The one thing of Manual Attach it wraps is the handler class's candidate update.
---     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the status
---                 command ends with the pad's state and it registers its own settings hooks, console command and unload (VRCompanionVirtualGamepad.lua, ADR-0028)
---     The buttons, triggers and thumbsticks do nothing here beyond the uses above (pointing, Click Points, menus, Wheel Grab):
---                 Snap Turn, the Recenter Action and the HUD Toggle Action from the Motion Controllers arrive only as game actions
---                 bound on the Virtual Gamepad (ADR-0028). No button is mapped to an action here, and no setting does it.
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
 VRCompanion.MOTION_HAND_LEFT = 0
 VRCompanion.MOTION_HAND_RIGHT = 1
 VRCompanion.pointerHand = nil
 
--- The two things that can control the pointer (see "Who controls the pointer" above).
 VRCompanion.POINTER_CONTROL_MOUSE = "mouse"
 VRCompanion.POINTER_CONTROL_RAY = "ray"
--- The desk mouse counts as moved when its normalized position changes by more than this (about a pixel).
 VRCompanion.POINTER_MOUSE_MOVE_EPSILON = 0.0005
 
--- vrMotionControllers on|off: saved, default on. Off makes the mod ignore Motion Controller input; it never
--- touches the Injector's session or action set.
 VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED = true
 VRCompanion.motionControllersEnabled = VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED
 
--- A hand is in use while it is tracked and has moved within this long (ms).
 VRCompanion.MOTION_CONTROLLER_IN_USE_MS = 3000
--- "Moved" means the aim pose left the position (metres) or orientation (radians) it was last at by
--- more than this. Measured from the last pose that counted, so a slow drift adds up to a move while
--- a Motion Controller lying on a desk (sensor noise well below a millimetre) never does.
 VRCompanion.MOTION_CONTROLLER_MOVE_DISTANCE = 0.01
 VRCompanion.MOTION_CONTROLLER_MOVE_ANGLE = 0.035
 
--- vrPointerCone <degrees>: saved. A Click Point is selected only within this angle of the Pointer Ray's
--- centre, measured at the hand.
 VRCompanion.DEFAULT_POINTER_CONE_DEGREES = 5
 VRCompanion.MIN_POINTER_CONE_DEGREES = 0.5
 VRCompanion.MAX_POINTER_CONE_DEGREES = 45
 VRCompanion.pointerConeDegrees = VRCompanion.DEFAULT_POINTER_CONE_DEGREES
 
--- The trigger counts as pulled above PRESS and as released below RELEASE (hysteresis against a
--- trigger that rests half-way).
 VRCompanion.POINTER_TRIGGER_PRESS = 0.6
 VRCompanion.POINTER_TRIGGER_RELEASE = 0.4
--- Length of the drawn Pointer Ray (m) while it ends on nothing.
 VRCompanion.POINTER_RAY_LENGTH = 3
 
 local HANDS = { 0, 1 }
 
--- State of the subsystem. Rebuilt by resetMotionControllers().
 local function newState()
     return {
         hands = {},      -- [hand] = table filled in place by VRBridge.getHandState
@@ -176,17 +33,17 @@ local function newState()
         inUse = {},      -- [hand] = boolean
         triggerDown = {},     -- [hand] = trigger is pulled (with hysteresis)
         triggerPressed = {},  -- [hand] = it went down this update
-        triggerConsumed = {}, -- [hand] = a Pointer Hand switch took this pull: it counts for nothing until let go
+        triggerConsumed = {},
         ray = { valid = false, ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = -1 },
-        rayInHead = { valid = false },  -- the drawn line's ends in the head's space, from the update (placePointerRayForRender)
+        rayInHead = { valid = false },
         fingerLogged = {},    -- [hand] = the line about the ray starting at the index finger was logged this map
-        headScratch = nil,    -- table VRBridge.getHeadPose fills in place
+        headScratch = nil,
         pointerHand = nil,
         ignoredCleared = false,  -- Motion Controller input was ignored and the cached hands were already cleared
-        bridgeMissing = false,   -- the Injector offers no VRBridge.getHandState
-        pointerOwner = VRCompanion.POINTER_CONTROL_MOUSE,  -- see "Who controls the pointer"
-        mousePosition = { seen = false, x = 0, y = 0 },  -- where the desk mouse was last seen (seen: x and y hold a sample)
-        movedThisUpdate = {},    -- [hand] = true when the hand's aim moved far enough to count this update; one table, cleared in place
+        bridgeMissing = false,
+        pointerOwner = VRCompanion.POINTER_CONTROL_MOUSE,
+        mousePosition = { seen = false, x = 0, y = 0 },
+        movedThisUpdate = {},
     }
 end
 
@@ -200,7 +57,6 @@ local function bridgeCall()
     return nil
 end
 
--- An untracked, zeroed hand: what everyone sees while there is nothing to report.
 local function untrackedHand()
     return {
         tracked = false,
@@ -238,8 +94,6 @@ function VRCompanion:getPointerHand()
     return state.pointerHand
 end
 
--- Whether the aim pose moved away from the reference pose far enough to count; the pose becomes the
--- new reference when it did.
 local function movedFromReference(motion, hand)
     local ref = motion.ref
     if ref == nil then
@@ -259,22 +113,14 @@ local function movedFromReference(motion, hand)
     return moved
 end
 
--- The Pointer Hand: the one hand in use. With both in use it is the previous one, until the trigger is
--- pulled on the other hand: that pull moves the Pointer Hand there and is consumed (it clicks nothing,
--- see getPointerTrigger). With both in use and no previous Pointer Hand, a pull on either picks it.
--- A hand holding the Steering Wheel is in use but never a candidate (Wheel Grab, see VRCompanionWheelGrab.lua): the
--- Pointer Hand that starts holding falls to the other hand in use, or to nobody, and can point again once it lets go.
 local function isHoldingSteeringWheel(self, hand)
     return self:isHandHoldingSteeringWheel(hand) == true
 end
 
--- The Tool Hand holding a supported Hand Tool is never a candidate either, as it uses the tool with its trigger (Hand Tools,
--- ADR-0029). That holds in the world only: in a menu the tool is back where the game puts it and either hand can point.
 local function isHoldingHandTool(self, hand)
     return not self:isMenuQuadShown() and self:isHandHoldingHandTool(hand) == true
 end
 
--- The hand carrying a Held Object (Object Grab, ADR-0033) is never a candidate either: no ray sticks out of the object it holds.
 local function isCarryingHeldObject(self, hand)
     return self:isHandCarryingHeldObject(hand) == true
 end
@@ -294,10 +140,9 @@ local function choosePointerHand(self)
     for _, hand in ipairs(HANDS) do
         if hand ~= previous and state.triggerPressed[hand] then
             state.triggerPressed[hand] = false
-            state.triggerConsumed[hand] = true  -- until the trigger is let go
+            state.triggerConsumed[hand] = true
             return hand
         end
-        -- So does squeezing the grip of a hand that points at something it can grab (Object Grab): it grabs in that squeeze.
         if hand ~= previous and self:isObjectGrabSqueeze(hand) == true then
             return hand
         end
@@ -305,7 +150,6 @@ local function choosePointerHand(self)
     return previous
 end
 
--- Puts every cached hand back to untracked and nobody in use; the tables stay the ones the bridge fills.
 local function clearHands()
     local untracked = untrackedHand()
     for _, hand in ipairs(HANDS) do
@@ -321,14 +165,10 @@ local function clearHands()
     end
     state.pointerHand = nil
     state.ray.valid = false
-    state.ray.visible = false  -- the update that draws it does not run now: a ray left drawn would stay on its last target
+    state.ray.visible = false
     VRCompanion.pointerHand = nil
 end
 
--- ---- Who controls the pointer ---------------------------------------------------------------
--- One place for "desk mouse or Pointer Ray: whichever moved last" (see the header for the API).
-
--- Logs who took the pointer (the first few times only, so a mouse that never settles cannot flood the log).
 local POINTER_OWNER_LOG_LIMIT = 30
 local function setPointerOwner(self, owner, why)
     if state.pointerOwner ~= owner then
@@ -360,11 +200,9 @@ function VRCompanion:isPointerRayInControl()
     return self:getPointerOwner() == self.POINTER_CONTROL_RAY
 end
 
--- The desk mouse was seen at (x, y), either reported by the engine (isEvent: any event is the player
--- using the mouse) or sampled (a first sample only learns where it is). It took control when it moved.
 local function noteDeskMouse(self, x, y, isEvent)
     if type(x) ~= "number" or type(y) ~= "number" then return end
-    local last = state.mousePosition  -- one table, overwritten in place
+    local last = state.mousePosition
     local moved = isEvent
     if last.seen then
         local epsilon = self.POINTER_MOUSE_MOVE_EPSILON
@@ -376,13 +214,10 @@ local function noteDeskMouse(self, x, y, isEvent)
     end
 end
 
--- The engine tells mod listeners about the desk mouse. The mod's own synthetic GUI events never come
--- through here, so they never look like the mouse moving.
 function VRCompanion:mouseEvent(posX, posY, isDown, isUp, button)
     noteDeskMouse(self, posX, posY, true)
 end
 
--- Sampling covers an engine that does not deliver mouseEvent to the mod in this screen.
 local function sampleDeskMouse(self)
     local inputBinding = g_inputBinding or (_G and _G.g_inputBinding)
     if inputBinding == nil or type(inputBinding.getMousePosition) ~= "function" then return end
@@ -392,46 +227,29 @@ local function sampleDeskMouse(self)
     end
 end
 
--- Interactive Control still has to see a Pointer Hand go away (its state is put back).
 local function settleInteractiveControl(self, dt)
     self:updateInteractiveControl(dt)
-    -- No Animated Object stays selected either (suppressed: nothing is selected, the trigger is not taken).
     self:updateAnimatedObjects(dt, true)
-    -- Nor a Coupling Point of Manual Attach.
     self:updateManualAttach(dt, true)
 end
 
--- What reads the pointer after the hands were polled: the menus, the Virtual Hands, then the Virtual Gamepad's uses.
--- The Virtual Hands read the settled hands too (VRCompanionVirtualHands.lua), so they follow every exit
--- of the update, including the ones where Motion Controller input is ignored.
 local function updatePointerUsers(self, dt)
     self:updateMenuPointer(dt)
     self:updateVirtualHands(dt)
-    -- Last: which Motion Controller inputs the uses above (and Interactive Control's click) took off the Virtual Gamepad.
     self:updateVirtualGamepadUse(dt)
 end
 
--- THE UPDATE ORDER of this subsystem and the ones it drives. Motion Controllers register ONE update hook (at the end of this file),
--- and this function is its fan-out: direct calls, in this order, because modDesc.xml order (Motion Controllers, Menu Pointer, Virtual
--- Hands, Wheel Grab, Virtual Gamepad, Hand Tools, Object Grab, ...) does not give it. The Virtual Gamepad updates FIRST, before the
--- hands are read; then the desk mouse is sampled; then, on the normal path, the hands are polled, Wheel Grab and Object Grab run on
--- them, Hand Tools run, the Pointer Hand is chosen, the Pointer Ray is cast (Interactive Control, Manual Attach, Animated Objects,
--- Object Grab), and LAST come the Menu Pointer, the Virtual Hands and the Virtual Gamepad's uses (updatePointerUsers). The two paths
--- where nothing is polled (input ignored, no hand states from the Injector) run Wheel Grab, Hand Tools, Object Grab in that order,
--- then settle Interactive Control and friends, then the pointer users. A subsystem that needs to run between these steps cannot be a
--- separate update hook of its own.
 function VRCompanion:updateMotionControllers(dt)
     self:updateVirtualGamepad(dt)
     sampleDeskMouse(self)
     if self.motionControllersEnabled == false then
-        -- Motion Controller input is ignored: nothing is polled, and the hands read as untracked.
         if not state.ignoredCleared then
             clearHands()
             state.ignoredCleared = true
         end
-        self:updateWheelGrab(dt)  -- lets go of the Steering Wheel
-        self:updateHandTools(dt)  -- the Hand Tool goes back to the game's placement
-        self:updateObjectGrab(dt)  -- the Held Object goes back to the game's carry
+        self:updateWheelGrab(dt)
+        self:updateHandTools(dt)
+        self:updateObjectGrab(dt)
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -445,8 +263,6 @@ function VRCompanion:updateMotionControllers(dt)
         state.ray.valid = false
         state.ray.visible = false
         if not bridgeWasMissing then
-            -- The cached hands are stale from here on: read as untracked, so that a hand holding the Steering Wheel is no
-            -- longer located and Wheel Grab lets go (and stops dropping the other devices' steering).
             clearHands()
         end
         self:updateWheelGrab(dt)
@@ -461,8 +277,6 @@ function VRCompanion:updateMotionControllers(dt)
         state.movedThisUpdate[hand] = false
     end
     for _, hand in ipairs(HANDS) do
-        -- The bridge fills a table in place once it holds every field, and otherwise hands back a
-        -- complete one that is adopted here, so nothing is allocated per frame.
         local result = getHandState(hand, state.hands[hand])
         if type(result) == "table" then
             state.hands[hand] = result
@@ -484,14 +298,13 @@ function VRCompanion:updateMotionControllers(dt)
         if current.tracked == true and now ~= nil and motion.lastMovedMs ~= nil then
             local elapsed = now - motion.lastMovedMs
             if elapsed < 0 then
-                motion.lastMovedMs = nil  -- the clock went backwards: forget the old move
+                motion.lastMovedMs = nil
             else
                 inUse = elapsed < self.MOTION_CONTROLLER_IN_USE_MS
             end
         end
         state.inUse[hand] = inUse
 
-        -- Trigger: pulled above PRESS, released below RELEASE; "pressed" is the update it went down.
         local wasDown = state.triggerDown[hand]
         local value = current.trigger or 0
         local isDown = value >= (wasDown and self.POINTER_TRIGGER_RELEASE or self.POINTER_TRIGGER_PRESS)
@@ -500,13 +313,8 @@ function VRCompanion:updateMotionControllers(dt)
         if not isDown then state.triggerConsumed[hand] = false end
         state.triggerPressed[hand] = isDown and not wasDown
     end
-    -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
     self:updateWheelGrab(dt)
-    -- Object Grab lets go of a Held Object whose grip is let go, from the hands just polled (VRCompanionObjectGrab.lua).
     self:updateObjectGrab(dt)
-    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held. So does the Tool
-    -- Hand while its Hand Tool keeps it in use (Hand Tools says when): a cut or a spray held with a still hand must not drop the tool.
-    -- And the hand carrying a Held Object (Object Grab), which is however still it is held.
     for _, hand in ipairs(HANDS) do
         if isHoldingSteeringWheel(self, hand) or isCarryingHeldObject(self, hand)
             or self:isHandKeptInUseByHandTool(hand) == true then
@@ -514,11 +322,9 @@ function VRCompanion:updateMotionControllers(dt)
             if now ~= nil then state.motion[hand].lastMovedMs = now end
         end
     end
-    -- Hand Tools put the Hand Tool the Tool Hand holds into its Virtual Hand, from the hands just polled (VRCompanionHandTools.lua).
     self:updateHandTools(dt)
     state.pointerHand = choosePointerHand(self)
     self.pointerHand = state.pointerHand
-    -- The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
     if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
         self:notePointerRayMoved()
     end
@@ -526,57 +332,23 @@ function VRCompanion:updateMotionControllers(dt)
     updatePointerUsers(self, dt)
 end
 
--- A Recenter Action moves the origin every pose is measured from. Hands lying still must not look
--- moved, so the movement references are dropped and taken again at the next update.
 function VRCompanion:resetMotionControllerMovement()
     for _, hand in ipairs(HANDS) do
         state.motion[hand].ref = nil
     end
 end
 
--- ---- The Pointer Ray ------------------------------------------------------------------------------
--- The ray starts at the index fingertip of the Pointer Hand in the world and runs along the finger (below: "The
--- Pointer Ray on the index finger"); the aim pose is only the fallback. A hand pose is in the head pose's
--- tracking space, so it is carried into the world the way the head is: the Cyclopean Audio Listener
--- Node sits at the head's centre with the head's full world rotation (all three camera paths place it,
--- through Snap Turn and the Recenter Action), so the hand's offset and direction relative to the head
--- are rotated by the listener's world rotation and added to its world position. Anchoring at the head
--- centre keeps the ray the same in both eyes.
---
---   VRCompanion:getPointerRay() -> table | nil   the ray this update, or nil when there is none:
---     ox, oy, oz (origin, world), dx, dy, dz (unit direction), visible (drawn), ex, ey, ez (end point)
---     Read it, never keep or edit it.
---   VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger this update
---   VRCompanion:placePointerRayForRender()       draws the line and dot for a rendered frame (see below)
-
--- Rotates (x, y, z) by the unit quaternion (qx, qy, qz, qw).
 local function qrotate(qx, qy, qz, qw, x, y, z)
     local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
     return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
 end
 
--- Whether the head is currently placed in the world by the mod's own camera chain; otherwise the
--- listener node says nothing about where the player's head is. (The engine's own head-tracking setting,
--- VRCompanion:isHeadTrackingActive, is not a gate: the mod places the head itself whatever it says, and in
--- the game it reads off while the head is in fact placed.)
 local function headIsPlacedInTheWorld(self)
     if self:isMenuQuadShown() or self.is2DViewActive or self.trackedCameraShown == false then return false end
     if self:isPassThroughMode() then return false end
     return true
 end
 
--- ---- Head-relative poses in the world (shared by the Pointer Ray and the Virtual Hands) --------------
--- A hand pose from VRBridge is in the head pose's tracking space. Carrying it into the world is one
--- transform, whatever the pose is for: take the pose relative to the head, then apply the Cyclopean
--- Audio Listener Node's world pose (the head's centre with the head's full world rotation).
---
---   VRCompanion:isHeadPlacedInTheWorld() -> boolean
---   VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out) -> true | false, reason
---     On true, out.x, out.y, out.z (world position) and out.qx, out.qy, out.qz, out.qw (unit world
---     rotation) are filled in place. On false, out is untouched and reason says why in one line.
---   VRCompanion.multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw) -> x, y, z, w   (a then b is applied as a * b)
-
--- Multiplies two quaternions: a then b is applied as a * b.
 local function qmultiply(ax, ay, az, aw, bx, by, bz, bw)
     return aw * bx + ax * bw + ay * bz - az * by,
            aw * by - ax * bz + ay * bw + az * bx,
@@ -584,14 +356,12 @@ local function qmultiply(ax, ay, az, aw, bx, by, bz, bw)
            aw * bw - ax * bx - ay * by - az * bz
 end
 
--- Shared with the Virtual Hands, which compose a joint's rest rotation with a curl.
 VRCompanion.multiplyQuaternions = qmultiply
 
 function VRCompanion:isHeadPlacedInTheWorld()
     return headIsPlacedInTheWorld(self)
 end
 
--- The state behind isHeadPlacedInTheWorld, for log lines and diagnostics.
 function VRCompanion:describeHeadPlacement()
     return string.format("menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s",
         tostring(self:isMenuQuadShown()), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
@@ -617,12 +387,10 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     state.headScratch = head
     if head.isValid ~= true or head.qw == nil then return false, "the head pose is not valid" end
 
-    -- The pose relative to the head, in the head's frame ...
     local hx, hy, hz, hw = -head.qx, -head.qy, -head.qz, head.qw
     local offX, offY, offZ = qrotate(hx, hy, hz, hw, x - head.x, y - head.y, z - head.z)
     local rx, ry, rz, rw = qmultiply(hx, hy, hz, hw, qx, qy, qz, qw)
 
-    -- ... and in the world, through the head's world placement.
     local lx, ly, lz = getWorldTranslationFn(listener)
     local lqx, lqy, lqz, lqw = getWorldQuaternionFn(listener)
     if lx == nil or lqw == nil then return false, "the listener node has no world pose" end
@@ -635,24 +403,11 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     return true
 end
 
--- ---- The Pointer Ray on the index finger -------------------------------------------------------------------
--- The ray starts at the index fingertip of the hand and runs along the finger: a fixed offset in the grip frame
--- (VRCompanion.VIRTUAL_HAND_POINTER, VRCompanionVirtualHands.lua, the relaxed finger of the glove, so the ray does not
--- twitch as the trigger curls the finger) applied to the GRIP pose. It does not depend on Virtual Hands being shown or
--- their model loaded. Only when the grip pose is not tracked (a runtime that refuses it) does the ray start at the aim
--- pose and run along its -Z axis.
---
--- VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): the ray runs along the finger. false: it keeps the
---     aim pose's direction (-Z) and only starts at the fingertip.
---   VRCompanion:getPointerRayInTrackingSpace(hand) -> ox, oy, oz, dx, dy, dz, source | nil   the same ray in the
---     tracking space the hand poses are in (before the head carries it into the world), for the Injector's menu and 2D
---     panel hit test; source is "index finger" or "aim pose"; nil while the hand is not tracked.
 VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION = true
 
 local SOURCE_FINGER = "index finger"
 local SOURCE_AIM = "aim pose"
 
--- The fingertip offset of a hand (VRCompanion.VIRTUAL_HAND_POINTER), or nil when the table is not there.
 local function pointerOffset(self, hand)
     local offsets = self.VIRTUAL_HAND_POINTER
     if type(offsets) ~= "table" then return nil end
@@ -661,8 +416,6 @@ local function pointerOffset(self, hand)
     return offset
 end
 
--- The ray of a hand whose grip pose (gx..gqw) and aim rotation (aqx..aqw) are given in one frame (tracking space or
--- the world): the fingertip as origin and the finger (or the aim -Z axis) as direction. Not normalized.
 local function fingerRay(self, offset, gx, gy, gz, gqx, gqy, gqz, gqw, aqx, aqy, aqz, aqw)
     local tip, direction = offset.tip, offset.direction
     local tx, ty, tz = qrotate(gqx, gqy, gqz, gqw, tip.x, tip.y, tip.z)
@@ -694,8 +447,6 @@ function VRCompanion:getPointerRayInTrackingSpace(hand)
     return ox, oy, oz, dx / length, dy / length, dz / length, source
 end
 
--- The angle in degrees between the finger's direction and the aim pose's direction (-Z) of a hand, or nil when the
--- hand has no tracked grip pose and aim pose.
 local function fingerAimAngleDegrees(self, hand)
     local pose = state.hands[hand]
     local offset = pointerOffset(self, hand)
@@ -709,8 +460,6 @@ local function fingerAimAngleDegrees(self, hand)
     return math.deg(math.acos(cosine))
 end
 
--- Fills state.ray.o* / d* for the Pointer Hand; true and where it starts from ("index finger" or "aim pose"), or
--- false and why it cannot be placed.
 local function placePointerRay(self, hand)
     local ray = state.ray
     local pose = state.hands[hand]
@@ -719,8 +468,6 @@ local function placePointerRay(self, hand)
     local fromFinger = offset ~= nil and pose.gripPoseTracked == true
     local ok, reason
 
-    -- The aim pose in the world: where the ray starts and runs when there is no grip pose, and the direction it
-    -- keeps when it is not to follow the finger.
     state.rayPose = state.rayPose or {}
     local aim = state.rayPose
     if not fromFinger or self.POINTER_RAY_FOLLOWS_FINGER_DIRECTION == false then
@@ -738,7 +485,6 @@ local function placePointerRay(self, hand)
         ox, oy, oz, dx, dy, dz = fingerRay(self, offset, grip.x, grip.y, grip.z, grip.qx, grip.qy, grip.qz, grip.qw,
             aim.qx, aim.qy, aim.qz, aim.qw)
     else
-        -- The ray runs along the aim pose's -Z axis.
         ox, oy, oz = aim.x, aim.y, aim.z
         dx, dy, dz = qrotate(aim.qx, aim.qy, aim.qz, aim.qw, 0, 0, -1)
     end
@@ -749,8 +495,6 @@ local function placePointerRay(self, hand)
     return true, fromFinger and SOURCE_FINGER or SOURCE_AIM
 end
 
--- Takes the drawn line's ends into the space of the head (the Cyclopean Audio Listener Node), for the frames rendered until
--- the next update (VRCompanion:placePointerRayForRender).
 local function noteRayInHead(self, ray)
     local inHead = state.rayInHead
     local listener = self.cyclopeanAudioListenerNode
@@ -761,8 +505,6 @@ local function noteRayInHead(self, ray)
     inHead.valid = true
 end
 
--- Called at the end of every updateMotionControllers. Places the ray, lets Interactive Control select
--- and click, and settles what is drawn.
 function VRCompanion:updatePointerRay(dt)
     local ray = state.ray
     ray.valid = false
@@ -778,13 +520,10 @@ function VRCompanion:updatePointerRay(dt)
             reason = source == SOURCE_FINGER and "placed" or "placed from the aim pose (the grip pose is not tracked)"
         end
     end
-    -- Logged when it changes, so a session where pointing does not work says why in the game log.
     if reason ~= state.rayReason then
         state.rayReason = reason
         print("[FS25_VR] Pointer Ray: " .. reason)
     end
-    -- Once per hand, the first time the ray is placed from its index finger: how far the finger points from where the
-    -- runtime aims the controller, so a headset session shows whether pointing along the finger feels sane.
     if source == SOURCE_FINGER and not state.fingerLogged[hand] then
         state.fingerLogged[hand] = true
         local angle = fingerAimAngleDegrees(self, hand)
@@ -794,22 +533,14 @@ function VRCompanion:updatePointerRay(dt)
                 or "keeps the aim direction (POINTER_RAY_FOLLOWS_FINGER_DIRECTION is false)"))
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
-    -- Click Points and Coupling Points (the hitch, its PTO stub, its hose couplers) share the cone (ADR-0035): of the Click Point and the Coupling
-    -- Point within it, the one nearer the ray's centre is the target and the other selects nothing (a tie is the Click Point's). Interactive Control
-    -- reports its best Click Point before it commits, Manual Attach support ranks its Coupling Point against it, and Interactive Control is then
-    -- told to select none when the Coupling Point won.
     local clickCos = self:peekInteractiveControlTarget()
     local onCouplingPoint, couplingX, couplingY, couplingZ = self:updateManualAttach(dt, false, clickCos)
     hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onCouplingPoint)
-    -- Either of them selected wins over everything else (Animated Objects and Object Grab): Interactive Control answers a hit point only when it
-    -- selected one (it answers hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
     if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ end
-    -- Object Grab: the ray is on an object the empty hands can pick up. Only looked at here: it pulses and grabs once it is the target.
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
     if not hasTarget then
         grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
     end
-    -- Animated Objects: the ray is on a door or gate in whose zone the player stands. Of the two the ray meets first, the nearer wins.
     local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil, grabbable and grabDistance or nil)
     if onAnimatedObject then
         hasTarget, hitX, hitY, hitZ = true, animatedX, animatedY, animatedZ
@@ -836,25 +567,17 @@ function VRCompanion:getPointerRay()
     return nil
 end
 
--- The Pointer Hand's trigger: pressed (it went down this update), held (it is down). A pull that
--- switched the Pointer Hand to this hand is neither, however long it is held on: it is let go first.
 function VRCompanion:getPointerTrigger()
     local hand = state.pointerHand
     if hand == nil or state.triggerConsumed[hand] then return false, false end
     return state.triggerPressed[hand] == true, state.triggerDown[hand] == true
 end
 
--- ---- Haptic pulses on the Pointer Hand -----------------------------------------------
-
--- Pulse lengths (ms) and strengths (0..1): a light tick when the ray lands on a different Click Point,
--- a firmer one for a click so the two can be told apart by feel.
 VRCompanion.HAPTIC_SELECT_MS = 25
 VRCompanion.HAPTIC_SELECT_STRENGTH = 0.25
 VRCompanion.HAPTIC_CLICK_MS = 45
 VRCompanion.HAPTIC_CLICK_STRENGTH = 0.6
 
--- Vibrates one hand (never the other). Nothing happens, and false is returned, while Motion Controllers are
--- off, without a hand, or when the Injector has no haptics call or the runtime refuses it.
 function VRCompanion:pulseHand(hand, durationMs, strength)
     if hand == nil or self.motionControllersEnabled == false then return false end
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -863,14 +586,10 @@ function VRCompanion:pulseHand(hand, durationMs, strength)
     return ok and played == true
 end
 
--- Vibrates the Pointer Hand (never the other hand); false without a Pointer Hand (see pulseHand).
 function VRCompanion:pulsePointerHand(durationMs, strength)
     return self:pulseHand(state.pointerHand, durationMs, strength)
 end
 
--- Interactive Control's Click Point events (see VRCompanionInteractiveControl.lua): "selected" when the
--- ray lands on a different Click Point (clickPoint is nil when it left every one: silent), "clicked"
--- for each click that was executed.
 function VRCompanion:onClickPointEvent(kind, clickPoint)
     if kind == "selected" then
         if clickPoint ~= nil then
@@ -881,13 +600,6 @@ function VRCompanion:onClickPointEvent(kind, clickPoint)
     end
 end
 
--- A line from the hand with a dot where it lands, drawn with the engine's debug drawing. Called by
--- VRCompanion:placeAndBindEyes once it has placed the head for a frame, which happens before every frame the engine
--- renders, after the Virtual Hands are placed for it. The ends are the update's, relative to the head, carried into the
--- world from where the head is now: the game renders some frames with no update before them, after the cab moved again
--- (Sequential Dual-Pass's second pass), and the update runs before the game moves the cab camera. A line drawn from the
--- update's world ends (in VRCompanion:draw) was a copy lagging behind the cab in one eye, as the Virtual Hands were.
--- The camera path may place the head more than once before a frame; each time draws the same line again.
 function VRCompanion:placePointerRayForRender()
     local inHead = state.rayInHead
     if not state.ray.visible or not inHead.valid then return end
@@ -921,12 +633,8 @@ function VRCompanion:drawFrame()
     self:drawVirtualHands()
 end
 
--- ---- Settings, persistence, console commands ------------------------------------------------
-
 local SETTING_KEY_ENABLED = "vrSettings.motionControllers"
 
--- The on/off a console argument or a saved string says (on/true/1, off/false/0), or nil when it says neither. Shared
--- with Wheel Grab's `vrWheelGrab` command and setting.
 function VRCompanion.parseOnOffArgument(arg)
     local low = string.lower(tostring(arg))
     if low == "on" or low == "true" or low == "1" then return true end
@@ -944,7 +652,6 @@ function VRCompanion:setMotionControllersEnabled(enabled, save)
     end
 end
 
--- The saveSettings hook (see the registration): the open settings file and the engine's setters (any may be nil).
 function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
@@ -952,8 +659,6 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     self:savePointerConeSetting(xmlFile, xml)
 end
 
--- The loadSettings hook (see the registration): the open settings file and the engine's getters (any may be nil).
--- A key that is missing keeps the current value.
 function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     local loaded = nil
     if type(xml.getBool) == "function" then
@@ -969,7 +674,6 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     self:loadPointerConeSetting(xmlFile, xml)
 end
 
--- vrPointerCone: the cone (degrees) inside which a Click Point is selected.
 local SETTING_KEY_CONE = "vrSettings.pointerConeDegrees"
 
 local function validPointerCone(self, degrees)
@@ -1050,9 +754,6 @@ function VRCompanion:consoleCommandMotionControllerStatus()
     return self:getMotionControllerStatus()
 end
 
--- One hand's aim pose and grip pose with whether each is tracked, and when both are, how far the index finger points
--- from the aim direction, e.g. "aim (0.30, 1.20, -0.40) tracked, grip (0.28, 1.15, -0.30) tracked, finger 23.4 degrees
--- from aim". Positions are tracking-space metres.
 local function describeHandPoses(self, hand)
     local pose = state.hands[hand]
     local aim = "aim not tracked"
@@ -1068,8 +769,6 @@ local function describeHandPoses(self, hand)
     return aim .. ", " .. grip .. finger
 end
 
--- Why pointing may not work, in one line: the ray, who controls the pointer and Interactive Control support,
--- then each hand's aim pose and grip pose.
 function VRCompanion:getPointerDiagnostics()
     local icText = self:getInteractiveControlDiagnostics()
     local virtualHandsText = " | " .. self:getVirtualHandsDiagnostics()
@@ -1090,42 +789,12 @@ function VRCompanion:consoleCommandPointerDiagnostics()
     return self:getPointerDiagnostics()
 end
 
--- Map unload: forget everything seen this session. The saved setting stays as it is. The Menu Pointer, Virtual Hands, Wheel Grab and
--- Virtual Gamepad reset in hooks of their own, and so do Hand Tools, Object Grab, Interactive Control, Animated Objects and Manual
--- Attach (registered unload order is the reverse of modDesc.xml order, so Hand Tools reset before the Virtual Hands go: a tool hangs
--- below a hand); the registry removes the console commands.
 function VRCompanion:resetMotionControllers()
     state = newState()
     initHands()
     self.pointerHand = nil
 end
 
--- Registered with the core (the registry is documented in VRCompanionCore.lua).
---   update: the whole poll, ONE hook with the fan-out of updateMotionControllers (its order is stated there). The Menu Pointer, Virtual
---     Hands, Wheel Grab and Virtual Gamepad do not register updates of their own: file order (Menu Pointer and Virtual Hands before Wheel
---     Grab and Virtual Gamepad) is not the order they run in.
---   mapUnload: runs last of the Motion Controller subsystems (it registered first, and unload runs in reverse), after the Virtual
---     Gamepad, Wheel Grab, Virtual Hands and Menu Pointer and the subsystems of the fan-out have reset; nothing of theirs reads this state.
---     The group's resets run in reverse file order (Manual Attach, Animated Objects, Interactive Control, Object Grab, Hand Tools,
---     Virtual Gamepad, Wheel Grab, Virtual Hands, Menu Pointer, this state). Two orders matter, and file order gives both: Hand
---     Tools reset before the Virtual Hands (a tool hangs below a hand), this state last. Everything else is independent, because
---     each reset touches only its own state and:
---       Menu Pointer      lets go of a held mouse button (g_gui) and of the drawn cursor (VRBridge.setMenuCursor)
---       Hand Tools        ends a use in progress (the tool's own use handler, called with the trigger released), lifts the wraps of
---                         HandTool and of Player.getLookRay (held through the core's count), gives the held tool back to the game
---       Object Grab       lifts the wraps of its classes and its hold on Player.getLookRay
---       Virtual Hands     gives a tool back, deletes the hands' nodes
---       Wheel Grab        lifts the wrap of Drivable's steering input
---       Virtual Gamepad   zeroes the Injector's pad (VRBridge.setVirtualGamepad, setVirtualGamepadUse)
---       Interactive Control, Animated Objects, Manual Attach   put another mod's / the game's class function back
---     None of them calls a function another one has wrapped (the tool's use handler is neither a trigger callback, nor a
---     candidate update, nor Interactive Control's class; a look ray asked during it is answered first by Hand Tools, which are
---     still in place at that point), none reads a field another one resets, and the three VRBridge calls are plain stores into
---     independent Injector fields (src/luau/vr_bridge.cpp: Lua_SetMenuCursor, Lua_SetVirtualGamepad, Lua_SetVirtualGamepadUse)
---     that its threads read later; neither side can see the order of two of them. The Perf Trace stop (Injector) and the Dual
---     Pass Physics release (engine) of the other subsystems are likewise independent of the group.
--- Settings: the Motion Controllers' on/off and the Pointer Cone. Wheel Grab, Hand Tools, Object Grab and the Virtual Gamepad save
--- and load their own; none of the loads reads a setting another one loads, so their order does not matter.
 VRCompanion:registerSubsystem("motionControllers", {
     update = function(self, dt) self:updateMotionControllers(dt) end,
     saveSettings = function(self, xmlFile, xml) self:saveMotionControllerSettings(xmlFile, xml) end,

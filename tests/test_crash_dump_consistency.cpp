@@ -1,6 +1,3 @@
-// The crash dump numbers and commands are written down in several places that nothing else ties together: the Injector,
-// the Installer script, the README, the README.txt that scripts/package_release.ps1 writes into the bundle, ADR-0039
-// and the Installer test. These tests read those files as text, so that changing one and forgetting another fails here.
 #include <gtest/gtest.h>
 #include "companion_mod_fixture.h"
 #include "core/crash_reporter.h"
@@ -23,7 +20,6 @@ std::vector<std::string> LinesOf(const std::string& text) {
     return lines;
 }
 
-// The command lines a player is told to type: a PowerShell one-liner or a reg command, on a line of its own.
 std::vector<std::string> CommandLinesIn(const std::string& text) {
     std::vector<std::string> commands;
     for (const std::string& line : LinesOf(text)) {
@@ -32,8 +28,6 @@ std::vector<std::string> CommandLinesIn(const std::string& text) {
     return commands;
 }
 
-// The README.txt that package_release.ps1 writes: the text of its here-string, in which a dollar sign is escaped with
-// a backtick so that PowerShell does not expand it.
 std::string BundledReadmeText() {
     const std::string script = ReadFile("scripts/package_release.ps1");
     const std::string begin = "$readmeContent = @\"";
@@ -45,7 +39,6 @@ std::string BundledReadmeText() {
     return text;
 }
 
-// The first capture group of the first match, or "" when there is none.
 std::string FirstMatch(const std::string& text, const std::string& pattern) {
     std::smatch match;
     return std::regex_search(text, match, std::regex(pattern)) ? match[1].str() : "";
@@ -55,7 +48,6 @@ unsigned long Hex(const std::string& digits) {
     return digits.empty() ? ~0ul : std::stoul(digits, nullptr, 16);
 }
 
-// What the Installer script writes for the game's exe (the constants of its [Code] section).
 struct InstallerDumpValues {
     std::string type, flagsHex, count;
 };
@@ -75,11 +67,9 @@ TEST(CrashDumpConsistencyTest, TheInstallersCustomDumpFlagsAreTheContentsOfTheIn
     const InstallerDumpValues installer = WhatTheInstallerWrites();
     ASSERT_FALSE(installer.flagsHex.empty()) << "installer/fs25_vr.iss has no CrashDumpFlags constant.";
 
-    // The Injector's dump contents, as the flags it passes to MiniDumpWriteDump.
     EXPECT_EQ(Hex(installer.flagsHex), fs25vr::kCrashDumpFlags);
     EXPECT_EQ(installer.type, "0") << "DumpType 0 is the custom dump, the only one that reads CustomDumpFlags.";
 
-    // The other places the flags are written down.
     EXPECT_EQ(Hex(FirstMatch(ReadFile("docs/adr/0039-the-installer-turns-on-windows-crash-dumps-for-the-game.md"),
                              R"(`CustomDumpFlags` 0x([0-9A-Fa-f]+))")),
               fs25vr::kCrashDumpFlags)
@@ -124,7 +114,6 @@ TEST(CrashDumpConsistencyTest, TheReadmeAndTheBundledReadmeGiveTheSameCrashComma
     const std::vector<std::string> readme = CommandLinesIn(ReadFile("README.md"));
     const std::vector<std::string> bundled = CommandLinesIn(BundledReadmeText());
 
-    // The one that turns the setting on and the one that turns it off, both aimed at the game's key.
     ASSERT_EQ(readme.size(), 2u) << "README.md should hold exactly the command that turns the setting on and the one that turns it off.";
     for (const std::string& command : readme) {
         EXPECT_NE(command.find("Windows Error Reporting\\LocalDumps"), std::string::npos) << command;
@@ -133,4 +122,4 @@ TEST(CrashDumpConsistencyTest, TheReadmeAndTheBundledReadmeGiveTheSameCrashComma
     EXPECT_EQ(bundled, readme) << "The README.txt in the bundle (scripts/package_release.ps1) and README.md must give the same commands.";
 }
 
-} // namespace
+}

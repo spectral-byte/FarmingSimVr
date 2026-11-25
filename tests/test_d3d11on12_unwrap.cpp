@@ -12,11 +12,8 @@ using Microsoft::WRL::ComPtr;
 namespace fs25vr {
 namespace {
 
-// A D3D12 device or queue wrapper as ReShade hands them out: another object, with its methods in another module (this
-// test executable rather than D3D12Core.dll), forwarding to the real object. Only the calls the swap makes are
-// implemented; any other slot records that it was called.
 class FakeD3D12Wrapper {
-    void* const* m_vtable;  // first, as in any COM object
+    void* const* m_vtable;
 
 public:
     enum class Kind { Device, Queue };
@@ -25,7 +22,6 @@ public:
                                                   m_kind(kind), m_inner(inner) {}
 
     IUnknown* AsUnknown() { return reinterpret_cast<IUnknown*>(this); }
-    // A device wrapper on another adapter reports this LUID instead of the real one.
     std::optional<LUID> adapterLuid;
     static bool s_unexpectedCall;
 
@@ -50,10 +46,8 @@ private:
         *out = self;
         return S_OK;
     }
-    // The wrapper lives on the test's stack, so references are not counted.
     static ULONG STDMETHODCALLTYPE AddRef(void*) { return 2; }
     static ULONG STDMETHODCALLTYPE Release(void*) { return 1; }
-    // Members returning a struct take a hidden result pointer after `this` and return it.
     static LUID* STDMETHODCALLTYPE GetAdapterLuid(void* self, LUID* result) {
         FakeD3D12Wrapper* wrapper = Self(self);
         *result = wrapper->adapterLuid ? *wrapper->adapterLuid
@@ -194,5 +188,5 @@ TEST_F(D3D11On12UnwrapTest, SwapsNothingBeforeTheGameHasADevice) {
     EXPECT_EQ(static_cast<void*>(device), static_cast<void*>(wrapper.AsUnknown()));
 }
 
-} // namespace
-} // namespace fs25vr
+}
+}

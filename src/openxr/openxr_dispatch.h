@@ -148,97 +148,89 @@ public:
         XrSession session,
         const XrFrameEndInfo* frameEndInfo) = 0;
 
-    // Dequeues the next runtime event, or returns XR_EVENT_UNAVAILABLE when the queue is empty.
-    // Defaults to an empty queue so dispatches that never report events need no override.
     virtual XrResult PollEvent(
-        XrInstance /*instance*/,
-        XrEventDataBuffer* /*eventData*/) {
+        XrInstance,
+        XrEventDataBuffer*) {
         return XR_EVENT_UNAVAILABLE;
     }
 
-    // xrConvertWin32PerformanceCounterToTimeKHR (XR_KHR_win32_convert_performance_counter_time).
-    // Defaults to unsupported so dispatches that do not offer the extension need no override.
     virtual XrResult ConvertWin32PerformanceCounterToTime(
-        XrInstance /*instance*/,
-        const LARGE_INTEGER* /*performanceCounter*/,
-        XrTime* /*time*/) {
+        XrInstance,
+        const LARGE_INTEGER*,
+        XrTime*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
-    // ---- Input (ADR-0025): the Motion Controller action set. ------------------------------------
-    // Every call defaults to XR_ERROR_FUNCTION_UNSUPPORTED so a dispatch that offers no input
-    // behaves like a runtime that refuses the action set: the Injector then reports both hands
-    // untracked and carries on with head tracking only.
     virtual XrResult StringToPath(
-        XrInstance /*instance*/, const char* /*pathString*/, XrPath* /*path*/) {
+        XrInstance, const char*, XrPath*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult CreateActionSet(
-        XrInstance /*instance*/, const XrActionSetCreateInfo* /*createInfo*/, XrActionSet* /*actionSet*/) {
+        XrInstance, const XrActionSetCreateInfo*, XrActionSet*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
-    virtual XrResult DestroyActionSet(XrActionSet /*actionSet*/) {
+    virtual XrResult DestroyActionSet(XrActionSet) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult CreateAction(
-        XrActionSet /*actionSet*/, const XrActionCreateInfo* /*createInfo*/, XrAction* /*action*/) {
+        XrActionSet, const XrActionCreateInfo*, XrAction*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
-    virtual XrResult DestroyAction(XrAction /*action*/) {
+    virtual XrResult DestroyAction(XrAction) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult SuggestInteractionProfileBindings(
-        XrInstance /*instance*/, const XrInteractionProfileSuggestedBinding* /*suggestedBindings*/) {
+        XrInstance, const XrInteractionProfileSuggestedBinding*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult AttachSessionActionSets(
-        XrSession /*session*/, const XrSessionActionSetsAttachInfo* /*attachInfo*/) {
+        XrSession, const XrSessionActionSetsAttachInfo*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult CreateActionSpace(
-        XrSession /*session*/, const XrActionSpaceCreateInfo* /*createInfo*/, XrSpace* /*space*/) {
+        XrSession, const XrActionSpaceCreateInfo*, XrSpace*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult SyncActions(
-        XrSession /*session*/, const XrActionsSyncInfo* /*syncInfo*/) {
+        XrSession, const XrActionsSyncInfo*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult GetActionStateBoolean(
-        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStateBoolean* /*state*/) {
+        XrSession, const XrActionStateGetInfo*, XrActionStateBoolean*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult GetActionStateFloat(
-        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStateFloat* /*state*/) {
+        XrSession, const XrActionStateGetInfo*, XrActionStateFloat*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult GetActionStateVector2f(
-        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStateVector2f* /*state*/) {
+        XrSession, const XrActionStateGetInfo*, XrActionStateVector2f*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult GetActionStatePose(
-        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStatePose* /*state*/) {
+        XrSession, const XrActionStateGetInfo*, XrActionStatePose*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult ApplyHapticFeedback(
-        XrSession /*session*/, const XrHapticActionInfo* /*hapticActionInfo*/, const XrHapticBaseHeader* /*hapticFeedback*/) {
+        XrSession, const XrHapticActionInfo*, const XrHapticBaseHeader*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 
     virtual XrResult StopHapticFeedback(
-        XrSession /*session*/, const XrHapticActionInfo* /*hapticActionInfo*/) {
+        XrSession, const XrHapticActionInfo*) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 };
@@ -262,7 +254,6 @@ public:
     XrResult DestroyInstance(
         XrInstance instance) override {
         {
-            // A later instance may reuse the handle value; resolve the conversion function again.
             std::lock_guard<std::mutex> lock(m_convertMutex);
             if (instance == m_convertInstance) {
                 m_convertInstance = XR_NULL_HANDLE;
@@ -450,7 +441,6 @@ public:
         PFN_xrConvertWin32PerformanceCounterToTimeKHR pfnConvert = nullptr;
         XrResult res = XR_SUCCESS;
         {
-            // Resolved once per instance: the lookup goes through the loader.
             std::lock_guard<std::mutex> lock(m_convertMutex);
             if (instance != m_convertInstance) {
                 m_convertInstance = instance;
@@ -546,4 +536,4 @@ private:
     XrResult m_convertLookupResult = XR_SUCCESS;
 };
 
-} // namespace fs25vr
+}

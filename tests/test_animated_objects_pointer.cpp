@@ -1,13 +1,3 @@
-// Animated Objects, who may work them and when (ADR-0034, spec #180, ticket #181), seen from outside: the real Companion Mod runs against the
-// real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (animated_object_test_support.h). Three kinds of thing are covered: the
-// Pointer Hand's trigger on the Virtual Gamepad while the ray is on a door (it reads released; one that was held when the ray landed keeps its
-// binding and toggles nothing), who has control of the pointer and what takes the player out of the world (the desk mouse, a menu, a Stereo
-// Dialog, 2D Floating Window Mode, Motion Controllers off, a vehicle), and which hand can work a door (never a Tool Hand holding a Hand Tool
-// nor a hand carrying a Held Object) and what wins when the ray is on more than one thing (a Click Point within the cone). Prior art:
-// test_virtual_gamepad_cab_use.cpp (the same rules for Click Points) and test_pointer_handover.cpp (the desk mouse).
-
-// What the game does each frame before the Companion Mod's update, besides the camera update and the player's own: Interactive Control's update
-// of its Click Points (when a test has them).
 #define HAND_TOOLS_PRE_FRAME_EXTRA_LUA "if StubIC and StubIC.tick then StubIC.tick() end"
 
 #include "animated_object_test_support.h"
@@ -18,9 +8,7 @@ namespace {
 using namespace hand_tools_test;
 using namespace animated_object_test;
 
-}  // namespace
-
-// ---- The Virtual Gamepad -------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, WhileTheRayIsOnADoorThePointerHandsTriggerReadsReleasedOnThePadAndTheOtherHandsStillReachesIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
@@ -51,7 +39,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, WithNoDoorUnderTheRayTheTriggerReaches
     ReleaseTrigger(kRight);
 
     EnterZone();
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // in the zone, aimed over the door
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     PullTrigger(kRight);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "so is it in the zone when the ray is not on the door";
     EXPECT_EQ(Toggles(), 0);
@@ -60,11 +48,11 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, WithNoDoorUnderTheRayTheTriggerReaches
 TEST_F(VirtualGamepadAnimatedObjectsTest, ATriggerHeldWhenTheRayLandsOnADoorKeepsItsBindingAndTogglesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // aimed over the door
-    PullTrigger(kRight);                        // held for throttle, say
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    PullTrigger(kRight);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // the ray lands on the door with the trigger still down
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
     FRAMES(3);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
@@ -92,8 +80,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ATriggerThatToggledStaysOffThePadUntil
     EXPECT_EQ(Toggles(), 1);
 }
 
-// ---- Who has control of the pointer ----------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadAnimatedObjectsTest, WhileTheDeskMouseHasControlTheRayIsNotDrawnOnADoorAndAPullTogglesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
@@ -107,7 +93,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, WhileTheDeskMouseHasControlTheRayIsNot
     EXPECT_EQ(Toggles(), 0);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "and the trigger is a binding's";
 
-    // The hand moves: the ray has the pointer again, but the pull that began under the mouse is no toggle.
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
     FRAMES(2);
@@ -118,8 +103,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, WhileTheDeskMouseHasControlTheRayIsNot
     PullTrigger(kRight);
     EXPECT_EQ(Toggles(), 1) << "only a new pull does";
 }
-
-// ---- Out of the world -------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, InAMenuNothingIsSelectedAndNothingIsToggled) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
@@ -222,8 +205,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, InAVehicleADoorIsNotWorked) {
     EXPECT_EQ(Toggles(), 0);
 }
 
-// ---- Which hand ----------------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadAnimatedObjectsTest, TheToolHandHoldingAHandToolNeverTogglesADoorWhileTheOtherHandCan) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     ASSERT_EQ(RunLuauChunk(L, kDoorOnTheLeft, "=leftDoor"), 0);
@@ -234,7 +215,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, TheToolHandHoldingAHandToolNeverToggle
     FRAMES(1);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
 
-    // The Tool Hand points at the right-hand door and pulls: that is the lance's trigger.
     headset.SetHandPointing(kRight, HandAt(kHandX, kHandY, kHandZ));
     FRAMES(2);
     EXPECT_EQ(DrawnEnd(), "none") << "the Tool Hand is no Pointer Hand";
@@ -242,7 +222,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, TheToolHandHoldingAHandToolNeverToggle
     EXPECT_EQ(Toggles(), 0);
     ReleaseTrigger(kRight);
 
-    // The other hand points at the left door and pulls.
     POINT_HAND(kLeft, -kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "0.40 -0.20 1.95");
     PullTrigger(kLeft);
@@ -264,7 +243,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, AHandCarryingAHeldObjectNeverTogglesAD
     ASSERT_EQ(PickUps(), 1) << "the right hand carries the bale";
 
     ASSERT_EQ(EvalLua(L, "tostring(VRCompanion:getPointerHand())"), "nil") << "a hand carrying a Held Object is no Pointer Hand";
-    headset.SetHandInputs(kRight, hand_tools_test::Squeeze(1.0f, 1.0f));  // pulls the trigger with the grip still squeezed
+    headset.SetHandInputs(kRight, hand_tools_test::Squeeze(1.0f, 1.0f));
     FRAMES(2);
     EXPECT_EQ(Toggles(), 0);
     ASSERT_EQ(Drops(), 0) << "still carrying";
@@ -276,8 +255,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, AHandCarryingAHeldObjectNeverTogglesAD
     PullTrigger(kLeft);
     EXPECT_EQ(Toggles("leftDoor"), 1) << "the other hand can work a door";
 }
-
-// ---- What wins ------------------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, AClickPointWithinThePointerConeWinsOverADoorBehindIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());

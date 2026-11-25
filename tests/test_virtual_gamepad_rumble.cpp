@@ -1,9 +1,3 @@
-// Game rumble on the Motion Controllers (ADR-0028, spec #98, ticket #103), seen from outside: the real Companion
-// Mod runs against the real VRBridge over FakeTrackedHeadset, the test plays the game by calling the answer the
-// XInputSetState hook routes to (VirtualGamepad::SetState) and drives frames and the game clock, and reads which
-// pulses the fake runtime was asked to play on which hand. Prior art: test_haptics.cpp (Click Point pulses) and
-// test_virtual_gamepad.cpp (the pad itself).
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 #include "input/virtual_gamepad.h"
@@ -54,7 +48,6 @@ protected:
 
     void SetUp() override {
         CompanionModTest::SetUp();
-        // The pad times the game's rumble against the Companion Mod's pulses by the game clock.
         bridge.GetVirtualGamepad().SetClockForTesting([this] { return GameTime(); });
         ASSERT_TRUE(bridge.Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -78,13 +71,11 @@ protected:
         )luau", "=preFrame"), 0);
     }
 
-    // One game frame with the scene stand-ins ticking first, as test_haptics.cpp does.
     void Frame(double dtMs = 16.667) {
         PreFrame();
         NextFrame(&headset, dtMs);
     }
 
-    // Short frames until the hand is told something new; how many it took, or -1 if nothing came in `maxFrames`.
     int FramesUntilAnotherPulseTo(int hand, double dtMs, int maxFrames) {
         const size_t before = PulsesTo(hand).size();
         for (int frame = 1; frame <= maxFrames; ++frame) {
@@ -94,7 +85,6 @@ protected:
         return -1;
     }
 
-    // Puts a Click Point dead ahead of the right hand, picks the hand up and aims it there: the Pointer Ray is on it.
     void AimRightHandAtAClickPoint() {
         ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('center', -0.3, 1.5, 2.3)", "=addPoint"), 0);
         headset.SetHandPointing(kRight, HandAt(0.2f, 0.0f, -0.3f));
@@ -117,7 +107,6 @@ protected:
         NextFrame(&headset);
     }
 
-    // The game sets the pad's vibration (slot 3: the highest free XInput slot of a machine without real pads).
     DWORD GameRumbles(WORD left, WORD right, DWORD slot = 3) {
         XINPUT_VIBRATION vibration{ left, right };
         return bridge.GetVirtualGamepad().SetState(slot, &vibration);
@@ -132,7 +121,7 @@ protected:
     }
 };
 
-} // namespace
+}
 
 TEST_F(VirtualGamepadRumbleTest, EachMotorPlaysOnItsOwnHandSofterThanTheGamepadAndZeroSpeedStopsIt) {
     TurnPadOn();
@@ -210,13 +199,12 @@ TEST_F(VirtualGamepadRumbleTest, VibrationWhileMotionControllersAreOffReachesNoH
     for (int i = 0; i < 4; ++i) Frame();
     EXPECT_TRUE(headset.HapticPulses().empty());
 
-    // Back on, the same rumble plays; switched off again while it plays, it stops reaching the hands.
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllers', 'on')").find("on"), std::string::npos);
     Frame();
     Frame();
     ASSERT_FALSE(headset.HapticPulses().empty());
     EvalLua(L, "runCommand('vrMotionControllers', 'off')");
-    Frame();  // the mod tells the Injector on this frame
+    Frame();
     headset.runtime->controllers.hapticPulses.clear();
     Frame();
     Frame();
@@ -224,14 +212,12 @@ TEST_F(VirtualGamepadRumbleTest, VibrationWhileMotionControllersAreOffReachesNoH
 }
 
 TEST_F(VirtualGamepadRumbleTest, VibrationWithoutTheVirtualGamepadReachesNoHand) {
-    // The player turned the pad off: the game's call for any slot goes to the real devices.
     EvalLua(L, "runCommand('vrVirtualGamepad', 'off')");
     NextFrame(&headset);
     EXPECT_EQ(GameRumbles(kFull, kFull), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED));
     for (int i = 0; i < 3; ++i) Frame();
     EXPECT_TRUE(headset.HapticPulses().empty());
 
-    // Turned off while rumbling, the rumble stops, and it does not come back when the pad does.
     TurnPadOn();
     GameRumbles(kFull, kFull);
     Frame();
@@ -252,7 +238,7 @@ TEST_F(VirtualGamepadRumbleTest, VibrationWithoutTheVirtualGamepadReachesNoHand)
 
 TEST_F(VirtualGamepadRumbleTest, VibrationSetForAnotherSlotReachesNoHandAndGoesToTheRealDevices) {
     TurnPadOn();
-    EXPECT_EQ(GameRumbles(kFull, kFull, /*slot=*/0), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED))
+    EXPECT_EQ(GameRumbles(kFull, kFull, 0), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED))
         << "no real library to pass to in this test, and the answer is the one a missing pad gives";
     for (int i = 0; i < 3; ++i) Frame();
     EXPECT_TRUE(headset.HapticPulses().empty());

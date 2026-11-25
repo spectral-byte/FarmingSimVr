@@ -1,10 +1,3 @@
-// Object Grab, letting go while swinging throws (ADR-0033, spec #156, ticket #160), seen from outside: the real Companion Mod runs against
-// the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (the game's empty hands and loose objects in
-// object_grab_test_support.h). A test carries a bale with the right hand, swings the fake Motion Controller at a chosen speed, lets go of
-// the grip, and asserts which of the game's functions was called: throwHeldItemWithForceVector (StubHandTool.throws: direction and force
-// scalar) or dropHeldItem (StubHandTool.drops). Speeds are taken from the mod's named constants (the headset ticket tunes them), so a
-// retuned threshold does not break a test. The direction is checked against where the Virtual Hand, the hand the player sees, travelled.
-
 #include "object_grab_test_support.h"
 #include <cmath>
 #include <string>
@@ -14,8 +7,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace object_grab_test;
 
-// A hand pointing at tracking (0.4, -0.2, -0.3) has its fingertip at world (-0.4, -0.2, 0.3) and the Pointer Ray runs along +Z. The bale is
-// straight ahead of it, 1.2 m from the fingertip.
 constexpr float kHandX = 0.4f, kHandY = -0.2f, kHandZ = -0.3f;
 constexpr const char* kBaleAhead = "_G.bale = StubHandTool.looseObject(-0.4, -0.2, 1.5, 0.05, { name = 'bale' })";
 constexpr double kFrameSeconds = 16.667 / 1000.0;
@@ -32,8 +23,6 @@ constexpr const char* kThrowHelpers = R"luau(
     function _G.throwDirection() local t = lastThrow(); return { t.dirX, t.dirY, t.dirZ } end
 )luau";
 
-// The Cyclopean Audio Listener Node (the head's place in the world) stays where it is from now on: the mod's camera chain may move it
-// with the head pose every frame, and this makes it ignore that.
 constexpr const char* kKeepListenerStill = R"luau(
     local baseSetTranslation = setTranslation
     _G.setTranslation = function(node, ...)
@@ -44,9 +33,8 @@ constexpr const char* kKeepListenerStill = R"luau(
 
 class VirtualGamepadObjectGrabThrowTest: public VirtualGamepadObjectGrabTest {
 protected:
-    float x = kHandX, y = kHandY, z = kHandZ;  // where the right hand is, in tracking space
+    float x = kHandX, y = kHandY, z = kHandZ;
 
-    // The right hand pointing at the bale and squeezing: the bale is its Held Object.
     void StartCarrying() {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_EQ(RunLuauChunk(L, kThrowHelpers, "=throwHelpers"), 0);
@@ -61,8 +49,6 @@ protected:
     double ThresholdSpeed() { return Constant("OBJECT_GRAB_THROW_MIN_SPEED"); }
     double FullSpeed() { return Constant("OBJECT_GRAB_THROW_FULL_SPEED"); }
 
-    // The hand moves at `speed` m/s along (dx, dy, dz) (tracking space, a unit vector) for `frames` updates. With `letGo` the grip is let
-    // go in the last one: the hand is still moving when the release is seen.
     void Move(double speed, float dx, float dy, float dz, int frames, bool letGo = false) {
         const float step = static_cast<float>(speed * kFrameSeconds);
         for (int i = 0; i < frames; ++i) {
@@ -76,9 +62,7 @@ protected:
     int Throws() { return static_cast<int>(Number(L, "#StubHandTool.throws")); }
 };
 
-}  // namespace
-
-// ---- Letting go while swinging throws -------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadObjectGrabThrowTest, LettingGoWhileSwingingThrowsTheHeldObjectAlongTheHandsTravelWithAForceBetweenZeroAndOne) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
@@ -100,7 +84,7 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, LettingGoWhileSwingingThrowsTheHeldObj
 TEST_F(VirtualGamepadObjectGrabThrowTest, WithoutAGameClockTheHandHasNoSpeedSoTheLetGoIsADropAndNothingRaises) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getCurrentTimeMs = function() return nil end", "=noClock"), 0);
-    SwingAndLetGo(FullSpeed() * 2, 0.0f, 0.6f, -0.8f);  // NextFrame fails the test if the update raises
+    SwingAndLetGo(FullSpeed() * 2, 0.0f, 0.6f, -0.8f);
     EXPECT_EQ(Drops(), 1);
     EXPECT_EQ(Throws(), 0);
 }
@@ -121,8 +105,6 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, AFarFasterSwingIsNeverHarderThanTheGam
         << "the direction is a unit vector";
 }
 
-// ---- Below the threshold the release is a drop ----------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadObjectGrabThrowTest, ALetGoBelowTheThresholdSpeedIsADropNotAThrow) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     SwingAndLetGo(ThresholdSpeed() / 2, 0.0f, 0.6f, -0.8f);
@@ -140,12 +122,10 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, ALetGoOfAHandHeldStillIsADrop) {
 TEST_F(VirtualGamepadObjectGrabThrowTest, ASwingThatEndedBeforeTheLetGoIsADrop) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     Move(FullSpeed(), 0.0f, 0.6f, -0.8f, 6);
-    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 10);  // the hand has come to rest by the time the grip is let go
+    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 10);
     EXPECT_EQ(Drops(), 1);
     EXPECT_EQ(Throws(), 0);
 }
-
-// ---- The velocity is the hand's in the world --------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabThrowTest, ASnapTurnJustBeforeTheLetGoIsNotASwing) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
@@ -155,7 +135,7 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, ASnapTurnJustBeforeTheLetGoIsNotASwing
     ASSERT_EQ(RunLuauChunk(L, "_G.after = handWorld()", "=after"), 0);
     ASSERT_GT(Number(L, "math.sqrt((after[1]-before[1])^2 + (after[3]-before[3])^2)"), ThresholdSpeed() * 0.1)
         << "the turn moved the hand in the world (else this test proves nothing)";
-    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 2);  // the hand is held still, and let go of next
+    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 2);
     EXPECT_EQ(Drops(), 1);
     EXPECT_EQ(Throws(), 0);
 }
@@ -199,34 +179,26 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, AHandTheRecenterMovedInTrackingSpaceIs
     EXPECT_EQ(Throws(), 0);
 }
 
-// The Recenter above only drops the mod's own memory of the hand's movement. The tracking space moving UNDER the player with the head
-// placement (the Cyclopean Audio Listener Node) staying put makes the hand's place in the world jump without the hand moving: the mod
-// sees it in where the tracking space's origin is, and must not take it for a swing.
 TEST_F(VirtualGamepadObjectGrabThrowTest, AJumpOfTheTrackingSpaceInTheWorldJustBeforeTheLetGoIsNotASwing) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     FRAMES(3);
-    // The camera chain follows the head with the listener; this stub keeps the listener where it is, as a Recenter that moves the
-    // tracking space under the player does (the head pose changes, the player does not).
     ASSERT_EQ(RunLuauChunk(L, kKeepListenerStill, "=keepListenerStill"), 0);
     ASSERT_EQ(RunLuauChunk(L, "_G.before = handWorld()", "=before"), 0);
-    headset.SetHeadPose(HandAt(1.0f, 0.0f, 0.0f));  // the head is 1 m elsewhere in tracking space; the hand, and the listener, are not
+    headset.SetHeadPose(HandAt(1.0f, 0.0f, 0.0f));
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, "_G.after = handWorld()", "=after"), 0);
     ASSERT_GT(Number(L, "math.sqrt((after[1]-before[1])^2 + (after[3]-before[3])^2)"), 0.5)
         << "the hand's place in the world jumped (else this test proves nothing)";
-    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 2);  // the hand is held still in tracking space, and let go of next
+    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 2);
     EXPECT_EQ(Drops(), 1);
     EXPECT_EQ(Throws(), 0) << "a jump of the rig is not a swing";
 }
-
-// ---- After a throw ------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabThrowTest, AfterAThrowGrabbingAgainNeedsAFreshSqueeze) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     SwingAndLetGo(FullSpeed(), 0.0f, 1.0f, 0.0f);
     ASSERT_EQ(Throws(), 1);
 
-    // Another bale is straight ahead of where the hand ended up.
     ASSERT_EQ(RunLuauChunk(L, ("StubHandTool.looseObject(-0.4, " + std::to_string(y) + ", 1.5, 0.05, { name = 'second' })").c_str(), "=second"), 0);
     POINT_HAND(kRight, x, y, z);
     FRAMES(5);
@@ -235,8 +207,6 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, AfterAThrowGrabbingAgainNeedsAFreshSqu
     FRAMES(3);
     EXPECT_EQ(PickUps(), 2) << "a fresh squeeze grabs it";
 }
-
-// ---- What the last release did, for the diagnostics ------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabThrowTest, TheLastReleaseIsKeptForTheDiagnostics) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());

@@ -30,3 +30,5 @@ Accepted
 ## Consequences
 - The dialog's name, its answer path and what it knows about the fish come from a headset probe, because the DLC's Lua is encrypted.
 - "In a menu" in the glossary entries for the Virtual Gamepad and the Virtual Hand gains the Stereo Dialog exception.
+
+More decisions about this area, from the code comments: [ADR-0044](0044-hud-and-dialog-decisions.md).

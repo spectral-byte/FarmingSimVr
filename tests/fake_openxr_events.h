@@ -6,7 +6,6 @@
 
 namespace fs25vr {
 
-// FIFO event queue for fake OpenXR dispatches. Fakes forward PollEvent() to Poll().
 class FakeOpenXrEventQueue {
 public:
     void PushSessionState(XrSessionState state) {
@@ -51,4 +50,4 @@ private:
     std::deque<XrEventDataBuffer> m_events;
 };
 
-} // namespace fs25vr
+}

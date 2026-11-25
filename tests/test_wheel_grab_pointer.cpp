@@ -1,18 +1,3 @@
-// A hand holding the Steering Wheel never points (spec #89, ticket #95, ADR-0026 and ADR-0027), seen from outside:
-// the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with a cab vehicle that steers the
-// way the game's does (StubSteer) and the stand-in for the Interactive Control mod (StubIC) on the same vehicle
-// (companion_mod_stubs.h). The test grabs the Steering Wheel with fake Motion Controllers and asserts what the
-// player would see: which hand is the Pointer Hand, whether a Pointer Ray exists, which Click Points were clicked,
-// and what was written to Interactive Control's state. Prior art: test_pointer_hand_switch.cpp,
-// test_interactive_control_auto_on.cpp and test_wheel_grab.cpp.
-//
-// The cab is at the world origin facing +Z with the head at the tracking space origin, so a point at world
-// (x, y, z) is where a hand at tracking (-x, y - 1.5, -z) is. The Steering Wheel hangs in front of and below the
-// head; a hand "at the rim" is 0.18 m from its axis. The right hand's Click Point is straight ahead of a fingertip
-// held 0.3 m to the right of the head, the left hand's likewise on the left.
-
-// What the game does each frame before the Companion Mod's update, besides the camera update and the vehicle's own
-// update that acts on the steering input of the frame before: Interactive Control's update of its Click Points.
 #define WHEEL_GRAB_PRE_FRAME_EXTRA_LUA "if StubIC.tick then StubIC.tick() end"
 
 #include "wheel_grab_test_support.h"
@@ -28,8 +13,6 @@ FakeOpenXrControllers::Inputs Trigger(float value) {
     return inputs;
 }
 
-// A cab whose vehicle both steers (StubSteer) and has Interactive Control's state (StubIC), with a Click Point
-// straight ahead of each hand, and the mod started.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool interactiveControlOn = false) {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -60,10 +43,8 @@ std::string InteractiveControlState(lua_State* L) {
 }
 std::string InteractiveControlWrites(lua_State* L) { return EvalLua(L, "#StubIC.stateWrites"); }
 
-} // namespace
+}
 
-// The free hand lifted and held so that its index fingertip is 0.3 m to its side of the head and 0.3 m ahead, pointing
-// straight ahead at its own Click Point.
 #define POINT_AT_OWN_CLICK_POINT(hand) \
     do { \
         const float side_ = (hand) == kRight ? 0.3f : -0.3f; \
@@ -148,12 +129,11 @@ TEST_F(CompanionModTest, TheFreeHandBecomesThePointerHandAndClicksAClickPointWhi
     FRAMES(1);
     EXPECT_EQ(Executed(L), "leftPoint") << "its trigger clicks it";
 
-    // The other hand carries on steering all the while, and its trigger clicks nothing.
     headset.SetHandInputs(kRight, [] { auto inputs = Grip(1.0f); inputs.trigger = 1.0f; return inputs; }());
     for (int step = 1; step <= 4; ++step) {
         TURN_HAND_TO(kRight, 0.2 * step);
     }
-    FRAMES(30);  // the game's analog steering catches up with the hand
+    FRAMES(30);
     EXPECT_NEAR(Number(L, "StubSteer.wheelAngle(cab.vehicle)"), 0.8, 0.02) << "the Steering Wheel turned with the holding hand";
     EXPECT_EQ(PointerHand(L), "0");
     EXPECT_EQ(Executed(L), "leftPoint") << "the holding hand's trigger clicked nothing";
@@ -178,7 +158,6 @@ TEST_F(CompanionModTest, ThePointerHandThatGrabsTheSteeringWheelPassesThePointer
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "leftPoint");
     EXPECT_EQ(EvalLua(L, "string.format('%.2f', VRCompanion:getPointerRay().ox)"), "0.30") << "the ray is the left hand's";
 
-    // After the release the right hand has to pull its trigger to take the Pointer Hand back, as with any two hands.
     headset.SetHandInputs(kRight, Grip(0.0f));
     FRAMES(3);
     EXPECT_EQ(PointerHand(L), "0") << "letting go does not take the Pointer Hand back";

@@ -1,19 +1,3 @@
-// Imitates the game's startup with an FS25 VR Injector, then calls CreateDXGIFactory1 on a worker thread, as the game's
-// first factory call. With the VDXR simulation layer enabled, the OpenXR runtime calls CreateDXGIFactory1 again from inside
-// xrGetSystem while the Injector is still starting VR.
-//
-//   harness <Injector version.dll> [dxgi-first | dxgi-later]
-//     The Injector from 1.2 (ADR-0038). It hooks CreateDXGIFactory/1/2 in the system's dxgi.dll, and the harness calls the
-//     system's export, as the game does.
-//     dxgi-first (default): the system's dxgi.dll is loaded before version.dll, as when the game imports it directly. The
-//                           Injector hooks it at startup.
-//     dxgi-later:           version.dll first, then the system's dxgi.dll, as when ReShade's dxgi.dll loads it on the
-//                           game's first call. The Injector hooks it from its DLL load notification.
-//   harness <proxy dxgi.dll>
-//     An Injector up to 1.1.9, the game's dxgi.dll: the harness calls the proxy's own CreateDXGIFactory1 export.
-//
-// Exit code 0 = startup completed, 2 = still blocked after 20 s (deadlock), 3 = the Injector did not hook the system's
-// CreateDXGIFactory1, 1 = bad arguments or a load failure.
 #include <windows.h>
 #include <dxgi.h>
 #include <cstdio>
@@ -38,8 +22,6 @@ static std::wstring SystemDxgiPath() {
     return std::wstring(dir) + L"\\dxgi.dll";
 }
 
-// The first bytes at `rva` in the system dxgi.dll file on disk, through its section table. (LoadLibraryEx as a data file or
-// image resource hands back the loaded module, hooked, when it is already loaded.)
 static bool ReadFileBytesAtRva(DWORD rva, unsigned char* out, DWORD count) {
     HANDLE file = CreateFileW(SystemDxgiPath().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
@@ -66,7 +48,6 @@ static bool ReadFileBytesAtRva(DWORD rva, unsigned char* out, DWORD count) {
     return ok;
 }
 
-// Whether `live` (an export of the loaded system dxgi.dll) starts with a jmp that the file on disk does not have: the hook.
 static bool IsHooked(HMODULE systemDxgi, const unsigned char* live) {
     unsigned char original[5] = {};
     const auto rva = static_cast<DWORD>(live - reinterpret_cast<const unsigned char*>(systemDxgi));
@@ -97,7 +78,6 @@ int wmain(int argc, wchar_t** argv) {
     const wchar_t* name = wcsrchr(injectorPath.c_str(), L'\\');
     name = name ? name + 1 : injectorPath.c_str();
     if (_wcsicmp(name, L"dxgi.dll") == 0) {
-        // Up to 1.1.9: the proxy is the game's dxgi.dll and its export is the game's entry point.
         HMODULE proxy = LoadOrFail(injectorPath);
         if (!proxy) return 1;
         create = reinterpret_cast<PFN_Create>(GetProcAddress(proxy, "CreateDXGIFactory1"));
