@@ -288,6 +288,7 @@ void OpenXrManager::Shutdown() {
     m_loggedRenderedFovValid = false;
     m_fovOverscan = m_fovOverscanSuspended.load() ? 0.0f : m_requestedFovOverscan.load();
     m_loggedEyeCopySizeMismatch = false;
+    m_loggedMissingEyeProjection = false;
     m_headPoseLocateFailures = 0;
     m_menuQuad.ClearCustomSize();
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
@@ -811,6 +812,15 @@ void OpenXrManager::LatchFovOverscan() {
     }
 }
 
+bool OpenXrManager::HasRenderedFov() const {
+    for (const EyeProjection& proj : m_eyeProjections) {
+        if (!proj.isValid || proj.fovY <= 0.02f || proj.fovX <= 0.02f) {
+            return false;
+        }
+    }
+    return true;
+}
+
 float OpenXrManager::SwapchainAspect(uint32_t eyeIndex) const {
     if (!m_hasEyeSwapchains || eyeIndex >= 2 || m_eyeSwapchains[eyeIndex].height == 0) {
         return 0.0f;
@@ -1305,19 +1315,24 @@ bool OpenXrManager::SubmitFramePair() {
         return false;
     }
 
+    if (m_frameState.shouldRender && !HasRenderedFov()) {
+        if (!m_loggedMissingEyeProjection) {
+            m_loggedMissingEyeProjection = true;
+            LogWarn("OpenXrManager::SubmitFramePair: No eye projection from the runtime yet; submitting empty frames until it locates the views.");
+        }
+        EndFrame();
+        m_eyeSwapchains[0].hasCopiedFrame = false;
+        m_eyeSwapchains[1].hasCopiedFrame = false;
+        return false;
+    }
+
     XrCompositionLayerProjectionView projViews[2]{};
     for (uint32_t i = 0; i < 2; ++i) {
         projViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
         projViews[i].next = nullptr;
 
-        float halfFovY = m_eyeProjections[i].fovY * 0.5f;
-        float halfFovX = m_eyeProjections[i].fovX * 0.5f;
-        if (halfFovY <= 0.01f || halfFovX <= 0.01f) {
-            halfFovY = 0.785398f;
-            const float swapchainAspect = SwapchainAspect(i);
-            const float aspect = (swapchainAspect > 0.0f) ? swapchainAspect : 1.0f;
-            halfFovX = std::atan(aspect * std::tan(halfFovY));
-        }
+        const float halfFovY = m_eyeProjections[i].fovY * 0.5f;
+        const float halfFovX = m_eyeProjections[i].fovX * 0.5f;
 
         projViews[i].fov.angleLeft = -halfFovX;
         projViews[i].fov.angleRight = halfFovX;

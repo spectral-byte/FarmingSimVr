@@ -261,6 +261,7 @@ private:
     float m_ipd = 0.064f;
     float m_lastLoggedIpd = 0.0f;
     bool m_loggedEyeCopySizeMismatch = false;
+    bool m_loggedMissingEyeProjection = false;
     uint32_t m_headPoseLocateFailures = 0;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
@@ -289,6 +290,7 @@ private:
 
     EyeProjection m_eyeProjections[2];
     float SwapchainAspect(uint32_t eyeIndex) const;
+    bool HasRenderedFov() const;
     void LatchFovOverscan();
     void RefreshRenderedFov();
     void LogFovIfChanged();

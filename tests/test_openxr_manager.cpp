@@ -212,6 +212,8 @@ public:
 
     FakeOpenXrTracking tracking;
 
+    MockOpenXrDispatch() { tracking.SetEyeFov(0, { -0.8f, 0.8f, 0.8f, -0.8f }); }
+
     XrResult CreateSession(
         XrInstance,
         const XrSessionCreateInfo*,
@@ -1832,7 +1834,7 @@ TEST(OpenXrManagerTest, SuccessCodesOtherThanXrSuccessAreNotTreatedAsFailures) {
     manager.PollEvents();
     EXPECT_TRUE(manager.IsSessionRunning());
 }
-TEST(OpenXrManagerTest, SubmitFramePairAppliesSafeFovAndNormalizedOrientationFallbacks) {
+TEST(OpenXrManagerTest, SubmitFramePairSubmitsTheRenderedFovAndNormalizedOrientation) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
 
@@ -2821,6 +2823,66 @@ TEST(OpenXrManagerTest, TwoManagersInOneProcessEachLogTheirFirstIpdCalibration) 
     ASSERT_TRUE(second.Start());
     ASSERT_TRUE(second.manager.LocateActiveViews());
     EXPECT_EQ(capture.Count(calibrated), 2u);
+}
+
+TEST(OpenXrManagerTest, PairWithoutAnEyeProjectionIsNotSubmittedAndTheLogSaysSoOncePerSession) {
+    OpenXrLogCapture capture("fs25vr_openxr_missing_projection_log_test.log");
+    const std::string missing = "SubmitFramePair: No eye projection";
+
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    dispatch->tracking.views.clear();
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    for (uint32_t frame = 1; frame <= 2; ++frame) {
+        ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+        ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+        EXPECT_FALSE(manager.SubmitFramePair());
+
+        EXPECT_EQ(dispatch->endFrameCalls, frame);
+        EXPECT_EQ(dispatch->lastFrameEndInfo.layerCount, 0u);
+        EXPECT_TRUE(dispatch->lastSubmittedProjectionViews.empty());
+        EXPECT_FALSE(manager.IsFrameBegun());
+        EXPECT_EQ(manager.GetSubmittedFramePairCount(), 0u);
+        EXPECT_EQ(capture.Count(missing), 1u);
+    }
+
+    manager.Shutdown();
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_FALSE(manager.SubmitFramePair());
+    EXPECT_EQ(capture.Count(missing), 2u);
+}
+
+TEST(OpenXrManagerTest, PairIsSubmittedOnceTheRuntimeLocatesViews) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    dispatch->tracking.locateViewsResult = XR_ERROR_TIME_INVALID;
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_FALSE(manager.SubmitFramePair());
+    EXPECT_EQ(dispatch->lastFrameEndInfo.layerCount, 0u);
+
+    dispatch->tracking.locateViewsResult = XR_SUCCESS;
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_TRUE(manager.SubmitFramePair());
+    EXPECT_EQ(dispatch->lastFrameEndInfo.layerCount, 1u);
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), 1u);
 }
 
 TEST(OpenXrManagerTest, EyeCopySizeMismatchIsLoggedOncePerSessionAndAgainAfterShutdown) {
