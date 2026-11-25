@@ -426,7 +426,6 @@ TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.12f, 1.7f, 0.88f);
-    simPose.orientation = fs25vr::QuaternionFromEuler(0.25f, -0.15f, 0.05f);
     simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
     simPose.positionTracked = true;

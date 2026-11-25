@@ -2,6 +2,7 @@
 
 #include "openxr_dispatch.h"
 #include "core/math_utils.h"
+#include <cmath>
 #include <vector>
 #include <string>
 
@@ -29,7 +30,8 @@ inline Quaternion OrientationFromRuntime(const XrQuaternionf& q) {
     if (magnitudeSquared < 1e-4f) {
         return Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     }
-    return Quaternion(q.x, q.y, q.z, q.w);
+    const float inverseMagnitude = 1.0f / std::sqrt(magnitudeSquared);
+    return Quaternion(q.x * inverseMagnitude, q.y * inverseMagnitude, q.z * inverseMagnitude, q.w * inverseMagnitude);
 }
 
 struct HandState {

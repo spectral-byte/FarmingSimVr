@@ -88,10 +88,15 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
                                          the DLSS near planes, the HUD state and the Stereo Presentation Mode), in registration
                                          order. Every load hook stores only its own fields, so none needs another's to have run
                                          first; one that does says so in a comment at its registration
-  Three steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
-  (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace), the menu's
-  background camera (right after the GUI poll) and the Input subsystem's check of the VR action events (before the vehicle
-  transition, see updateActionEvents in VRCompanionInput.lua).
+  Two steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
+  (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace) and the menu's
+  background camera (right after the GUI poll).
+
+  A third, the Input subsystem's check of the VR action events (updateActionEvents in VRCompanionInput.lua), is a direct call
+  that a run point could now hold: updateBeforeActions runs right before it, and Input registers after the HUD (its file loads
+  after the HUD's in modDesc.xml), so a hook of Input's would run after the HUD's convergence and before the vehicle
+  transition, the order ADR-0045 gives. It was not moved, so the update is as it was; as a hook, a raise in the check would be
+  logged once per subsystem instead of reaching the caller of update.
 
   A hook that raises is caught: it is logged once per subsystem and hook, as
     [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|updateBeforeActions|update|mapUnload|saveSettings|loadSettings> hook raised: <error>

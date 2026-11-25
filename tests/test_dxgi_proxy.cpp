@@ -466,6 +466,7 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockQueryInterface(IUnknown*, REF
 __declspec(noinline) ULONG STDMETHODCALLTYPE MockAddRef(IUnknown*) { return 2; }
 __declspec(noinline) ULONG STDMETHODCALLTYPE MockRelease(IUnknown*) { return 1; }
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockSetPrivateDataInterface(IDXGISwapChain*, REFGUID, const IUnknown*) { return S_OK; }
+constexpr size_t kSetPrivateDataInterfaceVTableSlot = 4;
 
 static void* s_activeMockDevice = nullptr;
 static void* s_activeMockQueue = nullptr;
@@ -951,7 +952,7 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
 
     ASSERT_TRUE(proxy.AttachSwapChain(reinterpret_cast<IDXGISwapChain*>(&mockSwapChain)));
@@ -1016,7 +1017,7 @@ struct MirrorPresentRig {
         vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
         vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
         vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-        vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+        vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
         EXPECT_TRUE(runtime->GetDxgiProxy().AttachSwapChain(swapChain));
         void** hookedVTable = *reinterpret_cast<void***>(swapChain);
         pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
@@ -1508,7 +1509,7 @@ TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
 
     ASSERT_TRUE(proxy.AttachSwapChain(reinterpret_cast<IDXGISwapChain*>(&mockSwapChain)));
@@ -1553,7 +1554,7 @@ TEST(DxgiProxyTest, PresentHookActsForTheRuntimeThatInstalledItAndIsRemovedWithI
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
     ASSERT_TRUE(installer->GetDxgiProxy().AttachSwapChain(pSwapChain));
@@ -1590,7 +1591,7 @@ TEST(DxgiProxyTest, StandaloneProxyInstallsNoDetours) {
     vtable[2] = reinterpret_cast<void*>(&MockRelease);
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
@@ -1927,7 +1928,7 @@ TEST(DxgiProxyTest, SwapChainReportsHdrColorSpacesUnsupportedOnlyWhileVrIsActive
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     vtable[kCheckColorSpaceSupportVTableSlot] = reinterpret_cast<void*>(&MockCheckColorSpaceSupport);
     vtable[kSetColorSpace1VTableSlot] = reinterpret_cast<void*>(&MockSetColorSpace1);
     MockComObject mockSwapChain{ vtable.data() };
@@ -2220,7 +2221,7 @@ TEST(DxgiProxyTest, ConfiguresBackbufferMatchedOpenXrEyeSwapchainDimensionsOnPre
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    scVTable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
@@ -2259,7 +2260,7 @@ TEST(DxgiProxyTest, FallsBackToRecommendedDimensionsWhenBackbufferDimensionsUnav
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions);
-    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    scVTable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
@@ -2298,7 +2299,7 @@ TEST(DxgiProxyTest, FallsBackToDefaultDimensionsWhenBothBackbufferAndRecommended
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions);
-    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    scVTable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
@@ -4142,7 +4143,7 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDesc);
-    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
+    scVTable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     scVTable[kResizeBuffersVTableSlot] = reinterpret_cast<void*>(&MockResizeBuffersImpl);
     MockComObject mockSwapChain{ scVTable.data() };
 
@@ -5359,7 +5360,7 @@ struct GameAndOtherSwapChainRig {
         vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&RecordingPresent);
         vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
         vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
-        vtable[4] = reinterpret_cast<void*>(&RecordingSetPrivateDataInterface);
+        vtable[kSetPrivateDataInterfaceVTableSlot] = reinterpret_cast<void*>(&RecordingSetPrivateDataInterface);
         vtable[kPresent1VTableSlot] = reinterpret_cast<void*>(&RecordingPresent1);
         vtable[kResizeBuffersVTableSlot] = reinterpret_cast<void*>(&RecordingResizeBuffers);
         vtable[kResizeBuffers1VTableSlot] = reinterpret_cast<void*>(&RecordingResizeBuffers1);

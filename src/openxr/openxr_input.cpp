@@ -301,8 +301,7 @@ static bool LocatePoseSpace(IOpenXrDispatch& dispatch, XrSpace space, bool activ
     if (!positionValid || !orientationValid) return false;
 
     out.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
-    out.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y,
-                                 location.pose.orientation.z, location.pose.orientation.w);
+    out.orientation = OrientationFromRuntime(location.pose.orientation);
     out.isValid = true;
     out.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
     out.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;

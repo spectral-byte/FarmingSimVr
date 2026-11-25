@@ -743,11 +743,7 @@ TEST(OpenXrManagerTest, RecenterRecreatesLocalSpaceWithPoseInReferenceSpaceAndPr
 
     float yaw = 0.5f;
     float halfYaw = yaw * 0.5f;
-    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
-    float pitch = 0.2f;
-    float halfPitch = pitch * 0.5f;
-    Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
-    Quaternion qCombined = qYaw * qPitch;
+    Quaternion qCombined = QuaternionFromEuler(0.2f, yaw, 0.0f);
 
     mockDispatch->tracking.head.pose.position = { 1.5f, 0.8f, -2.0f };
     mockDispatch->tracking.head.pose.orientation = { qCombined.x, qCombined.y, qCombined.z, qCombined.w };
@@ -789,12 +785,8 @@ TEST(OpenXrManagerTest, PollHeadPoseNativelyReflectsRecenteredReferenceFrameAndP
     ASSERT_TRUE(manager.CreateTrackingSpaces());
 
     float yaw = 0.6f;
-    float halfYaw = yaw * 0.5f;
-    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
     float pitch = 0.15f;
-    float halfPitch = pitch * 0.5f;
-    Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
-    Quaternion qHead = qYaw * qPitch;
+    Quaternion qHead = QuaternionFromEuler(pitch, yaw, 0.0f);
 
     mockDispatch->tracking.head.pose.position = { 2.0f, 1.2f, -1.0f };
     mockDispatch->tracking.head.pose.orientation = { qHead.x, qHead.y, qHead.z, qHead.w };
@@ -1845,6 +1837,12 @@ TEST(OpenXrManagerTest, SubmitFramePairSubmitsTheRenderedFovAndNormalizedOrienta
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
+    HeadPose scaledHead;
+    scaledHead.position = Vector3(0.1f, 1.6f, -0.2f);
+    scaledHead.orientation = Quaternion(0.0f, 1.2f, 0.0f, 1.6f);
+    scaledHead.isValid = true;
+    mockDispatch->tracking.SetHeadPose(scaledHead);
+
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
 
@@ -1898,6 +1896,54 @@ TEST(OpenXrManagerTest, AnUnlocatedHeadWithAZeroQuaternionPollsAsIdentityAndSubm
         EXPECT_EQ(pv.pose.orientation.z, 0.0f);
         EXPECT_EQ(pv.pose.orientation.w, 1.0f);
     }
+}
+
+TEST(OpenXrManagerTest, AHeadOrientationThatTheRuntimeReportsOffUnitLengthPollsAsTheUnitQuaternionOfTheSameRotation) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    HeadPose head;
+    head.position = Vector3(0.1f, 1.6f, -0.2f);
+    head.orientation = Quaternion(0.0f, 1.2f, 0.0f, 1.6f);
+    head.isValid = true;
+    mockDispatch->tracking.SetHeadPose(head);
+
+    const HeadPose polled = manager.PollHeadPose();
+    EXPECT_NEAR(polled.orientation.x, 0.0f, 1e-6f);
+    EXPECT_NEAR(polled.orientation.y, 0.6f, 1e-6f);
+    EXPECT_NEAR(polled.orientation.z, 0.0f, 1e-6f);
+    EXPECT_NEAR(polled.orientation.w, 0.8f, 1e-6f);
+    EXPECT_NEAR(manager.GetRawPose().orientation.y, 0.6f, 1e-6f);
+    EXPECT_NEAR(manager.GetRawPose().orientation.w, 0.8f, 1e-6f);
+}
+
+TEST(OpenXrManagerTest, RecenterOnAHeadOrientationOffUnitLengthFacesTheNewOriginTheWayTheHeadLooks) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    const float yaw = 0.5f;
+    const Quaternion unit = QuaternionFromEuler(0.0f, yaw, 0.0f);
+    HeadPose head;
+    head.position = Vector3(1.5f, 0.8f, -2.0f);
+    head.orientation = Quaternion(unit.x * 2.0f, unit.y * 2.0f, unit.z * 2.0f, unit.w * 2.0f);
+    head.isValid = true;
+    mockDispatch->tracking.SetHeadPose(head);
+
+    manager.Recenter();
+
+    const auto& created = mockDispatch->createdReferenceSpaces.back();
+    EXPECT_NEAR(created.poseInReferenceSpace.orientation.y, std::sin(yaw * 0.5f), 0.005f);
+    EXPECT_NEAR(created.poseInReferenceSpace.orientation.w, std::cos(yaw * 0.5f), 0.005f);
+    const Quaternion raw = manager.GetRawPose().orientation;
+    EXPECT_NEAR(raw.x * raw.x + raw.y * raw.y + raw.z * raw.z + raw.w * raw.w, 1.0f, 1e-5f);
 }
 
 TEST(OpenXrManagerTest, BeginFrameLocatesViewsAndRefreshesProjectionsAndPose) {

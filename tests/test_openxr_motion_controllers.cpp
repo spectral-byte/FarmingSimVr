@@ -377,6 +377,35 @@ TEST(OpenXrManagerTest, HandAimPoseUsesTheSameOrientationConventionAsTheHeadPose
     EXPECT_NEAR(hand.aim.Rotation().yaw, 0.5f, 1e-4f);
 }
 
+TEST(OpenXrManagerTest, AControllerOrientationThatIsZeroButFlaggedValidReadsAsIdentityOnBothPoses) {
+    FakeTrackedHeadset headset;
+    HeadPose zeroed = PoseAt(0.2f, 1.1f, -0.4f);
+    zeroed.orientation = Quaternion(0.0f, 0.0f, 0.0f, 0.0f);
+    headset.SetHandPose(0, zeroed);
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(0);
+    ASSERT_TRUE(hand.aim.isValid);
+    ASSERT_TRUE(hand.gripPose.isValid);
+    EXPECT_EQ(hand.aim.orientation, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+    EXPECT_EQ(hand.gripPose.orientation, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+    EXPECT_FLOAT_EQ(hand.aim.position.x, 0.2f);
+}
+
+TEST(OpenXrManagerTest, AControllerOrientationOffUnitLengthReadsAsTheUnitQuaternionOfTheSameRotation) {
+    FakeTrackedHeadset headset;
+    HeadPose scaled = PoseAt(0.0f, 1.0f, 0.0f);
+    scaled.orientation = Quaternion(0.0f, 1.2f, 0.0f, 1.6f);
+    headset.SetHandPose(1, scaled);
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_NEAR(hand.aim.orientation.y, 0.6f, 1e-6f);
+    EXPECT_NEAR(hand.aim.orientation.w, 0.8f, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.y, 0.6f, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.w, 0.8f, 1e-6f);
+}
+
 TEST(OpenXrManagerTest, HandAimPoseFollowsTheRecenterActionAtOnce) {
     FakeTrackedHeadset headset;
     // The head stands at (1, 1.6, 0.5) looking 90 degrees to the left; the hand is one metre

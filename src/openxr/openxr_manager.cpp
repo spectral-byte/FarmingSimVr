@@ -11,6 +11,10 @@
 
 namespace fs25vr {
 
+namespace {
+constexpr float kMinRenderedFovRadians = 0.02f;
+}
+
 void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source) {
     m_counterSource = std::move(source);
 }
@@ -658,9 +662,8 @@ void OpenXrManager::Recenter() {
             (baseLoc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
             (baseLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
             recenterPos = Vector3(baseLoc.pose.position.x, baseLoc.pose.position.y, baseLoc.pose.position.z);
-            Quaternion q(baseLoc.pose.orientation.x, baseLoc.pose.orientation.y, baseLoc.pose.orientation.z, baseLoc.pose.orientation.w);
-            EulerAngles euler = QuaternionToEuler(q);
-            recenterYaw = euler.yaw;
+            const Quaternion q = OrientationFromRuntime(baseLoc.pose.orientation);
+            recenterYaw = QuaternionToEuler(q).yaw;
 
             m_rawPose.position = recenterPos;
             m_rawPose.orientation = q;
@@ -811,7 +814,7 @@ void OpenXrManager::LatchFovOverscan() {
 
 bool OpenXrManager::HasRenderedFov() const {
     for (const EyeProjection& proj : m_eyeProjections) {
-        if (!proj.isValid || proj.fovY <= 0.02f || proj.fovX <= 0.02f) {
+        if (!proj.isValid || proj.fovY <= kMinRenderedFovRadians || proj.fovX <= kMinRenderedFovRadians) {
             return false;
         }
     }
@@ -1315,7 +1318,7 @@ bool OpenXrManager::SubmitFramePair() {
     if (m_frameState.shouldRender && !HasRenderedFov()) {
         if (!m_loggedMissingEyeProjection) {
             m_loggedMissingEyeProjection = true;
-            LogWarn("OpenXrManager::SubmitFramePair: No eye projection from the runtime yet; submitting empty frames until it locates the views.");
+            LogWarn("OpenXrManager::SubmitFramePair: No eye projection with a usable field of view from the runtime yet (the views are not located, or a field of view is near zero); submitting empty frames until it reports one.");
         }
         EndFrame();
         m_eyeSwapchains[0].hasCopiedFrame = false;
