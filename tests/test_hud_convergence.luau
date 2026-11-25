@@ -964,13 +964,13 @@ end)
 
 test("AnErrorDuringAnUpdateClosesTheFrameCheckScope", function()
     local counts, state = installCountingMocks()
-    local real = VRCompanion.updateHudConvergence
-    VRCompanion.updateHudConvergence = function(self, dt)
+    local real = VRCompanion.updateActionEvents
+    VRCompanion.updateActionEvents = function(self, dt)
         bothChecks()
-        error("hud update failed")
+        error("action events failed")
     end
     local updateOk = pcall(function() VRCompanion:update(16) end)
-    VRCompanion.updateHudConvergence = real
+    VRCompanion.updateActionEvents = real
 
     local missionOk
     local ok, err = pcall(withHookedMissionUpdate, function(self, dt)
@@ -990,28 +990,67 @@ test("AnErrorDuringAnUpdateClosesTheFrameCheckScope", function()
     assert(seen == true, "checks outside an update must resolve fresh after an error")
 end)
 
+test("AnErrorInTheHudConvergenceUpdateIsLoggedOnceAndTheRestOfTheUpdateStillRuns", function()
+    expectHookError("Subsystem 'hud' updateBeforeActions hook raised: ")
+    local counts, state = installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        bothChecks()
+        error("hud update failed")
+    end
+    local actionEventsRan = 0
+    local realActionEvents = VRCompanion.updateActionEvents
+    VRCompanion.updateActionEvents = function(self, dt)
+        actionEventsRan = actionEventsRan + 1
+        return realActionEvents(self, dt)
+    end
+    local realPrint = print
+    local errorLines = {}
+    print = function(line)
+        if string.find(tostring(line), "hook raised", 1, true) then errorLines[#errorLines + 1] = tostring(line) end
+        realPrint(line)
+    end
+    local ok, err = pcall(function()
+        for _ = 1, 3 do VRCompanion:update(16) end
+    end)
+    print = realPrint
+    VRCompanion.updateHudConvergence = real
+    VRCompanion.updateActionEvents = realActionEvents
+    local depth = VRCompanion.frameCheckDepth or 0
+    state.ready = false
+    local seen = VRCompanion:isPassThroughMode()
+    clearCountingMocks()
+    assert(ok, "the update must not raise: " .. tostring(err))
+    assert(#errorLines == 1, "three frames, one logged line, got " .. #errorLines)
+    assert(string.find(errorLines[1], "[FS25_VR] [Error] Subsystem 'hud' updateBeforeActions hook raised: ", 1, true) == 1, errorLines[1])
+    assert(string.find(errorLines[1], "hud update failed", 1, true) ~= nil, "the error text is in the line: " .. errorLines[1])
+    assert(actionEventsRan == 3, "the steps after the HUD convergence still ran every frame, got " .. actionEventsRan)
+    assert(depth == 0, "no frame-check scope is left open, depth=" .. tostring(depth))
+    assert(seen == true, "checks outside an update resolve fresh afterwards")
+end)
+
 test("AnErrorInANestedUpdateKeepsItsRaiseSiteAndClosesEveryScope", function()
     installCountingMocks()
-    local real = VRCompanion.updateHudConvergence
-    local function failingHudUpdate()
-        error("nested hud update failed")
+    local real = VRCompanion.updateActionEvents
+    local function failingActionEvents()
+        error("nested action events failed")
     end
-    VRCompanion.updateHudConvergence = failingHudUpdate
+    VRCompanion.updateActionEvents = failingActionEvents
 
     local missionOk, missionErr
     local ok, err = pcall(withHookedMissionUpdate, function(self, dt) VRCompanion:update(dt) end, function()
         missionOk, missionErr = pcall(function() _G.FSBaseMission:update(16) end)
     end)
-    VRCompanion.updateHudConvergence = real
+    VRCompanion.updateActionEvents = real
     local depth = VRCompanion.frameCheckDepth or 0
     clearCountingMocks()
 
     assert(ok, tostring(err))
     missionErr = tostring(missionErr)
-    assert(missionOk == false and string.find(missionErr, "nested hud update failed", 1, true) ~= nil,
+    assert(missionOk == false and string.find(missionErr, "nested action events failed", 1, true) ~= nil,
         "the error must still reach the game: " .. missionErr)
     if debug ~= nil and debug.traceback ~= nil then
-        assert(string.find(missionErr, "failingHudUpdate", 1, true) ~= nil,
+        assert(string.find(missionErr, "failingActionEvents", 1, true) ~= nil,
             "the rethrown error must carry the traceback from where it was raised: " .. missionErr)
     end
     assert(depth == 0, "an error in a nested scope must not leave a scope open, depth=" .. tostring(depth))

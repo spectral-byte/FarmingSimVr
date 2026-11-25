@@ -63,6 +63,7 @@ end
 
 local subsystems = {}
 local updateEarlyHooks = {}
+local updateBeforeActionsHooks = {}
 local updateHooks = {}
 local hooksLoggedAsRaising = {}
 
@@ -84,11 +85,14 @@ local function checkConsoleCommands(name, commands)
 end
 
 local function rebuildUpdateHooks()
-    updateEarlyHooks, updateHooks = {}, {}
+    updateEarlyHooks, updateBeforeActionsHooks, updateHooks = {}, {}, {}
     for _, subsystem in ipairs(subsystems) do
         local hooks = subsystem.hooks
         if hooks.updateEarly ~= nil then
             updateEarlyHooks[#updateEarlyHooks + 1] = { name = subsystem.name, hook = hooks.updateEarly }
+        end
+        if hooks.updateBeforeActions ~= nil then
+            updateBeforeActionsHooks[#updateBeforeActionsHooks + 1] = { name = subsystem.name, hook = hooks.updateBeforeActions }
         end
         if hooks.update ~= nil then
             updateHooks[#updateHooks + 1] = { name = subsystem.name, hook = hooks.update }
@@ -101,7 +105,7 @@ function VRCompanion:registerSubsystem(name, hooks)
         error("registerSubsystem: the subsystem needs a name", 2)
     end
     hooks = hooks or {}
-    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "saveSettings", "loadSettings" }) do
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings" }) do
         if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
@@ -168,6 +172,14 @@ function VRCompanion:runSubsystemUpdateEarly(dt)
         local entry = updateEarlyHooks[i]
         local ok, err = pcall(entry.hook, self, dt)
         if not ok then logHookRaised(entry.name, "updateEarly", err) end
+    end
+end
+
+function VRCompanion:runSubsystemUpdateBeforeActions(dt)
+    for i = 1, #updateBeforeActionsHooks do
+        local entry = updateBeforeActionsHooks[i]
+        local ok, err = pcall(entry.hook, self, dt)
+        if not ok then logHookRaised(entry.name, "updateBeforeActions", err) end
     end
 end
 
@@ -1002,7 +1014,7 @@ function VRCompanion:runUpdate(dt)
         self:refreshVehicleSpeedGuards()
     end
 
-    self:updateHudConvergence(dt)
+    self:runSubsystemUpdateBeforeActions(dt)
 
     self:updateActionEvents()
 
