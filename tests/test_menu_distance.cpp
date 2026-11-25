@@ -36,7 +36,6 @@ void PlaceHead(fs25vr::FakeTrackedHeadset& headset) {
     fs25vr::HeadPose head;
     head.position = fs25vr::Vector3(0.0f, 1.7f, 0.0f);
     head.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
-    head.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     head.isValid = true;
     headset.SetHeadPose(head);
     headset.manager->PollHeadPose();

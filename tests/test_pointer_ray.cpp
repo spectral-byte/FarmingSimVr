@@ -24,7 +24,7 @@ HeadPose HandAt(float x, float y, float z) {
 
 HeadPose HandAt(float x, float y, float z, float pitch, float yaw) {
     HeadPose pose = HandAt(x, y, z);
-    pose.rotation = fs25vr::EulerAngles(pitch, yaw, 0.0f);
+    pose.orientation = fs25vr::QuaternionFromEuler(pitch, yaw, 0.0f);
     return pose;
 }
 
@@ -479,7 +479,7 @@ TEST_F(CompanionModTest, ThePointerRayStaysOnTheFingerAfterASnapTurnAndTheRecent
     FakeTrackedHeadset headset;
     HeadPose head;
     head.position = Vector3(0.2f, 0.05f, -0.1f);
-    head.rotation = fs25vr::EulerAngles(0.0f, 0.4f, 0.0f);
+    head.orientation = fs25vr::QuaternionFromEuler(0.0f, 0.4f, 0.0f);
     head.isValid = true;
     headset.SetHeadPose(head);
     fs25vr::VRBridge bridge(headset.manager, nullptr);

@@ -160,7 +160,7 @@ TEST_F(CompanionModTest, TurningAControllerInPlaceCountsAsMoving) {
     HeadPose pose = HandAt(0.30f, 1.00f, -0.40f);
     headset.SetHandPose(kRight, pose);
     NextFrame(&headset);
-    pose.rotation = fs25vr::EulerAngles(0.0f, 0.3f, 0.0f);
+    pose.orientation = fs25vr::QuaternionFromEuler(0.0f, 0.3f, 0.0f);
     headset.SetHandPose(kRight, pose);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");

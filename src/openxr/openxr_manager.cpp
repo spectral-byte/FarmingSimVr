@@ -576,8 +576,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
             bool oriValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
 
             m_rawPose.position = Vector3(baseLocation.pose.position.x, baseLocation.pose.position.y, baseLocation.pose.position.z);
-            m_rawPose.orientation = Quaternion(baseLocation.pose.orientation.x, baseLocation.pose.orientation.y, baseLocation.pose.orientation.z, baseLocation.pose.orientation.w);
-            m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
+            m_rawPose.orientation = OrientationFromRuntime(baseLocation.pose.orientation);
 
             m_rawPose.positionTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
             m_rawPose.orientationTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
@@ -598,8 +597,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     bool oriValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
 
     m_lastPose.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
-    m_lastPose.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
-    m_lastPose.rotation = QuaternionToEuler(m_lastPose.orientation);
+    m_lastPose.orientation = OrientationFromRuntime(location.pose.orientation);
 
     m_lastPose.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
     m_lastPose.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
@@ -650,7 +648,7 @@ bool OpenXrManager::PulseHaptic(uint32_t hand, double durationSeconds, float amp
 void OpenXrManager::Recenter() {
     ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;
-    float recenterYaw = m_rawPose.rotation.yaw;  // every poll derives rotation from the quaternion
+    float recenterYaw = m_rawPose.Rotation().yaw;
     const XrTime time = (m_frameState.predictedDisplayTime != 0) ? m_frameState.predictedDisplayTime : GetCurrentXrTime();
 
     if (m_session != XR_NULL_HANDLE && m_baseLocalSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE) {
@@ -666,7 +664,6 @@ void OpenXrManager::Recenter() {
 
             m_rawPose.position = recenterPos;
             m_rawPose.orientation = q;
-            m_rawPose.rotation = euler;
             m_rawPose.positionTracked = (baseLoc.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
             m_rawPose.orientationTracked = (baseLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
             m_rawPose.isValid = true;
@@ -1346,22 +1343,10 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].pose.position.y = eyePos.y;
         projViews[i].pose.position.z = eyePos.z;
 
-        float qMagSq = eyePose.orientation.x * eyePose.orientation.x +
-                       eyePose.orientation.y * eyePose.orientation.y +
-                       eyePose.orientation.z * eyePose.orientation.z +
-                       eyePose.orientation.w * eyePose.orientation.w;
-        if (qMagSq < 1e-4f) {
-            projViews[i].pose.orientation.x = 0.0f;
-            projViews[i].pose.orientation.y = 0.0f;
-            projViews[i].pose.orientation.z = 0.0f;
-            projViews[i].pose.orientation.w = 1.0f;
-        } else {
-            float invMag = 1.0f / std::sqrt(qMagSq);
-            projViews[i].pose.orientation.x = eyePose.orientation.x * invMag;
-            projViews[i].pose.orientation.y = eyePose.orientation.y * invMag;
-            projViews[i].pose.orientation.z = eyePose.orientation.z * invMag;
-            projViews[i].pose.orientation.w = eyePose.orientation.w * invMag;
-        }
+        projViews[i].pose.orientation.x = eyePose.orientation.x;
+        projViews[i].pose.orientation.y = eyePose.orientation.y;
+        projViews[i].pose.orientation.z = eyePose.orientation.z;
+        projViews[i].pose.orientation.w = eyePose.orientation.w;
 
         projViews[i].subImage.swapchain = m_eyeSwapchains[i].handle;
         projViews[i].subImage.imageRect.offset = { 0, 0 };

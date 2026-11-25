@@ -329,7 +329,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
-    simPose.rotation = fs25vr::EulerAngles(0.20f, -0.30f, 0.02f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.20f, -0.30f, 0.02f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
@@ -433,7 +433,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.04f, -0.03f, 0.02f);
-    simPose.rotation = fs25vr::EulerAngles(0.12f, 0.18f, -0.01f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.12f, 0.18f, -0.01f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
@@ -1010,7 +1010,6 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredO
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -1073,7 +1072,6 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredO
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -1132,7 +1130,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.1f, 0.2f, 0.3f);
-    simPose.rotation = fs25vr::EulerAngles(0.05f, 0.10f, 0.02f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.05f, 0.10f, 0.02f);
     headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -1392,7 +1390,7 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
     auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.2f, 0.1f, -0.05f);
-    simPose.rotation = fs25vr::EulerAngles(0.05f, 0.15f, 0.0f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.05f, 0.15f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
@@ -1458,7 +1456,7 @@ TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
     auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.1f);
-    simPose.rotation = fs25vr::EulerAngles(0.1f, 0.2f, 0.0f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.1f, 0.2f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
@@ -1593,7 +1591,6 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -3269,7 +3266,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
-    simPose.rotation = fs25vr::EulerAngles(0.12f, 0.25f, 0.0f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.12f, 0.25f, 0.0f);
     headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -3339,7 +3336,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMous
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.2f, 0.0f, 0.0f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.2f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -4059,7 +4056,6 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
@@ -4120,7 +4116,6 @@ TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithout
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
@@ -4177,7 +4172,6 @@ TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
@@ -4944,7 +4938,6 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
@@ -5183,7 +5176,6 @@ TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEy
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 

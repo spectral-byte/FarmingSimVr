@@ -370,7 +370,7 @@ TEST_F(VirtualGamepadTest, ThePacketNumberAdvancesWhenTheStateChangesAndOnlyThen
     NextFrame(&headset);
     EXPECT_EQ(Read().dwPacketNumber, pulled) << "and then nothing moved again";
 
-    headset.SetHandPose(kRight, fs25vr::HeadPose(fs25vr::Vector3(0.3f, 1.0f, -0.4f), fs25vr::Quaternion(0, 0, 0, 1), fs25vr::EulerAngles(0, 0, 0)));
+    headset.SetHandPose(kRight, fs25vr::HeadPose(fs25vr::Vector3(0.3f, 1.0f, -0.4f), fs25vr::Quaternion(0, 0, 0, 1)));
     NextFrame(&headset);
     EXPECT_EQ(Read().dwPacketNumber, pulled);
 

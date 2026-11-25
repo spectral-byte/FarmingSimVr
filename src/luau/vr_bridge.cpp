@@ -454,9 +454,10 @@ void VRBridge::FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose,
     lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
     lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
     lua_pushnumber(L, pose.position.z); lua_setfield(L, -2, "z");
-    lua_pushnumber(L, pose.rotation.pitch); lua_setfield(L, -2, "pitch");
-    lua_pushnumber(L, pose.rotation.yaw); lua_setfield(L, -2, "yaw");
-    lua_pushnumber(L, pose.rotation.roll); lua_setfield(L, -2, "roll");
+    const EulerAngles rotation = pose.Rotation();
+    lua_pushnumber(L, rotation.pitch); lua_setfield(L, -2, "pitch");
+    lua_pushnumber(L, rotation.yaw); lua_setfield(L, -2, "yaw");
+    lua_pushnumber(L, rotation.roll); lua_setfield(L, -2, "roll");
     lua_pushnumber(L, pose.orientation.x); lua_setfield(L, -2, "qx");
     lua_pushnumber(L, pose.orientation.y); lua_setfield(L, -2, "qy");
     lua_pushnumber(L, pose.orientation.z); lua_setfield(L, -2, "qz");
@@ -508,13 +509,14 @@ void VRBridge::FillHandStateTable(lua_State* L, int tableIndex, const HandState&
     lua_pushboolean(L, hand.menu ? 1 : 0); lua_setfield(L, -2, "menu");
 
     const HeadPose& grip = hand.gripPose;
+    const EulerAngles gripRotation = grip.Rotation();
     lua_pushboolean(L, hand.gripTracked ? 1 : 0); lua_setfield(L, -2, "gripPoseTracked");
     lua_pushnumber(L, grip.position.x); lua_setfield(L, -2, "gripPoseX");
     lua_pushnumber(L, grip.position.y); lua_setfield(L, -2, "gripPoseY");
     lua_pushnumber(L, grip.position.z); lua_setfield(L, -2, "gripPoseZ");
-    lua_pushnumber(L, grip.rotation.pitch); lua_setfield(L, -2, "gripPosePitch");
-    lua_pushnumber(L, grip.rotation.yaw); lua_setfield(L, -2, "gripPoseYaw");
-    lua_pushnumber(L, grip.rotation.roll); lua_setfield(L, -2, "gripPoseRoll");
+    lua_pushnumber(L, gripRotation.pitch); lua_setfield(L, -2, "gripPosePitch");
+    lua_pushnumber(L, gripRotation.yaw); lua_setfield(L, -2, "gripPoseYaw");
+    lua_pushnumber(L, gripRotation.roll); lua_setfield(L, -2, "gripPoseRoll");
     lua_pushnumber(L, grip.orientation.x); lua_setfield(L, -2, "gripPoseQx");
     lua_pushnumber(L, grip.orientation.y); lua_setfield(L, -2, "gripPoseQy");
     lua_pushnumber(L, grip.orientation.z); lua_setfield(L, -2, "gripPoseQz");

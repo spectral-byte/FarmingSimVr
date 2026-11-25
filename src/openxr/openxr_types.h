@@ -10,18 +10,27 @@ namespace fs25vr {
 struct HeadPose {
     Vector3 position{ 0.0f, 0.0f, 0.0f };
     Quaternion orientation{ 0.0f, 0.0f, 0.0f, 1.0f };
-    EulerAngles rotation{ 0.0f, 0.0f, 0.0f };
 
     bool isValid = false;
     bool positionTracked = false;
     bool orientationTracked = false;
 
     constexpr HeadPose() = default;
-    constexpr HeadPose(const Vector3& pos, const Quaternion& ori, const EulerAngles& rot,
+    constexpr HeadPose(const Vector3& pos, const Quaternion& ori,
                        bool valid = true, bool posTracked = true, bool oriTracked = true)
-        : position(pos), orientation(ori), rotation(rot),
+        : position(pos), orientation(ori),
           isValid(valid), positionTracked(posTracked), orientationTracked(oriTracked) {}
+
+    EulerAngles Rotation() const { return QuaternionToEuler(orientation); }
 };
+
+inline Quaternion OrientationFromRuntime(const XrQuaternionf& q) {
+    const float magnitudeSquared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (magnitudeSquared < 1e-4f) {
+        return Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+    return Quaternion(q.x, q.y, q.z, q.w);
+}
 
 struct HandState {
     bool tracked = false;

@@ -9,7 +9,6 @@ HeadPose HeadAt(float x, float y, float z, float yawRadians = 0.0f) {
     HeadPose head;
     head.position = Vector3(x, y, z);
     head.orientation = Quaternion(0.0f, std::sin(yawRadians * 0.5f), 0.0f, std::cos(yawRadians * 0.5f));
-    head.rotation = EulerAngles(0.0f, yawRadians, 0.0f);
     head.isValid = true;
     return head;
 }

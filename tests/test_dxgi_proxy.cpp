@@ -2814,7 +2814,6 @@ TEST(DxgiProxyTest, TransitionInto2DFloatingWindowModeTriggersQuadAlignment) {
 
     HeadPose simPose;
     simPose.position = Vector3(2.0f, 1.7f, 3.0f);
-    simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 
@@ -2876,7 +2875,6 @@ TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
 
     HeadPose simPose;
     simPose.position = Vector3(1.0f, 1.6f, -2.0f);
-    simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 

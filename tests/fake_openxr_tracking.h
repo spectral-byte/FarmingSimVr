@@ -7,6 +7,13 @@
 
 namespace fs25vr {
 
+inline Quaternion QuaternionFromEuler(float pitch, float yaw, float roll) {
+    const Quaternion qYaw(0.0f, std::sin(yaw * 0.5f), 0.0f, std::cos(yaw * 0.5f));
+    const Quaternion qPitch(std::sin(pitch * 0.5f), 0.0f, 0.0f, std::cos(pitch * 0.5f));
+    const Quaternion qRoll(0.0f, 0.0f, std::sin(roll * 0.5f), std::cos(roll * 0.5f));
+    return qYaw * qPitch * qRoll;
+}
+
 class FakeOpenXrTracking {
 public:
     // Raw location of the view space in the runtime's tracking origin.
@@ -35,8 +42,6 @@ public:
     XrResult locateSpaceResult = XR_SUCCESS;
     XrResult locateViewsResult = XR_SUCCESS;
 
-    // Places the head. Orientation may be given as a quaternion or as Euler angles (when the
-    // quaternion is identity); validity and tracking flags follow the pose.
     void SetHeadPose(const HeadPose& pose) {
         head.pose = ToXrPose(pose);
 
@@ -49,19 +54,7 @@ public:
     }
 
     static XrPosef ToXrPose(const HeadPose& pose) {
-        Quaternion orientation = pose.orientation;
-        bool hasRotation = pose.rotation.pitch != 0.0f || pose.rotation.yaw != 0.0f || pose.rotation.roll != 0.0f;
-        bool hasOrientation = orientation.x != 0.0f || orientation.y != 0.0f ||
-                              orientation.z != 0.0f || orientation.w != 1.0f;
-        if (hasRotation && !hasOrientation) {
-            float halfYaw = pose.rotation.yaw * 0.5f;
-            float halfPitch = pose.rotation.pitch * 0.5f;
-            float halfRoll = pose.rotation.roll * 0.5f;
-            Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
-            Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
-            Quaternion qRoll(0.0f, 0.0f, std::sin(halfRoll), std::cos(halfRoll));
-            orientation = qYaw * qPitch * qRoll;
-        }
+        const Quaternion& orientation = pose.orientation;
         XrPosef out;
         out.orientation = { orientation.x, orientation.y, orientation.z, orientation.w };
         out.position = { pose.position.x, pose.position.y, pose.position.z };
