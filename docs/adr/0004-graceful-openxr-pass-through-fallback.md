@@ -10,3 +10,5 @@ Accepted
 - Displaying a blocking Win32 message box warning that VR was not found (rejected: disrupts desktop play and automated testing).
 - Forcing process termination if OpenXR fails (rejected: unacceptable user friction).
 - Silent graceful pass-through (selected: allows the proxy DLL to remain permanently installed in `x64/` without breaking standard desktop gaming).
+
+More decisions about this area, from the code comments: [ADR-0056](0056-openxr-decisions.md).

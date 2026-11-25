@@ -22,3 +22,5 @@ Proposed.
 - Any game code that steers through `setSteeringInput` while the Steering Wheel is held is ignored, including a Wheel Peripheral, until the player lets go.
 - Wheel Grab is unavailable whenever steering from the keyboard would be, such as while a hired helper drives. A steering assist reacts to it as it reacts to any steering input. Grabbing never dismisses a helper or switches an assist off itself.
 - A game update that renames or reshapes `Drivable.setSteeringInput` turns Wheel Grab off with a warning until the Companion Mod is updated.
+
+More decisions about this area, from the code comments: [ADR-0049](0049-wheel-grab-decisions.md).

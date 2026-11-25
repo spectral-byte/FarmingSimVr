@@ -1,7 +1,3 @@
--- Console and menu
--- The engine's console and menu globals the Companion Mod registers into and polls: the commands can be run with
--- runCommand(name, ...), and g_gui.visible opens and closes a menu.
-
     _G.registeredCommands = {}
     _G.addConsoleCommand = function(name, desc, method, target)
         _G.registeredCommands[name] = { desc = desc, method = method, target = target }

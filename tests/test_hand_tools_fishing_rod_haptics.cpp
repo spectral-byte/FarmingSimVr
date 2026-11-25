@@ -1,11 +1,3 @@
-// Hand Tools, the fishing rod's haptics on the Tool Hand (ADR-0031), seen from outside: the real Companion Mod runs against the
-// real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot
-// and the Highlands Fishing DLC's rod, hand_tool_fishing_rod.luau, whose bite has a hook window of 880 ms of updates and whose
-// rodBendFactor while reeling is the fish's pull). A test moves the fake Motion Controllers, drives the rod and frames the way the
-// game would and asserts what the player would feel: which haptic pulses reached which fake Motion Controller
-// (headset.HapticPulses()), how strong and long they were, and when they stop. Never the mod's own state.
-// Prior art: test_hand_tools_haptics.cpp (the other tools' buzz) and test_hand_tools_fishing_rod.cpp (the rod in the Tool Hand).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <algorithm>
@@ -16,15 +8,12 @@ namespace {
 
 using namespace hand_tools_test;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsFishingRodHapticsTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string stubs;
 
-    // The mod started with a player on foot in a game with the Highlands Fishing DLC, the Virtual Gamepad on and the game clock set
-    // (the in-use timeout is on it).
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         stubs = StubChunk("xml_settings") + FishingRodStubs("ok");
@@ -35,7 +24,6 @@ protected:
         SetGameTime(10000);
     }
 
-    // The rod held on foot in the Tool Hand `hand`, both Motion Controllers picked up (the other hand is up too, trigger let go).
     void HoldTheRodIn(uint32_t hand) {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
@@ -58,13 +46,11 @@ protected:
         ASSERT_EQ(RodState(), "waiting") << Dump();
     }
 
-    // The rod in the Tool Hand `hand`, its line out and waiting for a bite.
     void WaitForABiteIn(uint32_t hand) {
         ASSERT_NO_FATAL_FAILURE(HoldTheRodIn(hand));
         ASSERT_NO_FATAL_FAILURE(Cast(hand));
     }
 
-    // The pulses so far to a hand, the strongest and the weakest of them. ForgetPulses starts counting afresh.
     size_t PulsesTo(int hand) const {
         size_t count = 0;
         for (const auto& pulse : headset.HapticPulses()) {
@@ -88,7 +74,6 @@ protected:
     }
     void ForgetPulses() { headset.runtime->controllers.hapticPulses.clear(); }
 
-    // The longest run of frames (each the game's 16.7 ms) without a pulse to the hand over the next `frames` frames.
     int LongestSilenceTo(int hand, int frames) {
         int longest = 0, current = 0;
         for (int i = 0; i < frames; ++i) {
@@ -107,16 +92,13 @@ protected:
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
 };
 
-}  // namespace
-
-// ---- The bite -----------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, ABiteMakesTheToolHandPulseRepeatedlyForAsLongAsTheHookWindowLastsThenStop) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
     ForgetPulses();
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
 
-    // Frame by frame through the hook window (880 ms of the rod's updates), noting the frames that brought a pulse.
     std::vector<int> pulseFrames;
     int frames = 0;
     while (RodState() == "bite" && frames < 200) {
@@ -136,7 +118,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, ABiteMakesTheToolHandPulseR
     EXPECT_EQ(PulsesTo(kRight), 0u) << "the window over, the rod waits again: silent";
 }
 
-// A bite is felt as a strong, short tap, again and again, with the hand quiet in between: not a buzz like the reeling's.
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheBitesPulsesAreSharpAndApartNotABuzz) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
     ForgetPulses();
@@ -159,13 +140,11 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheBitesPulsesAreSharpAndAp
     EXPECT_LT(longestMs, (shortestGap - 1) * frameMs) << "each pulse is over well before the next: the hand is quiet in between";
 }
 
-// ---- Reeling --------------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, ReelingBuzzesTheToolHandMoreAsTheRodBendsMore) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setFishPull(rod, 0.2); StubHandTool.biteRod(rod)", "=bite"), 0);
     FRAMES(2);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // hooked, and the reel held
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(RodState(), "reeling");
     ASSERT_EQ(EvalLua(L, "string.format('%.2f', select(3, VRCompanion:getFishingRodState()))"), "0.20") << "a light pull";
@@ -186,7 +165,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, ReelingBuzzesTheToolHandMor
     EXPECT_LE(StrongestTo(kRight), 1.0f);
     const float hard = WeakestTo(kRight);
 
-    headset.SetHandInputs(kRight, Trigger(0.0f));  // the reel let go: the rod bends a third as much
+    headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
     ASSERT_EQ(RodState(), "reeling");
     ForgetPulses();
@@ -215,9 +194,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, LandingTheFishEndsTheBuzz) 
     EXPECT_EQ(PulsesTo(kRight), 0u) << "caught, the line in: silent";
 }
 
-// ---- Silence -------------------------------------------------------------------------------------------------------------------
-// A buzz always means a fish: the rod that is only held, charged or waiting is silent.
-
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodIsSilentWhileIdleChargingAndWaiting) {
     ASSERT_NO_FATAL_FAILURE(HoldTheRodIn(kRight));
     ForgetPulses();
@@ -242,7 +218,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodIsSilentWhileIdleChar
     EXPECT_EQ(PulsesTo(kLeft), 0u);
 }
 
-// A state that cannot be read while the rod is in the hand must not buzz it: unknown is silent, whatever the rod is really doing.
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, AnUnreadableStateBuzzesNothingEvenInABiteOrWhileReeling) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod); StubHandTool.rodSpec(rod).rodBendFactor = 'bent'", "=unreadableBite"), 0);
@@ -263,8 +238,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, AnUnreadableStateBuzzesNoth
     EXPECT_EQ(PulsesTo(kRight), 0u) << "reeling the mod cannot read";
     EXPECT_EQ(PulsesTo(kLeft), 0u);
 }
-
-// ---- Only the Tool Hand, only while the rod is in it, only the local player's rod -----------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheLeftToolHandIsTheOneThatFeelsTheBiteAndTheReelingNotTheRightOne) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kLeft));
@@ -292,7 +265,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodOutOfTheToolHandBuzze
     ASSERT_EQ(RodState(), "reeling");
 
     headset.SetHandTracked(kRight, false);
-    FRAMES(3);  // a pulse already requested finishes by itself
+    FRAMES(3);
     ForgetPulses();
     FRAMES(10);
     EXPECT_EQ(PulsesTo(kRight), 0u) << "untracked: the rod is the game's again";
@@ -308,8 +281,6 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodOutOfTheToolHandBuzze
     EXPECT_EQ(PulsesTo(kLeft), 0u);
 }
 
-// The game attaches a Hand Tool of every player in the session through the same function: another player's rod biting or
-// reeling is theirs to feel.
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, AnotherPlayersRodBuzzesNothing) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
     ASSERT_EQ(RunLuauChunk(L, R"luau(

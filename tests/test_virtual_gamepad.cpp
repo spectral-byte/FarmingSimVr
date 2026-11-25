@@ -1,8 +1,3 @@
-// The Virtual Gamepad (ADR-0028, spec #98, ticket #100), seen from outside: the real Companion Mod runs
-// against the real VRBridge over FakeTrackedHeadset, the test drives the fake Motion Controllers and the game
-// clock, and reads what the game would read by calling the answers the XInput hooks route the game's calls to
-// (VirtualGamepad::GetState / GetCapabilities). Installing the hooks themselves is test_xinput_hooks.cpp.
-
 #include "companion_mod_fixture.h"
 #include "input/virtual_gamepad.h"
 
@@ -15,7 +10,6 @@ using fs25vr::FakeTrackedHeadsetOptions;
 constexpr uint32_t kLeft = 0;
 constexpr uint32_t kRight = 1;
 
-// Console commands as the engine registers them, so tests can run the handlers.
 constexpr const char* kConsoleStubs = R"luau(
     _G.registeredCommands = {}
     _G.addConsoleCommand = function(name, desc, method, target)
@@ -29,7 +23,6 @@ constexpr const char* kConsoleStubs = R"luau(
     end
 )luau";
 
-// The engine's XML settings API, remembering what was saved so a session can be replayed.
 constexpr const char* kXmlStubs = R"luau(
     _G.savedXml = _G.savedXml or {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -52,11 +45,9 @@ protected:
     std::unique_ptr<fs25vr::VRBridge> bridgeOwner = std::make_unique<fs25vr::VRBridge>(headset.manager, nullptr);
     fs25vr::VRBridge& Bridge() { return *bridgeOwner; }
 
-    // Starts the Companion Mod over the headset with the clock running. `settingsFile` is Lua that fills
-    // savedXml first: what an earlier game session left in the settings file.
     void StartMod(const std::string& settingsFile = "") {
         ASSERT_TRUE(Bridge().Inject(L));
-        Pad().SetClockForTesting([this] { return GameTime(); });  // a click let go times its RS press by the game clock
+        Pad().SetClockForTesting([this] { return GameTime(); });
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
@@ -66,8 +57,6 @@ protected:
         NextFrame(&headset);
     }
 
-    // A new game session over the same headset: a fresh Lua state and a fresh Injector bridge (the pad starts as
-    // a new process finds it), the settings file carried over.
     void RestartGameSession() {
         const std::string saved = EvalLua(L, "savedXml['vrSettings.virtualGamepad']");
         const std::string seed = saved == "nil" ? "_G.savedXml = {}" : "_G.savedXml = { ['vrSettings.virtualGamepad'] = " + saved + " }";
@@ -97,7 +86,6 @@ protected:
 
     fs25vr::VirtualGamepad& Pad() { return Bridge().GetVirtualGamepad(); }
 
-    // What the game reads from XInput slot 3 (the highest free slot of a machine without real pads).
     XINPUT_STATE Read(DWORD slot = 3) {
         XINPUT_STATE state{};
         state.Gamepad.wButtons = 0xFFFF;  // proves a call that reports a pad wrote the state
@@ -112,7 +100,7 @@ FakeOpenXrControllers::Inputs Trigger(float value) {
     return inputs;
 }
 
-} // namespace
+}
 
 TEST_F(VirtualGamepadTest, TurnedOnItIsAnXboxPadInTheHighestFreeSlotAndTheTriggersAreLTAndRT) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
@@ -126,7 +114,6 @@ TEST_F(VirtualGamepadTest, TurnedOnItIsAnXboxPadInTheHighestFreeSlotAndTheTrigge
     EXPECT_EQ(state.Gamepad.bLeftTrigger, 128) << "half way, analog";
     EXPECT_EQ(state.Gamepad.bRightTrigger, 255);
 
-    // Every other slot belongs to the real devices (there are none here).
     XINPUT_STATE other{};
     for (DWORD slot = 0; slot < 3; ++slot) {
         EXPECT_EQ(Pad().GetState(slot, &other), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED)) << "slot " << slot;
@@ -200,7 +187,7 @@ TEST_F(VirtualGamepadTest, BackIsNeverFedAndTheDPadOnlyByTheRightStickChord) {
     everything.buttonUpper = true;
     everything.menu = true;
     headset.SetHandInputs(kLeft, everything);
-    everything.thumbClick = false;  // the right stick click is the D-pad chord: its own tests below
+    everything.thumbClick = false;
     headset.SetHandInputs(kRight, everything);
     NextFrame(&headset);
 
@@ -212,8 +199,6 @@ TEST_F(VirtualGamepadTest, BackIsNeverFedAndTheDPadOnlyByTheRightStickChord) {
                        XINPUT_GAMEPAD_Y | XINPUT_GAMEPAD_START);
 }
 
-// ---- The right-stick D-pad chord (ticket #102) --------------------------------------------------------
-
 namespace {
 constexpr WORD kDPad = XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT;
 
@@ -224,7 +209,7 @@ FakeOpenXrControllers::Inputs Stick(float x, float y, bool click) {
     inputs.thumbClick = click;
     return inputs;
 }
-}  // namespace
+}
 
 TEST_F(VirtualGamepadTest, WithTheRightStickClickHeldPushingTheStickIsTheDPadInThatDirectionAndTheStickReadsCentred) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
@@ -325,7 +310,6 @@ TEST_F(VirtualGamepadTest, AClickThatPushedNeverReportsRSNeitherWhileHeldNorOnRe
     NextFrame(&headset);
     EXPECT_EQ(Read().Gamepad.wButtons, 0);
 
-    // The next click is its own click (the game polls the pad every frame, so it sees the click go down).
     Hold(kRight, Stick(0.0f, 0.0f, true));
     Read();
     Hold(kRight, {});
@@ -341,14 +325,12 @@ TEST_F(VirtualGamepadTest, TheLeftStickAndItsClickAreUnaffectedByTheChord) {
     EXPECT_EQ(pad.wButtons, XINPUT_GAMEPAD_LEFT_THUMB) << "LS is pressed at once and no D-pad";
     EXPECT_EQ(pad.sThumbLX, 32767) << "the left stick stays analog under its click";
 
-    // A left click and push does not mix with the right hand's click.
     Hold(kRight, Stick(0.0f, 0.0f, true));
     Hold(kRight, Stick(0.0f, 1.0f, true));
     pad = Read().Gamepad;
     EXPECT_EQ(pad.wButtons, XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_DPAD_UP);
     EXPECT_EQ(pad.sThumbLX, 32767);
 
-    // Without the right click, the right stick is analog as before.
     Hold(kRight, Stick(0.0f, 1.0f, false));
     pad = Read().Gamepad;
     EXPECT_EQ(pad.wButtons & kDPad, 0);
@@ -388,7 +370,6 @@ TEST_F(VirtualGamepadTest, ThePacketNumberAdvancesWhenTheStateChangesAndOnlyThen
     NextFrame(&headset);
     EXPECT_EQ(Read().dwPacketNumber, pulled) << "and then nothing moved again";
 
-    // A hand's pose is not a pad input: moving the Motion Controller changes no packet.
     headset.SetHandPose(kRight, fs25vr::HeadPose(fs25vr::Vector3(0.3f, 1.0f, -0.4f), fs25vr::Quaternion(0, 0, 0, 1), fs25vr::EulerAngles(0, 0, 0)));
     NextFrame(&headset);
     EXPECT_EQ(Read().dwPacketNumber, pulled);
@@ -501,7 +482,6 @@ TEST_F(VirtualGamepadTest, WithMotionControllersOffThePadStaysInTheGameButReadsN
 }
 
 TEST_F(VirtualGamepadTest, ThereIsNoPadWithoutAnOpenXrSessionAndNoPadWhenTheRuntimeRefusedTheActionSet) {
-    // No OpenXR manager at all, and a manager that never started a session (Pass-Through Mode).
     fs25vr::VRBridge withoutRuntime(nullptr, nullptr);
     fs25vr::VRBridge passThrough(std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>()), nullptr);
     for (fs25vr::VRBridge* bridgeUnderTest : { &withoutRuntime, &passThrough }) {
@@ -524,7 +504,7 @@ TEST_F(VirtualGamepadTest, ThereIsNoPadWithoutAnOpenXrSessionAndNoPadWhenTheRunt
 }
 
 TEST_F(VirtualGamepadTest, ThePadTakesTheHighestSlotNoRealPadOccupiesSoARealPadKeepsTheFirstOne) {
-    Pad().SetRealPadProbeForTesting([](DWORD slot) { return slot == 0 || slot == 3; });  // before the pad appears
+    Pad().SetRealPadProbeForTesting([](DWORD slot) { return slot == 0 || slot == 3; });
     ASSERT_NO_FATAL_FAILURE(StartMod());
 
     EXPECT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "2");
@@ -535,7 +515,7 @@ TEST_F(VirtualGamepadTest, ThePadTakesTheHighestSlotNoRealPadOccupiesSoARealPadK
 }
 
 TEST_F(VirtualGamepadTest, WithAllFourSlotsTakenByRealPadsThereIsNoPadAndTheLogSaysSoOnce) {
-    Pad().SetRealPadProbeForTesting([](DWORD) { return true; });  // before the pad appears
+    Pad().SetRealPadProbeForTesting([](DWORD) { return true; });
     ASSERT_NO_FATAL_FAILURE(StartMod());
     for (int i = 0; i < 5; ++i) NextFrame(&headset);
 
@@ -551,7 +531,6 @@ TEST_F(VirtualGamepadTest, WithAllFourSlotsTakenByRealPadsThereIsNoPadAndTheLogS
     }
     EXPECT_EQ(lines, 1);
 
-    // A pad that is unplugged frees a slot and the Virtual Gamepad appears.
     Pad().SetRealPadProbeForTesting([](DWORD slot) { return slot != 1; });
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "1");
@@ -572,17 +551,12 @@ TEST_F(VirtualGamepadTest, TheGameLogAndTheStatusCommandSayWhetherThePadIsThereA
     EXPECT_NE(Command("'vrMotionControllerStatus'").find("Virtual Gamepad: not present (off)"), std::string::npos);
 }
 
-// ---- The game's thread never touches OpenXR (review of #98) ---------------------------------------------
-
 TEST_F(VirtualGamepadTest, TheGameReadsTheSnapshotOfTheLastFrameAndAReadNeverSyncsOpenXr) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     TurnOn();
     Hold(kRight, Trigger(1.0f));
     ASSERT_EQ(Read().Gamepad.bRightTrigger, 255);
 
-    // The controller moves between two frames (the frame has ended, the next has not begun). XInput is polled off the render
-    // thread, so the poll answers from what the last frame began with and asks OpenXR for nothing (a read with no frame in
-    // flight would sync the actions again, and xrSyncActions is the render thread's alone).
     headset.manager->EndFrame();
     headset.SetHandInputs(kRight, {});
     EXPECT_EQ(Read().Gamepad.bRightTrigger, 255) << "still the last frame's snapshot";
@@ -617,7 +591,7 @@ TEST_F(VirtualGamepadTest, ARealPadPluggedIntoThePadsSlotMakesItGiveTheSlotUpAnd
     ASSERT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "3");
 
     realPadInSlot3 = true;
-    AdvanceGameTime(2000);  // the pad looks again about once a second, not on every poll
+    AdvanceGameTime(2000);
     NextFrame(&headset);
 
     EXPECT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "2") << "the real pad keeps the slot it plugged into";

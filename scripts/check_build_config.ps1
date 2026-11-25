@@ -1,8 +1,4 @@
-﻿# Verifies that a CMake build tree uses the shipped configuration:
-# RelWithDebInfo with full inlining (/Ob2) and debug info (/Zi).
-# With -RequireWarningsAsErrors it also requires the FS25VR_WARNINGS_AS_ERRORS option to be on
-# (the ci preset sets it, so a CI configure that loses the option cannot go unnoticed).
-param(
+﻿param(
     [string]$BuildDir = "build",
     [switch]$RequireWarningsAsErrors
 )

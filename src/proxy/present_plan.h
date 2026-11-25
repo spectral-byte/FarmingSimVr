@@ -5,11 +5,6 @@
 
 namespace fs25vr {
 
-// What one Present of the game's swap chain is, decided in one step from facts alone (ADR-0015, ADR-0019). The DxgiProxy
-// gathers the facts, asks PlanPresent for the plan, carries it out in a fixed order and does the bookkeeping once, so a
-// case cannot forget one of the bookkeeping steps every case shares.
-
-// The facts of one Present, read after the runtime's events were polled and the eye swapchains were looked after.
 struct PresentFacts {
     // The Injector is Active (not Uninitialized or in Pass-Through Mode), after the events were polled.
     bool active = false;
@@ -73,7 +68,6 @@ struct PresentPlan {
     std::optional<bool> inQuadModeAfter;
 };
 
-// No side effects: the same facts give the same plan.
 PresentPlan PlanPresent(const PresentFacts& facts);
 
-}  // namespace fs25vr
+}

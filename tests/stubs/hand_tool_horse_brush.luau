@@ -1,45 +1,3 @@
--- Hand Tools: the horse brush (ADR-0030)
--- The horse brush for StubHandTool, shaped after the game's HandToolHorseBrush (the readable source in the SDK's gameSource.zip). Run
--- after hand_tool.luau, then call StubHandTool.installHorseBrush(handlerVariant, lookupVariant) BEFORE loading the Companion Mod, or any
--- time before the map is loaded. A game with the spray can too: install the horse brush AFTER the spray can (both fill the targeter).
---
--- StubHandTool.installHorseBrush(handlerVariant, lookupVariant)   defines the global HandToolHorseBrush (the class the game's horse
---   brush is made of), AnimalCleanEvent and the game's farm, husbandry and network objects the brush reads, and makes the targeter
---   honour the animal target type (PlayerTargeter:addTargetType / :removeTargetType / :getClosestTargetedNodeFromType when the spray
---   can has not added them): each update fills closestTargetsByKey[HandToolHorseBrush] with the closest animal the look ray meets,
---   measured from the ray's origin and only between the type's minimum and maximum distance (the game's tryAddTargetWithMask), as
---   { node, x, y, z, distance }. Holding a brush adds its target type (animals, 0.5 m to 3 m, as onHeldStart does); putting it away
---   removes it.
---   handlerVariant   how the use handler HandToolHorseBrush.onBrushAction is in this "game version": nil / "ok", "missing" (a game
---                    update renamed it to onBrushUse, which the game's binding calls instead) or "reshaped" (it takes no parameters)
---   lookupVariant    how the animal lookup HandToolHorseBrush.getHusbandryAndClusterFromNode(player, node) is: nil / "ok", "missing"
---                    (renamed to getAnimalFromNode, which the brush's update calls) or "reshaped" (it takes only the node)
---   HandToolHorseBrush.onUpdate(tool, dt)   the brush's update, run each tick (StubHandTool.updaters) for a held brush, looked up on
---     the class at every call: asks the lookup (on the class) for the animal and cluster of the targeter's closest animal, sets the
---     action event's text ("Clean <name>") and active state to match, and while the brush is cleaning an animal (spec.isCleaning with
---     one targeted) sways the brush node, plays the cleaning sound (spec.cleaningSoundPlaying) and sends an AnimalCleanEvent every
---     half second (+5 dirt cleaned, the game's cleaningDeltaPerMs of 0.01).
---   HandToolHorseBrush.onDraw(tool)   the brush's draw (StubHandTool.draw), looked up on the class at every call: renders
---     "brushCrosshair" while an animal is targeted, "defaultCrosshair" otherwise (both at the centre of the view)
---   HandToolHorseBrush.onBrushAction(tool, _, inputValue)   the ACTIVATE_HANDTOOL handler, on the class ONLY (not on the tool): the
---     game's binding calls it with the tool as self; held (spec.isCleaning = inputValue > 0); recorded in StubHandTool.useCalls as
---     tool = "horseBrush". The binding itself, tool.activateAction, calls whatever the variant calls it.
---   HandToolHorseBrush.getHusbandryAndClusterFromNode(player, node) -> husbandry, cluster   nil, nil without a valid node, an
---     animal, an animal of a farm the player may access (the game's accessHandler:canFarmAccess)
---
--- StubHandTool.horseBrush(player, options) -> tool   the horse brush (spec_horseBrush), not yet held. tool.rootNode, and in
---   tool.spec_horseBrush: brushNode (`brush`, whose -Y axis runs toward the bristles), originalPos, animalDetectionDistance (3),
---   isCleaning, targetedHusbandry, targetedHusbandryId, targetedClusterId, deltaSum, brushText ("Clean %s"), cleaningSoundPlaying.
---   The player gets farmId 1 when it has none.
--- StubHandTool.bristleRay(tool) -> x, y, z, dirX, dirY, dirZ   where the bristles are and the way they point, in the world: the origin
---   of the brush node and its -Y axis
--- StubHandTool.animalAt(ray, distance, radius, options) -> animal   a spherical animal the ray (x, y, z, dirX, dirY, dirZ in a table)
---   meets `distance` metres along it. options: name ("Silver"), farmId (1: the player's), dirt (50). animal = { node, husbandry,
---   cluster, ... }, cluster.dirt the animal's dirt; StubHandTool.animals lists them
--- StubHandTool.inputHelp(tool) -> text   what the input help offers for the brush now: the action event's text while it is active
---   (e.g. "Clean Silver"), "" while it is not. Together with StubHandTool.actionEvents[tool.spec_horseBrush.activateActionEventId]
--- StubHandTool.cleanEvents   every clean event the brush sent (the game's AnimalCleanEvent), in order, as { husbandry, clusterId, delta }
-
     StubHandTool.animals, StubHandTool.cleanEvents, StubHandTool.actionEvents = {}, {}, {}
     local function normalize(x, y, z)
         local length = math.sqrt(x * x + y * y + z * z)
@@ -47,7 +5,6 @@
         return x / length, y / length, z / length
     end
 
-    -- the closest animal (a sphere) a ray meets between a minimum and a maximum distance of its origin
     local function castAtAnimals(x, y, z, dx, dy, dz, minDistance, maxDistance)
         local best = nil
         for _, animal in ipairs(StubHandTool.animals) do
@@ -65,7 +22,6 @@
         return best
     end
 
-    -- ---- animals: the game's husbandry, cluster and farm objects the brush reads ---------------------------------------------
     function StubHandTool.animalAt(ray, distance, radius, options)
         options = options or {}
         local x, y, z, dx, dy, dz = table.unpack(ray)
@@ -120,7 +76,6 @@
                 return { husbandry = husbandry, clusterId = clusterId, delta = math.abs(math.floor(delta)) }
             end,
         }
-        -- the server connection of a client that is also the server: the event is kept and run at once
         _G.g_client = {
             getServerConnection = function()
                 return {
@@ -134,7 +89,6 @@
         }
     end
 
-    -- the game's input binding, for the brush's action event only: the text and active state the brush sets
     local inputBinding = {
         setActionEventText = function(_, id, text) StubHandTool.actionEvents[id].text = text end,
         setActionEventActive = function(_, id, active) StubHandTool.actionEvents[id].active = active end,
@@ -155,7 +109,6 @@
         _G.HandToolHorseBrush = Class
         installTheGamesFarmAndNetwork()
 
-        -- ---- the targeter: target types with a minimum and a maximum distance (the spray can's chunk may have added them)
         local PlayerTargeter = _G.PlayerTargeter
         if PlayerTargeter.addTargetType == nil then
             function PlayerTargeter:addTargetType(key, mask, minDistance, maxDistance)
@@ -186,7 +139,6 @@
             end
         end
 
-        -- a brush taken in hand targets animals, one put away stops (the game's onHeldStart)
         local baseHold, baseDrop = StubHandTool.hold, StubHandTool.drop
         function StubHandTool.hold(tool)
             baseHold(tool)
@@ -202,7 +154,6 @@
             baseDrop(tool)
         end
 
-        -- ---- the lookup: on the class, called through it by the brush's update
         local function lookup(player, node)
             if node == nil or not entityExists(node) then return nil, nil end
             local husbandryId, animalId = getAnimalFromCollisionNode(node)
@@ -229,7 +180,6 @@
             return Class[StubHandTool.horseBrushLookupName](player, node)
         end
 
-        -- ---- the use handler: on the class only, held
         local function setCleaning(self, inputValue)
             table.insert(StubHandTool.useCalls, { tool = "horseBrush", value = inputValue, self = self })
             self.spec_horseBrush.isCleaning = inputValue > 0
@@ -240,7 +190,6 @@
             Class[StubHandTool.horseBrushHandlerName] = function(self, _, inputValue) setCleaning(self, inputValue) end
         end
 
-        -- ---- the specialization's own update, on the class and read at every call (the game's event dispatch)
         function Class.onUpdate(self, dt)
             local player = self:getCarryingPlayer()
             if player == nil then return end
@@ -290,13 +239,11 @@
             end
         end
 
-        -- the draw (the game's HandToolHorseBrush:onDraw): the crosshairs at the centre of the view
         function Class.onDraw(self)
             local spec = self.spec_horseBrush
             StubHandTool.render(self, spec.targetedHusbandry ~= nil and "brushCrosshair" or "defaultCrosshair")
         end
 
-        -- the game's event dispatch: spec[eventName](object, ...), the class read at every call
         if not StubHandTool.horseBrushUpdaterAdded then
             StubHandTool.horseBrushUpdaterAdded = true
             table.insert(StubHandTool.updaters, function(dt)
@@ -315,18 +262,15 @@
         local spec = tool.spec_horseBrush
         player.farmId = player.farmId or 1
         spec.animalDetectionDistance = 3
-        -- the brush node (`brush`) is the root's origin; the bristles (`fibers`, 4 cm along its -Y) are what touches the animal
         spec.brushNode = StubScene.newNode("brush", tool.rootNode, 0, 0, 0)
         spec.originalPos = { getTranslation(spec.brushNode) }
         spec.cleaningDeltaPerMs = 10 / 1000
         spec.deltaSum = 0
         spec.brushText = "Clean %s"
         spec.cleaningSoundPlaying = false
-        -- the action event the game registers when the tool is held: no text, not active
         local eventId = #StubHandTool.horseBrushes + 1
         StubHandTool.actionEvents[eventId] = { text = "", active = false }
         spec.activateActionEventId = eventId
-        -- the game's own binding calls the handler off the class, with the tool as self
         tool.activateAction = function(self, a, inputValue) return _G.HandToolHorseBrush[StubHandTool.horseBrushHandlerName](self, a, inputValue) end
         table.insert(StubHandTool.horseBrushes, tool)
         return tool

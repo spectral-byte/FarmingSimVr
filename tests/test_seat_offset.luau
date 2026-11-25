@@ -1,14 +1,3 @@
--- ====================================================================
--- Test Suite for the Seat Offset (spec #166, ticket #168): how far the head's rest position in a cab is
--- moved from the vehicle's own in-cab eye point. Drives the whole Companion Mod through what the engine
--- calls (the in-cab camera update, the Recenter Action, the console command, the map load and unload)
--- over a mock scene graph, and asserts on what the engine would see: where the engine camera, the eye
--- camera and the audio listener are, the replies and notifications, and the bridge calls.
--- Axes: forward, up and right, in the in-cab camera's parent space. There forward is +Z and the vehicle's
--- left is +X (the engine's vehicles are modelled that way), so an offset of (forward f, up u, right r)
--- is the translation (-r, u, f).
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -33,11 +22,6 @@ end
 
 local function near(a, b) return math.abs(a - b) < 0.0005 end
 
--- --------------------------------------------------------------------
--- Mock scene: nodes with a parent, a local translation and a yaw. The engine's translation and
--- rotation calls record into it; localToLocal composes the node's translation and yaw as the other
--- camera suites do.
--- --------------------------------------------------------------------
 local CAB = 999
 local nodes, nextNode
 
@@ -65,7 +49,6 @@ local function installScene()
     end
     _G.localToLocal = function(from, to, x, y, z)
         if from ~= to and nodeOf(to).parent == from then
-            -- into the frame of a child of `from`: undo the child's translation and yaw
             local c = nodeOf(to)
             return VRCompanion:rotateVectorByYaw(x - c.t[1], y - c.t[2], z - c.t[3], -c.yaw)
         end
@@ -118,8 +101,6 @@ local function resetCompanion()
     VRCompanion.lastControlledVehicle = nil
 end
 
--- A vehicle of model `config` whose cameras are `cams` (the in-cab camera first, as the game lists
--- them), with camera `index` active
 local function makeVehicle(config, cams, index)
     local veh = { configFileName = config, spec_enterable = { cameras = cams, camIndex = index or 1 } }
     veh.getActiveCamera = function(self) return self.spec_enterable.cameras[self.spec_enterable.camIndex] end
@@ -127,7 +108,6 @@ local function makeVehicle(config, cams, index)
     return veh
 end
 
--- A model of its own for each test, as the offsets outlive a test
 local modelCount = 0
 local function freshModel()
     modelCount = modelCount + 1
@@ -135,8 +115,6 @@ local function freshModel()
 end
 
 local nextCameraNode = 100
--- A fallback in-cab camera, with no parent to build a head tracking node under and none from the game, with its eye point
--- at (0.3, 1.4, -0.2)
 local function fallbackCab()
     nextCameraNode = nextCameraNode + 1
     nodeOf(nextCameraNode).t = { 0.3, 1.4, -0.2 }
@@ -148,8 +126,6 @@ local function fallbackCab()
     }
 end
 
--- An in-cab camera with a head tracking node at (0, 1.6, 0.2), looking out of the windscreen (origRotY pi),
--- turned by `lookYaw` from there by the mouse or a Snap Turn
 local nextHeadNode = 500
 local function trackedCab(lookYaw)
     nextCameraNode = nextCameraNode + 1
@@ -179,8 +155,6 @@ end
 
 local function translationOf(id) local t = nodeOf(id).t return { x = t[1], y = t[2], z = t[3] } end
 
--- The three places the head-tracked view puts the head: the engine camera node, the eye camera and the
--- Cyclopean Audio Listener Node
 local function viewAfterUpdate(cam)
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     return {
@@ -201,7 +175,6 @@ end
 
 print("Running Seat Offset Tests...")
 
--- Slice 1: a typed Seat Offset moves the head in the cab (fallback path, no head tracking node)
 test("SeatOffsetMovesTheFallbackCabViewByForwardUpAndRightInTheCab", function()
     setup()
     local cam = fallbackCab()
@@ -216,7 +189,6 @@ test("SeatOffsetMovesTheFallbackCabViewByForwardUpAndRightInTheCab", function()
     assertMoved(view, base, -0.3, 0.2, 0.1, "fallback path")
 end)
 
--- Slice 2: the same with a head tracking node, looking to the side: the offset is in the cab, not turned by look yaw
 test("SeatOffsetMovesTheTrackedCabViewInTheCabWhateverTheLookYaw", function()
     setup(poseAt(0.05, 0.02, -0.1))
     local cam = trackedCab(0.6)
@@ -248,7 +220,6 @@ test("SnapTurnLeavesTheSeatOffsetWhereItWasInTheCab", function()
     assertMoved(after, base, -0.3, 0.2, 0.1, "after the Snap Turn")
 end)
 
--- Slice 4: the console command prints, sets, clamps and resets
 local function inTractor()
     setup()
     local cam = trackedCab(0)
@@ -347,12 +318,10 @@ test("ConsoleOutsideAnInCabCameraRepliesThereIsNoneAndChangesNothing", function(
         assert(string.find(reply, "no in-cab camera", 1, true),
             "in an Outside Camera (" .. table.concat(args, " ") .. ") the reply says there is no in-cab camera, got: " .. tostring(reply))
     end
-    -- on foot, too
     _G.g_currentMission = { controlledVehicle = nil }
     assert(string.find(VRCompanion:consoleCommandSeatOffset("0.1", "0.2", "0.3"), "no in-cab camera", 1, true), "on foot")
     assert(state.flushes == flushes, "nothing changed, so no Discontinuity Flush")
 
-    -- back in the cab: nothing was set on the cab's behalf
     veh.spec_enterable.camIndex = 1
     _G.g_currentMission = { controlledVehicle = veh }
     local base = viewAfterUpdate(cabCam)
@@ -362,7 +331,6 @@ test("ConsoleOutsideAnInCabCameraRepliesThereIsNoneAndChangesNothing", function(
     assertMoved(viewAfterUpdate(cabCam), base, 0, 0, 0.1, "the cab camera")
 end)
 
--- Slice 5: the Recenter Action lands the head at the eye point moved by the Seat Offset and leaves the offset alone
 local function recenterLandsAtEyePointPlusOffset(makeCam, eyePoint, mode)
     setup(poseAt(0.2, 0.1, -0.3))
     local cam = makeCam()
@@ -370,14 +338,14 @@ local function recenterLandsAtEyePointPlusOffset(makeCam, eyePoint, mode)
     enter(veh)
     VRCompanion.recenterVrTrackingSpace = (mode == "Both")
     VRCompanion:consoleCommandSeatOffset("0.1", "-0.2", "0.3")
-    viewAfterUpdate(cam)  -- the head leans away from the seat
+    viewAfterUpdate(cam)
 
     VRCompanion:onRecenterAction()
     if mode == "Both" then
         assert(state.recenters == 1, "Both re-zeroes the tracking space")
     else
         assert(state.recenters == 0, "VehicleOnly leaves the tracking space alone")
-        state.pose = poseAt(0, 0, 0)  -- the head sitting back where the tracking space has it
+        state.pose = poseAt(0, 0, 0)
     end
     local view = viewAfterUpdate(cam)
 
@@ -407,7 +375,6 @@ test("RecenterLandsAtTheFallbackEyePointMovedByTheSeatOffsetInVehicleOnlyMode", 
     recenterLandsAtEyePointPlusOffset(fallbackCab, { 0.3, 1.4, -0.2 }, "VehicleOnly")
 end)
 
--- Slice 5b: identity is the vehicle model and the in-cab camera's index in the vehicle's camera list
 test("TwoVehiclesOfOneModelShareASeatOffsetAndAnotherModelHasItsOwn", function()
     setup()
     local model = freshModel()
@@ -434,13 +401,13 @@ test("APassengerCameraKeepsASeatOffsetApartFromTheDriversAndEachComesBack", func
     enter(veh)
     local baseDriver, basePassenger = viewAfterUpdate(driver), viewAfterUpdate(passenger)
 
-    VRCompanion:consoleCommandSeatOffset("0.1", "0", "0")      -- the driver's
+    VRCompanion:consoleCommandSeatOffset("0.1", "0", "0")
     veh.spec_enterable.camIndex = 3
     assertMoved(viewAfterUpdate(passenger), basePassenger, 0, 0, 0, "the passenger starts with none")
     VRCompanion:consoleCommandSeatOffset("0", "0.4", "0")      -- the passenger's
     assertMoved(viewAfterUpdate(passenger), basePassenger, 0, 0.4, 0, "the passenger's own")
 
-    veh.spec_enterable.camIndex = 2  -- an Outside Camera in between
+    veh.spec_enterable.camIndex = 2
     VRCompanion:onVehicleCameraChanged(veh, 2)
     veh.spec_enterable.camIndex = 1
     VRCompanion:onVehicleCameraChanged(veh, 1)
@@ -465,7 +432,6 @@ test("EnteringAndLeavingAndSwitchingVehiclesNeedNoExtraStateForTheSeatOffset", f
     assertMoved(viewAfterUpdate(camA), baseA, -0.3, 0.2, 0.1, "back in the first vehicle")
 end)
 
--- Slice 6: the game's own camera, lost tracking, Outside Cameras and being on foot ignore the Seat Offset
 local function installWorldReads()
     _G.getRootNode = function() return 1 end
     _G.getWorldTranslation = function(id) local t = nodeOf(id).t return t[1], t[2], t[3] end
@@ -482,7 +448,7 @@ test("TwoDFloatingWindowModeLeavesTheGameCameraAsItIs", function()
     local cam = inTractor()
     VRCompanion:consoleCommandSeatOffset("0.4", "0.3", "-0.2")
     VRCompanion.is2DViewActive = true
-    nodeOf(cam.cameraNode).t = { 0, 1.6, 0.2 }  -- where the game's own update leaves its camera
+    nodeOf(cam.cameraNode).t = { 0, 1.6, 0.2 }
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     local t = translationOf(cam.cameraNode)
     assert(near(t.x, 0) and near(t.y, 1.6) and near(t.z, 0.2), string.format(
@@ -505,10 +471,10 @@ end)
 test("LostHeadTrackingShowsTheEngineCameraViewWithoutTheSeatOffset", function()
     local cam = inTractor()
     installWorldReads()
-    viewAfterUpdate(cam)  -- the eye nodes exist
+    viewAfterUpdate(cam)
     VRCompanion:consoleCommandSeatOffset("0.4", "0.3", "-0.2")
     state.pose = nil
-    nodeOf(cam.cameraNode).t = { 0, 1.6, 0.2 }  -- the game's own update puts its camera back at its eye point
+    nodeOf(cam.cameraNode).t = { 0, 1.6, 0.2 }
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     local eye, listener = translationOf(VRCompanion.cameraNodeLeft), translationOf(VRCompanion.cyclopeanAudioListenerNode)
     removeWorldReads()
@@ -562,20 +528,16 @@ test("OnFootIgnoresTheSeatOffset", function()
         before.x, before.y, before.z, after.x, after.y, after.z))
 end)
 
--- The Virtual Hands and the Pointer Ray are carried from the Cyclopean Audio Listener Node (headRelativePoseToWorld, shared by
--- both): a Motion Controller's pose is taken relative to the head and put back into the world from the listener. So they follow
--- the head the Seat Offset moves, with the player's real hands staying where they are relative to it, and need nothing of their own.
 test("VirtualHandsAndPointerRayFollowTheHeadTheSeatOffsetMovesWithNoChangeOfTheirOwn", function()
     local headPose = poseAt(0.05, 0.02, -0.1)
     headPose.qx, headPose.qy, headPose.qz, headPose.qw = 0, 0, 0, 1
     setup(headPose)
     installWorldReads()
     local handshakeComplete = VRCompanion.handshakeComplete
-    VRCompanion.handshakeComplete = true  -- the head is placed in the world only once the bridge is in use
+    VRCompanion.handshakeComplete = true
     local cam = trackedCab(0.6)
     local veh = makeVehicle(freshModel(), { cam })
     enter(veh)
-    -- The hands' grip poses and the Pointer Ray's aim pose, in the tracking space, which the Seat Offset never touches
     local hands = {
         { name = "right hand", x = 0.25, y = -0.1, z = -0.2 },
         { name = "left hand", x = -0.25, y = -0.1, z = -0.2 },
@@ -642,7 +604,6 @@ test("ConsoleCommandIsAddedAtMapLoadAndRemovedAtMapUnload", function()
     _G.addConsoleCommand, _G.removeConsoleCommand, _G.g_currentMission = nil, nil, nil
 end)
 
--- The in-cab camera hangs from a free node in world space, not from the vehicle: so forward is the vehicle's forward, wherever it points
 local ROOT = 900
 local function pointVehicle(veh, yaw)
     veh.rootNode = ROOT

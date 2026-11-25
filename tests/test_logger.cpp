@@ -24,8 +24,6 @@ void RemoveLogAndBackup(const std::filesystem::path& path) {
     std::filesystem::remove(fs25vr::Logger::BackupPathFor(path));
 }
 
-// The Logger is a process-wide singleton; put it back on its default file and level after
-// each test so later tests' log output still reaches disk.
 class LoggerTest : public ::testing::Test {
 protected:
     void SetUp() override { m_originalLevel = fs25vr::Logger::Instance().GetMinLevel(); }
@@ -39,7 +37,7 @@ private:
     fs25vr::LogLevel m_originalLevel = fs25vr::LogLevel::Info;
 };
 
-} // namespace
+}
 
 TEST_F(LoggerTest, DebugIsSuppressedByDefaultAndCanBeEnabled) {
     const std::string path = "test_level_filter.log";
@@ -133,8 +131,6 @@ TEST_F(LoggerTest, LogStillHeldOpenIsAppendedToAndBackupIsKept) {
     WriteAll(fs25vr::Logger::BackupPathFor(path), "older-session\n");
     WriteAll(path, "previous-session\n");
 
-    // Hold the log the way a still-running previous session would: shared for read/write
-    // but not delete, so it can't be moved to the backup path.
     HANDLE held = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     ASSERT_NE(held, INVALID_HANDLE_VALUE);
@@ -184,8 +180,6 @@ TEST_F(LoggerTest, WritesMessagesToFile) {
     RemoveLogAndBackup(testLogPath);
 }
 
-// A game that hangs instead of crashing never flushes the log again, so whatever reached it at Info or above must be
-// on disk already.
 TEST_F(LoggerTest, AnInfoLineIsInTheFileBeforeAnyFlush) {
     const std::string testLogPath = "test_info_on_disk.log";
     RemoveLogAndBackup(testLogPath);
@@ -216,7 +210,6 @@ TEST_F(LoggerTest, WarningAndErrorLinesAreInTheFileBeforeAnyFlush) {
     RemoveLogAndBackup(testLogPath);
 }
 
-// Debug logging writes many lines a frame; a file write for each would cost the frame rate it is meant to diagnose.
 TEST_F(LoggerTest, ADebugLineDoesNotFlushTheFile) {
     const std::string testLogPath = "test_debug_buffered.log";
     RemoveLogAndBackup(testLogPath);
@@ -234,9 +227,6 @@ TEST_F(LoggerTest, ADebugLineDoesNotFlushTheFile) {
     RemoveLogAndBackup(testLogPath);
 }
 
-// The crash reporter puts its line together by hand (TryLogWithoutWaiting) because the Log function needs more stack
-// and heap than a crashing process may have. Whoever reads fs25_vr.log, a person or a script, finds one layout, so the
-// two must not drift apart: a timestamp, the level in brackets, then the message.
 TEST_F(LoggerTest, ALineWrittenWithoutWaitingHasTheLayoutOfALineFromLog) {
     const std::string testLogPath = "test_line_layout.log";
     RemoveLogAndBackup(testLogPath);
@@ -261,7 +251,6 @@ TEST_F(LoggerTest, ALineWrittenWithoutWaitingHasTheLayoutOfALineFromLog) {
     ASSERT_EQ(lines.size(), 8u);
 
     const std::regex layout(R"(^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[(DEBUG|INFO|WARN|ERROR)\] +the same words$)");
-    // Down to the spacing: the same line once the digits of the clock are masked.
     const auto masked = [](std::string line) {
         for (char& c : line) {
             if (c >= '0' && c <= '9') c = '#';

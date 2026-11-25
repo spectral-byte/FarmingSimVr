@@ -1,8 +1,3 @@
-// FOV Overscan (spec #221, ticket #223): the eyes are rendered with the covering symmetric FOV widened by
-// (1 + percent / 100) in tangents. The setting reaches the Injector through VRBridge and takes effect when the next
-// OpenXR frame begins. These tests run on the Fake Tracked Headset and look only at what leaves the system: the FOV
-// the engine camera is given, the FOV the compositor received at xrEndFrame, the VRBridge getter, the console
-// replies and the log.
 #include "companion_mod_fixture.h"
 #include "core/logger.h"
 #include <cmath>
@@ -16,11 +11,9 @@ struct RenderResolution {
     uint32_t height;
 };
 
-// Square-ish (Virtual Desktop's Godlike preset) and 16:9.
 constexpr RenderResolution kSquarish{ 3072, 3216 };
 constexpr RenderResolution kWidescreen{ 1920, 1080 };
 
-// An asymmetric headset, left eye as an OpenXR runtime reports it (outer = left); the right eye is its mirror.
 const XrFovf kLeftEyeFov{ -0.95f, 0.70f, 0.80f, -0.60f };
 const XrFovf kRightEyeFov{ -0.70f, 0.95f, 0.80f, -0.60f };
 
@@ -30,14 +23,12 @@ void StartHeadset(fs25vr::FakeTrackedHeadset& headset, const RenderResolution& r
     ASSERT_TRUE(headset.manager->CreateEyeSwapchains(resolution.width, resolution.height));
 }
 
-// Copies both eyes and submits the pair, as the Injector does once per Stereo Presentation pair.
 void SubmitPair(fs25vr::FakeTrackedHeadset& headset) {
     ASSERT_TRUE(headset.manager->CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(headset.manager->CopyBackBufferToEye(1, nullptr));
     ASSERT_TRUE(headset.manager->SubmitFramePair());
 }
 
-// Redirects the game log to a temp file while a test runs and reads back the lines containing a needle.
 class LogCapture {
 public:
     LogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_fov_overscan_log_test.log") {
@@ -71,7 +62,7 @@ private:
     std::filesystem::path m_path;
 };
 
-} // namespace
+}
 
 class FovOverscanTest : public CompanionModTest, public ::testing::WithParamInterface<RenderResolution> {};
 
@@ -107,7 +98,6 @@ TEST_P(FovOverscanTest, AnOverscanSetBetweenTheTwoEyesCopiesLeavesThatPairOnTheF
     ASSERT_EQ(headset.SubmittedViews().size(), 2u);
     const XrFovf base[2] = { headset.SubmittedViews()[0].fov, headset.SubmittedViews()[1].fov };
 
-    // The pair begins with the first eye's copy; the player types the command before the second eye's copy.
     ASSERT_TRUE(headset.manager->CopyBackBufferToEye(0, nullptr));
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setFovOverscan(10)", "=setOverscanMidPair"), 0);
     ASSERT_TRUE(headset.manager->CopyBackBufferToEye(1, nullptr));
@@ -150,11 +140,8 @@ TEST_P(FovOverscanTest, VRBridgePublishesTheWidenedRenderedFovAndKeepsReportingT
 
 INSTANTIATE_TEST_SUITE_P(RenderResolutions, FovOverscanTest, ::testing::Values(kSquarish, kWidescreen));
 
-// The Companion Mod hands the engine camera the vertical FOV VRBridge publishes, so with an overscan set the camera and
-// the compositor must still agree, in either Stereo Presentation Mode.
 class FovOverscanCameraTest : public CompanionModTest {
 protected:
-    // Loads the Companion Mod over `bridge` with a vehicle cab camera (node 301) as the engine's camera.
     void LoadMod(fs25vr::VRBridge& bridge, fs25vr::VRRenderingMode mode) {
         bridge.SetRenderingMode(mode);
         ASSERT_TRUE(bridge.Inject(L));
@@ -167,7 +154,6 @@ protected:
         )luau", "=setupCamera"), 0);
     }
 
-    // The FOV the engine camera is given for one eye's camera update.
     double CameraFovYForEye(fs25vr::VRBridge& bridge, uint32_t eye) {
         if (bridge.GetRenderingMode() == fs25vr::VRRenderingMode::SequentialDualPass) {
             bridge.SetSubPassIndex(eye);
@@ -179,8 +165,6 @@ protected:
         return fov == "nil" ? 0.0 : std::stod(fov);
     }
 
-    // Renders one pair the way the Injector drives it (frame begins, one camera update per eye, both copies, submit)
-    // and returns each eye's camera FOV.
     void RenderPair(fs25vr::FakeTrackedHeadset& headset, fs25vr::VRBridge& bridge, double (&cameraFovY)[2]) {
         ASSERT_TRUE(headset.manager->BeginFrame());
         for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -227,7 +211,6 @@ TEST_P(FovOverscanCameraModeTest, AnOverscanSetBetweenTheEyesCameraUpdatesLeaves
     double base[2] = {};
     RenderPair(headset, bridge, base);
 
-    // The first eye of the next pair is rendered, then the player types the command, then the second eye.
     ASSERT_TRUE(headset.manager->BeginFrame());
     double pair[2] = {};
     pair[0] = CameraFovYForEye(bridge, 0);
@@ -270,7 +253,6 @@ TEST_F(FovOverscanCameraTest, WhileAMenuIsShownTheOverscanDoesNotReachTheCamera)
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     LoadMod(bridge, fs25vr::VRRenderingMode::AFR);
 
-    // As the Companion Mod's GUI poll shows a menu: its own flag and the bridge's.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion.isMenuVisible = true; VRBridge.setMenuVisible(true)", "=showMenu"), 0);
     ASSERT_TRUE(headset.manager->BeginFrame());
     const double withoutOverscan = CameraFovYForEye(bridge, 0);
@@ -282,16 +264,13 @@ TEST_F(FovOverscanCameraTest, WhileAMenuIsShownTheOverscanDoesNotReachTheCamera)
     EXPECT_NEAR(CameraFovYForEye(bridge, 0), withoutOverscan, 1e-6) << "the menu background is not widened";
     SubmitPair(headset);
 
-    // Closing the menu brings the stereoscopic view back with the overscan still set.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion.isMenuVisible = false; VRBridge.setMenuVisible(false)", "=closeMenu"), 0);
     ASSERT_TRUE(headset.manager->BeginFrame());
     EXPECT_NEAR(std::tan(CameraFovYForEye(bridge, 0) / 2.0) / std::tan(withoutOverscan / 2.0), 1.20, 1e-4);
 }
 
-// The console command and its VRBridge hand-over, run through a map load and unload as the game does.
 class FovOverscanCommandTest : public CompanionModTest {
 protected:
-    // Engine functions a map load needs, recording the console commands registered and removed.
     static constexpr const char* kMapLoadMocks = R"luau(
         _G.registeredCommands = {}
         _G.removedCommands = {}
@@ -471,9 +450,6 @@ TEST_F(CompanionModTest, TheRenderedFovLineNamesTheOverscanAndIsWrittenWheneverI
     EXPECT_EQ(log.Count("OpenXrManager: Rendered FOV"), linesAtZero + 1) << "an unchanged rendered FOV is not logged again";
 }
 
-// The saved FOV Overscan (spec #221, ticket #224): the command writes it to settings.xml, and a map load reads it back and
-// sends it to VRBridge so the stereoscopic view is rendered with it. The settings file is a store the mocks write to and read
-// from, so a value saved in one map load is what the next one finds.
 class FovOverscanSavedTest : public FovOverscanCommandTest {
 protected:
     static constexpr const char* kSettingsStoreMocks = R"luau(
@@ -492,7 +468,6 @@ protected:
         _G.saveXMLFile = function() _G.settingsSaves = _G.settingsSaves + 1; return true end
     )luau";
 
-    // Loads the Companion Mod and a map over the settings file that is the store.
     void LoadModAndMapOverSettingsStore(fs25vr::VRBridge& bridge) {
         ASSERT_TRUE(bridge.Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -542,8 +517,6 @@ TEST_F(FovOverscanSavedTest, AValueSetAndSavedInOneMapLoadIsTheSubmittedOverscan
 
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:consoleCommandSetFovOverscan('8')", "=set"), 0);
 
-    // Leave to the main menu, then start the game again (a fresh Companion Mod) and load another savegame; the only thing
-    // that carries the value across is settings.xml.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:deleteMap()
         assert(VRBridge.getFovOverscan() == 0, "a map unload puts VRBridge back to 0")

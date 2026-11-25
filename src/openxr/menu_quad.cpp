@@ -12,7 +12,6 @@ float MenuQuad::ClampDistance(float distance) {
 void MenuQuad::SetDistance(float distance) {
     distance = ClampDistance(distance);
     if (m_hasPose) {
-        // Along the quad's own -Z, the way the player looks at it, by the change in distance.
         const Quaternion facing(m_pose.orientation.x, m_pose.orientation.y,
                                 m_pose.orientation.z, m_pose.orientation.w);
         const Vector3 shift = RotateVectorByQuaternion(facing, Vector3(0.0f, 0.0f, m_distance - distance));
@@ -25,7 +24,6 @@ void MenuQuad::SetDistance(float distance) {
 
 XrPosef MenuQuad::PoseFromHeadPose(const HeadPose& headPose, float distance) {
     float yaw = headPose.rotation.yaw;
-    // Fallback: if yaw Euler is 0 but orientation quaternion is non-identity, extract yaw from quaternion
     if (std::abs(yaw) < 1e-6f && (std::abs(headPose.orientation.x) > 1e-6f ||
                                  std::abs(headPose.orientation.y) > 1e-6f ||
                                  std::abs(headPose.orientation.z) > 1e-6f ||
@@ -41,7 +39,7 @@ XrPosef MenuQuad::PoseFromHeadPose(const HeadPose& headPose, float distance) {
 
     XrPosef pose{};
     pose.position.x = headPose.position.x + rotatedOffset.x;
-    pose.position.y = headPose.position.y; // Decouple pitch/roll: virtual screen remains at eye level
+    pose.position.y = headPose.position.y;
     pose.position.z = headPose.position.z + rotatedOffset.z;
 
     pose.orientation.x = qYaw.x;
@@ -55,9 +53,6 @@ XrPosef MenuQuad::PoseFromHeadPose(const HeadPose& headPose, float distance) {
 void MenuQuad::AlignToHeadPose(const HeadPose& head) {
     m_pose = PoseFromHeadPose(head, m_distance);
     m_hasPose = true;
-    // The first menu frame of a session usually has no head pose yet (the frame is not rendered, or
-    // the runtime is not tracking): the quad then sits at the local space origin, which can be far
-    // below the eyes, until the head is tracked.
     m_awaitsHead = !head.isValid;
     m_awaitsHeadAfter = 0;
 }
@@ -102,7 +97,6 @@ PanelHit MenuQuad::RayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadS
     if (!(length > 1e-6f)) {
         return miss;
     }
-    // Into the quad's own frame, where the panel is the z = 0 plane facing +Z.
     const Quaternion quadToWorld(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
     const Quaternion worldToQuad(-quadToWorld.x, -quadToWorld.y, -quadToWorld.z, quadToWorld.w);
     const Vector3 offset(rayOrigin.x - quadPose.position.x, rayOrigin.y - quadPose.position.y, rayOrigin.z - quadPose.position.z);
@@ -110,7 +104,6 @@ PanelHit MenuQuad::RayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadS
     const Vector3 worldDir(rayDirection.x / length, rayDirection.y / length, rayDirection.z / length);
     const Vector3 dir = RotateVectorByQuaternion(worldToQuad, worldDir);
 
-    // The panel is only visible from its front: the ray must start in front of it and head into it.
     constexpr float kMinApproach = 1e-6f;
     if (dir.z > -kMinApproach || origin.z <= 0.0f) {
         return miss;
@@ -131,4 +124,4 @@ PanelHit MenuQuad::RayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadS
     return hit;
 }
 
-}  // namespace fs25vr
+}

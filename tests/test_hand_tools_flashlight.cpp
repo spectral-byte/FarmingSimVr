@@ -1,13 +1,3 @@
-// Hand Tools, the flashlight (ADR-0029), seen from outside: the real Companion Mod runs against the
-// real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool and its
-// flashlight chunk hand_tool_flashlight.luau). A test moves the fake Motion Controllers and the game clock, drives frames the
-// way the game would (each frame the game's targeter and the flashlight's onUpdate run, then the Companion Mod's update) and
-// asserts what the player or the game would see: where the flashlight and its light node are in the world, how often the
-// flashlight's own switch was called, what XInput answers for the Virtual Gamepad's trigger, the targeter's ray, the log.
-// Never the mod's own state. Prior art: test_hand_tools_lance.cpp (placement), test_hand_tools_trigger.cpp (the trigger and
-// the held-input rule) and test_hand_tools_look_ray.cpp (the targeter's ray, giving up when a wrapped function is not as
-// expected).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <string>
@@ -16,14 +6,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers. A ray is { x, y, z, dirX, dirY, dirZ } in the world.
-//   isInTheHand(tool, which)       the tool hangs below the Virtual Hand
-//   isWhereTheGamePutsIt(tool)     the tool is where the game's attachToolToCamera put it
-//   beam()                         where the flashlight's light node is and the way it shines
-//   lens()                         where the light leaves the flashlight's lens and the way it shines
-//   targeterRay()                  what the targeter cast in the last game frame
-//   headRay()                      the first person camera's ray, the game's own look ray
-//   sameRay(a, b) / apart(a, b) / rayText(r)
 constexpr const char* kFlashlightHelpers = R"luau(
     function _G.isInTheHand(tool, which) return isBelow(tool.rootNode, handHolder(which)) end
     function _G.isWhereTheGamePutsIt(tool)
@@ -50,15 +32,12 @@ constexpr const char* kFlashlightHelpers = R"luau(
     function _G.rayText(r) return r[1] and string.format("(%.3f %.3f %.3f) -> (%.3f %.3f %.3f)", table.unpack(r)) or "none" end
 )luau";
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsFlashlightTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string gameStubs;
 
-    // The mod started with a player on foot who has the game's flashlight class, the Virtual Gamepad on and the game clock set
-    // (the in-use timeout is on it). `variant` is how the game's HandToolFlashlight.onUpdate is.
     void Start(const char* variant = "ok") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         gameStubs = FlashlightGame(variant);
@@ -70,7 +49,6 @@ protected:
         SetGameTime(10000);
     }
 
-    // The flashlight in the right Tool Hand, the hand picked up with the trigger let go and the game's updates run.
     void StartWithFlashlightInTheRightHand() {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldFlashlight(L));
@@ -79,14 +57,12 @@ protected:
         ASSERT_EQ(EvalLua(L, "isInTheHand(flashlight, 'right')"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
     }
 
-    // What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
     XINPUT_GAMEPAD Pad() {
         XINPUT_STATE state{};
         EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
         return state.Gamepad;
     }
 
-    // The flashlight's own switch: how often it was called and whether the light is on.
     int Switches() { return static_cast<int>(Number(L, "#StubHandTool.flashlightCalls")); }
     bool On() { return EvalLua(L, "flashlight.spec_flashlight.isActive") == "true"; }
     bool PlayerThinksItIsOn() { return EvalLua(L, "foot.player.isFlashlightActive") == "true"; }
@@ -96,13 +72,11 @@ protected:
     bool BeamFromTheCamera() { return EvalLua(L, "sameRay(beam(), headRay())") == "true"; }
     std::string BeamAndLens() { return "the beam is " + EvalLua(L, "rayText(beam())") + ", the lens is " + EvalLua(L, "rayText(lens())"); }
 
-    // Both the aim and the grip pose of the hand set (the Virtual Hand follows the grip pose).
     void AimHand(uint32_t hand, float x, float y, float z, float pitch, float yaw) {
         headset.SetHandPose(hand, HandAt(x, y, z, pitch, yaw));
         headset.SetHandGripPose(hand, HandAt(x, y, z, pitch, yaw));
     }
 
-    // A game whose flashlight onUpdate is not what the wrap expects: the flashlight works as in the game and the log says so once.
     void ExpectTheGameHasItsWayWhen(const char* variant) {
         ASSERT_NO_FATAL_FAILURE(Start(variant));
         ASSERT_NO_FATAL_FAILURE(HoldFlashlight(L));
@@ -128,9 +102,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Placement ------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsFlashlightTest, TheFlashlightHeldOnFootHangsBelowTheRightVirtualHandAndFollowsItAcrossFrames) {
     ASSERT_NO_FATAL_FAILURE(Start());
@@ -160,7 +132,6 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, TheFlashlightHeldOnFootHangsBelowT
 TEST_F(VirtualGamepadHandToolsFlashlightTest, TheFlashlightIsWhereTheGamePutsItWhileTheToolHandIsSetDownOrUntrackedAndBackInTheHandWhenItIsUsedAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
 
-    // Set down: the Motion Controller lies still for longer than the in-use timeout.
     AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_TRUE(WhereTheGamePutsIt()) << "set down: the game's own attachToolToCamera put the flashlight in front of the view";
@@ -176,8 +147,7 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, TheFlashlightIsWhereTheGamePutsItW
     FRAMES(1);
     EXPECT_TRUE(InTheHand()) << "tracked again: back in the hand";
 
-    // Only the grip pose lost: the aim pose still works, but there is no Virtual Hand to hold it.
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), false);
     FRAMES(1);
     EXPECT_TRUE(WhereTheGamePutsIt());
 }
@@ -199,8 +169,6 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, ALeftMotionControllerPickedUpDoesN
     EXPECT_TRUE(InTheHand()) << "and with it on again the right hand has it";
 }
 
-// ---- The beam ---------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsFlashlightTest, TheLightNodeSitsAtTheFlashlightAndShinesAlongItAndFollowsTheHandNotTheCamera) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
 
@@ -208,7 +176,6 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, TheLightNodeSitsAtTheFlashlightAnd
     EXPECT_GT(Number(L, "apart(beam(), headRay())"), 0.2) << "and not at the camera: the hand is held away from the head";
     EXPECT_NEAR(Number(L, "beam()[4]^2 + beam()[5]^2 + beam()[6]^2"), 1.0, 1e-3);
 
-    // The hand moves and turns; the light follows it (the game places it in its update, the frame after the hand moved).
     ASSERT_EQ(RunLuauChunk(L, "_G.beamBefore = beam()", "=before"), 0);
     AimHand(kRight, 0.50f, 0.15f, -0.55f, 0.6f, 0.9f);
     FRAMES(2);
@@ -254,15 +221,11 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, TheBeamOfTheFlashlightInHandIsPlac
     EXPECT_EQ(EvalLua(L, "sameRay(beamOff, beam())"), "true") << "the same place with the light on";
 }
 
-// The game runs the mod's update once per AFR pair but renders each eye: a frame can be rendered after the player moved again
-// with no game update before it (the Virtual Hands are placed again for it). The light node, which the game's own update
-// places, has to ride with the hand in that frame too, or the beam lags behind the flashlight.
 TEST_F(VirtualGamepadHandToolsFlashlightTest, TheLightNodeIsCarriedAlongByAFrameRenderedWithoutAnUpdateAfterThePlayerMoved) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
     ASSERT_TRUE(BeamFromTheLens()) << BeamAndLens();
     ASSERT_EQ(RunLuauChunk(L, "_G.beamBefore = beam()", "=before"), 0);
 
-    // the second eye: the player moved and the camera followed, but no update ran
     ASSERT_EQ(RunLuauChunk(L, "setTranslation(foot.parent, 0.12, 0, 0.05); StubScene.updateCamera()", "=moveWithoutUpdate"), 0);
 
     EXPECT_TRUE(BeamFromTheLens()) << BeamAndLens();
@@ -288,8 +251,6 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, WithTheFlashlightInTheToolHandTheT
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "untracked: the head's ray";
 }
-
-// ---- The trigger: a press switches the flashlight ---------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsFlashlightTest, APressOfTheToolHandsTriggerSwitchesTheFlashlightOnceHoweverLongItIsHeldAndTheNextPressSwitchesItOff) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
@@ -381,16 +342,14 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, TheToolHandsTriggerReadsReleasedOn
     EXPECT_EQ(Pad().bRightTrigger, 0) << "and it still reads released while the flashlight is lit, not pulled";
 }
 
-// The held-input rule of every Virtual Gamepad use: an input already held when the use would begin keeps its binding until it
-// is let go, and the use does not act on it.
 TEST_F(VirtualGamepadHandToolsFlashlightTest, ATriggerAlreadyHeldWhenTheFlashlightComesIntoTheHandKeepsItsBindingAndSwitchesNothingUntilLetGoAndPulledAgain) {
     ASSERT_NO_FATAL_FAILURE(Start());
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for a binding, with no Hand Tool in the player's hands
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
-    ASSERT_NO_FATAL_FAILURE(HoldFlashlight(L));  // the player takes the flashlight
+    ASSERT_NO_FATAL_FAILURE(HoldFlashlight(L));
     FRAMES(3);
     ASSERT_TRUE(InTheHand());
     EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
@@ -457,7 +416,7 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, WithVrHandToolsOffTheTriggerIsTheP
 TEST_F(VirtualGamepadHandToolsFlashlightTest, WhenThePlayerPutsTheFlashlightAwayForAnUnsupportedHandToolTheTriggerIsThePadsAndSwitchesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(flashlight)", "=putAway"), 0);
-    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));  // the player takes another mod's tool instead
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));
     FRAMES(2);
 
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -465,8 +424,6 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, WhenThePlayerPutsTheFlashlightAway
     EXPECT_EQ(Pad().bRightTrigger, 255);
     EXPECT_EQ(Switches(), 0);
 }
-
-// ---- A game whose flashlight is not as expected -------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsFlashlightTest, WithTheFlashlightsOnUpdateMissingTheFlashlightWorksAsInTheGameAndTheLogHasOneWarning) {
     ExpectTheGameHasItsWayWhen("missing");
@@ -489,7 +446,6 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, WithoutTheGamesFlashlightClassAtAl
     EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 0);
 }
 
-// The wrap is on the class while the map is loaded and gone with it; another mod's later wrap is never undone.
 TEST_F(VirtualGamepadHandToolsFlashlightTest, UnloadingTheMapGivesTheFlashlightsOnUpdateBackAndAnotherModsLaterWrapIsNeverUndone) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
     ASSERT_EQ(EvalLua(L, "HandToolFlashlight.onUpdate == StubHandTool.originalFlashlightOnUpdate"), "false") << "wrapped while the map is loaded";

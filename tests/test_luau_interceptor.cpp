@@ -34,7 +34,7 @@ int RunLuauString(lua_State* L, const std::string& code) {
     return lua_pcall(L, 0, 0, 0);
 }
 
-} // anonymous namespace
+}
 
 class LuauInterceptorTest : public ::testing::Test {
 protected:
@@ -44,7 +44,6 @@ protected:
 
     void SetUp() override {
         s_queryCallCount = 0;
-        // Only a runtime-owned interceptor installs the detour, and the entry point resolves it through the runtime.
         bridge = std::make_shared<fs25vr::VRBridge>(nullptr, nullptr);
         fs25vr::InjectorRuntime::Dependencies deps;
         deps.vrBridge = bridge;
@@ -52,7 +51,6 @@ protected:
         L = luaL_newstate();
         luaL_openlibs(L);
 
-        // Register the simulated engine head tracking query
         lua_pushcclosure(L, &Engine_isHeadTrackingAvailable, "isHeadTrackingAvailable", 0);
         lua_setglobal(L, "isHeadTrackingAvailable");
     }
@@ -73,13 +71,10 @@ TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
     EXPECT_FALSE(interceptor.IsIntercepted());
     EXPECT_EQ(interceptor.GetActiveState(), nullptr);
 
-    // Before query, VRBridge does not exist
     EXPECT_EQ(RunLuauString(L, "assert(VRBridge == nil)"), 0) << "VRBridge should not exist yet";
 
-    // Attach interceptor detour to the query function
     ASSERT_TRUE(interceptor.Attach(reinterpret_cast<void*>(&Engine_isHeadTrackingAvailable)));
 
-    // Execute Luau script calling the query
     std::string script = R"(
         local available = isHeadTrackingAvailable()
         assert(available == true, "Query must return true")
@@ -97,7 +92,6 @@ TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
     EXPECT_EQ(interceptor.GetActiveState(), L);
     EXPECT_EQ(s_queryCallCount, 1);
 
-    // Subsequent call should pass through and retain VRBridge without issue
     int status2 = RunLuauString(L, "local a = isHeadTrackingAvailable(); assert(a == true)");
     EXPECT_EQ(status2, 0);
     EXPECT_EQ(s_queryCallCount, 2);
@@ -137,14 +131,12 @@ TEST_F(LuauInterceptorTest, DetourResolvesTheInterceptorThatInstalledItNotTheNew
 
     EXPECT_EQ(RunLuauString(L, "assert(isHeadTrackingAvailable() == true)"), 0);
 
-    // The query reached the real function through the installer's original, not a null one.
     EXPECT_EQ(s_queryCallCount, 1);
     EXPECT_TRUE(installer.IsIntercepted());
     EXPECT_FALSE(newerRuntime.GetLuauInterceptor().IsIntercepted());
 }
 
 TEST_F(LuauInterceptorTest, StandaloneInterceptorInstallsNoDetour) {
-    // No runtime owns it, so the hook could not find its original: Attach must refuse.
     fs25vr::LuauInterceptor standalone(bridge);
     EXPECT_FALSE(standalone.Attach(reinterpret_cast<void*>(&Engine_isHeadTrackingAvailable)));
     EXPECT_FALSE(standalone.GetDetour().IsInstalled());
@@ -154,14 +146,12 @@ TEST_F(LuauInterceptorTest, StandaloneInterceptorInstallsNoDetour) {
 }
 
 TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesPairedFunctionAcrossRegisters) {
-    // Construct mock buffer (text + rdata)
     std::vector<uint8_t> mockBuffer(1024, 0x90);
     const size_t strOffset = 0x200;
     const char strData[] = "isHeadTrackingAvailable";
     std::memcpy(&mockBuffer[strOffset], strData, sizeof(strData));
     const uint8_t* mockString = &mockBuffer[strOffset];
 
-    // 1. Mock function entry at offset 0x20
     const size_t fnOffset = 0x20;
     mockBuffer[fnOffset] = 0x48;     // sub rsp, 0x28
     mockBuffer[fnOffset + 1] = 0x83;
@@ -192,7 +182,6 @@ TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesPairedFunctionAcrossR
 }
 
 TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesFunctionWhenStringInRdxAndFuncInR8) {
-    // Construct mock buffer where string is in RDX and function is in R8
     std::vector<uint8_t> mockBuffer(1024, 0x90);
     const size_t strOffset = 0x200;
     const char strData[] = "isHeadTrackingAvailable";
@@ -230,7 +219,6 @@ TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesFunctionWhenStringInR
 
 namespace {
 
-// Lays the NUL-terminated markers out back to back, as they sit in a host .rdata section.
 std::vector<uint8_t> MakeRdata(const std::vector<std::string>& markers) {
     std::vector<uint8_t> rdata(64, 0);
     for (const std::string& marker : markers) {
@@ -245,10 +233,6 @@ std::vector<std::string> AllFingerprintMarkers() {
     return std::vector<std::string>(std::begin(fs25vr::kHostLuauFingerprint), std::end(fs25vr::kHostLuauFingerprint));
 }
 
-// An executable stand-in for the host module, laid out as a minimal PE image: headers, then a .text section
-// holding a query function plus the registration code that pairs it with its name, then a .rdata section
-// holding that name followed by the given strings. Executable so the detour can really be installed when the
-// guard lets AttachToHostSections through; a PE image so the whole module can be handed to AttachToEngine.
 class MockHost {
 public:
     static constexpr size_t kSize = 0x2000;
@@ -319,7 +303,7 @@ private:
     uint8_t* m_base = nullptr;
 };
 
-} // anonymous namespace
+}
 
 TEST_F(LuauInterceptorTest, AttachToHostSectionsRefusesHostWithoutTheLuauFingerprint) {
     MockHost host({});
@@ -331,7 +315,6 @@ TEST_F(LuauInterceptorTest, AttachToHostSectionsRefusesHostWithoutTheLuauFingerp
 }
 
 TEST_F(LuauInterceptorTest, AttachToHostSectionsRefusesHostWhoseVmMarkersAreMissing) {
-    // Front end matches 0.662 but the VM half of the fingerprint is absent: still a mismatch.
     std::vector<std::string> frontEndOnly = AllFingerprintMarkers();
     frontEndOnly.resize(5);
     ASSERT_EQ(frontEndOnly.back(), "LuauAllowFragmentParsing");
@@ -344,7 +327,6 @@ TEST_F(LuauInterceptorTest, AttachToHostSectionsRefusesHostWhoseVmMarkersAreMiss
 }
 
 TEST_F(LuauInterceptorTest, AttachToHostSectionsAttachesToMatchingHost) {
-    // Control for the refusal tests: the same mock host, plus the fingerprint, does get the detour.
     MockHost host(AllFingerprintMarkers());
     ASSERT_TRUE(host.Valid());
     auto& interceptor = runtime->GetLuauInterceptor();
@@ -394,14 +376,13 @@ TEST(LuauVersionGuardTest, MarkerWithTrailingCharactersDoesNotCount) {
 
 TEST(LuauVersionGuardTest, MarkerAtTheStartOfTheSectionCounts) {
     std::vector<uint8_t> rdata = MakeRdata(AllFingerprintMarkers());
-    rdata.erase(rdata.begin(), rdata.begin() + 64);  // drop the leading padding so a marker sits at offset 0
+    rdata.erase(rdata.begin(), rdata.begin() + 64);
     ASSERT_NE(rdata[0], 0);
 
     EXPECT_TRUE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), rdata.size()));
 }
 
 TEST(LuauVersionGuardTest, MarkerCutOffByTheSectionEndDoesNotCount) {
-    // The last marker's terminating NUL falls just outside the section.
     std::vector<uint8_t> rdata = MakeRdata(AllFingerprintMarkers());
     const size_t sectionSize = rdata.size() - 8 - 1;
 
@@ -416,14 +397,10 @@ TEST(LuauVersionGuardTest, EmptySectionIsAMismatch) {
 }
 
 TEST(LuauVersionGuardTest, GuardVersionMatchesTheLinkedLuauTag) {
-    // FS25VR_LUAU_TAG is CMakeLists.txt's GIT_TAG: bumping it without updating the guard fails here.
     EXPECT_STREQ(fs25vr::kExpectedLuauVersion, FS25VR_LUAU_TAG);
 }
 
 TEST(InjectorVersionPinTest, BuildVersionIsTheVersionInModDesc) {
-    // The Injector and the Companion Mod are released together, so the Companion Mod's modDesc.xml is where the
-    // release version lives. The build copies it to the Injector (its version resource and kInjectorVersion):
-    // a build whose copy differs from the file fails here.
     std::ifstream modDescFile(std::filesystem::path(PROJECT_ROOT_DIR) / "mods" / "FS25_VRCompanion" / "modDesc.xml");
     ASSERT_TRUE(modDescFile.is_open());
     const std::string modDesc((std::istreambuf_iterator<char>(modDescFile)), std::istreambuf_iterator<char>());
@@ -433,12 +410,8 @@ TEST(InjectorVersionPinTest, BuildVersionIsTheVersionInModDesc) {
     EXPECT_EQ(std::string(fs25vr::kInjectorVersion), version[1].str());
 }
 
-// The composition root names the module the interceptor scans (Dependencies::hostModule). A runtime built by a
-// test names none, so nothing is scanned and the test process is never hooked.
-
 namespace {
 
-// Redirects the game log to a temp file while a test runs and reads it back.
 class HostModuleLogCapture {
 public:
     HostModuleLogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_host_module_test.log") {
@@ -457,7 +430,7 @@ private:
     std::filesystem::path m_path;
 };
 
-} // anonymous namespace
+}
 
 TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleInstallsNoDetourAndStandsBy) {
     HostModuleLogCapture log;
@@ -480,7 +453,6 @@ TEST(HostModuleTest, RuntimeGivenAHostModuleWithTheFingerprintAndTheQueryAttache
 }
 
 TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleLeavesASuppliedInterceptorsHostModuleAlone) {
-    // Empty means do nothing: a caller that configured its own interceptor keeps what it configured.
     MockHost host(AllFingerprintMarkers());
     ASSERT_TRUE(host.Valid());
     auto interceptor = std::make_shared<fs25vr::LuauInterceptor>(nullptr);

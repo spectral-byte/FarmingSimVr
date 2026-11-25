@@ -1,10 +1,3 @@
-// The Pointer Ray and Interactive Control Click Points (spec #71), seen from outside: the
-// real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with a stand-in for the
-// Interactive Control mod (companion_mod_stubs.h). The test moves the fake Motion Controllers and the
-// game clock, drives frames the way the game would (camera update, Interactive Control's own update,
-// the Companion Mod's update) and asserts which Click Point Interactive Control executed, what the
-// ray drew, and what the log says.
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 #include <cmath>
@@ -41,8 +34,6 @@ FakeOpenXrControllers::Inputs Trigger(float value) {
     return inputs;
 }
 
-// The engine globals the Companion Mod draws the Pointer Ray with. A pass is the camera path the game runs before a frame
-// is rendered, which draws it.
 constexpr const char* kDrawStubs = R"luau(
     _G.debugLines, _G.debugPoints = {}, {}
     _G.drawDebugLine = function(x0, y0, z0, r0, g0, b0, x1, y1, z1, r1, g1, b1, solid)
@@ -70,7 +61,6 @@ constexpr const char* kConsoleStubs = R"luau(
     end
 )luau";
 
-// Stubs of the engine's XML settings API that remember what was saved, so a later session can load it.
 constexpr const char* kXmlStubs = R"luau(
     _G.savedXml = _G.savedXml or {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -103,8 +93,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const char* icVariant = "o
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
 }
 
-// What the game does each frame before the Companion Mod's update: the camera update that places the
-// head in the world, and Interactive Control's own update of its Click Points.
 void PreFrame(lua_State* L) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         if StubScene.updateCamera then StubScene.updateCamera() end
@@ -112,18 +100,15 @@ void PreFrame(lua_State* L) {
     )luau", "=preFrame"), 0);
 }
 
-// How many frames apart the vehicle's update ticks come, on which Interactive Control updates its outdoor Click Points.
 int OutdoorTickFrames(lua_State* L) {
     return std::stoi(EvalLua(L, "StubIC.outdoorTickFrames"));
 }
 
-} // namespace
+}
 
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The Pointer Hand: picks the Motion Controller up (it moves) and aims it along the given pose: the hand is held so that
-// its index fingertip is at the given position and its finger runs straight ahead of the pose (SetHandPointing).
 #define PICK_UP_AND_AIM(hand, x, y, z) \
     do { \
         SetGameTime(10000); \
@@ -177,19 +162,16 @@ TEST_F(CompanionModTest, VrPointerDiagnosticsPrintsEachHandsGripPoseNextToItsAim
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
 
-    // Left: aim and grip are different places, both tracked. Right: the controller is on, only its grip
-    // pose is lost.
     headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f));
     headset.SetHandGripPose(kLeft, HandAt(-0.32f, 1.05f, -0.25f));
     headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
-    headset.SetHandGripPose(kRight, HandAt(0.28f, 1.15f, -0.30f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.28f, 1.15f, -0.30f), false);
     FRAMES(1);
     std::string report = EvalLua(L, "runCommand('vrPointerDiagnostics')");
     EXPECT_NE(report.find("Left hand: aim (-0.30, 1.10, -0.35) tracked, grip (-0.32, 1.05, -0.25) tracked"), std::string::npos) << report;
     EXPECT_NE(report.find("Right hand: aim (0.30, 1.20, -0.40) tracked, grip not tracked"), std::string::npos) << report;
 
-    // A controller that is off has neither.
-    headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f), /*tracked=*/false);
+    headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f), false);
     FRAMES(1);
     report = EvalLua(L, "runCommand('vrPointerDiagnostics')");
     EXPECT_NE(report.find("Right hand: aim not tracked, grip not tracked"), std::string::npos) << report;
@@ -197,8 +179,6 @@ TEST_F(CompanionModTest, VrPointerDiagnosticsPrintsEachHandsGripPoseNextToItsAim
 }
 
 TEST_F(CompanionModTest, ThePointerRayIsPlacedWhileTheEnginesHeadTrackingReadsOff) {
-    // In the game isHeadTrackingActive() reads false (the engine's own setting) while the mod places the head
-    // itself, so it must not stop the ray (seen in the headset: "the head is not placed in the world").
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -262,7 +242,6 @@ TEST_F(CompanionModTest, VrPointerConeChangesTheConeAndIsSaved) {
     EXPECT_EQ(EvalLua(L, "VRCompanion.pointerConeDegrees"), "10") << "an invalid value changes nothing";
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerCone')").find("10"), std::string::npos) << "without a value it reports the current cone";
 
-    // A later session loads what was saved.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:saveConfiguration()", "=save"), 0);
     EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.pointerConeDegrees']"), "10");
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion.pointerConeDegrees = VRCompanion.DEFAULT_POINTER_CONE_DEGREES", "=forget"), 0);
@@ -281,11 +260,9 @@ TEST_F(CompanionModTest, OnePullClicksOnceHoldingKeepsOnlyAnAnalogClickPointActi
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     FRAMES(2);
 
-    // A pull held for ten frames clicks the switch once, however long it is held.
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(10);
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
-    // Letting go and pulling again is a second click.
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -294,7 +271,6 @@ TEST_F(CompanionModTest, OnePullClicksOnceHoldingKeepsOnlyAnAnalogClickPointActi
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
 
-    // The analog Click Point keeps acting for as long as the trigger is held.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false; StubIC.points[2].inRange = true; StubIC.executed = {}", "=useLever"), 0);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
@@ -310,8 +286,6 @@ TEST_F(CompanionModTest, AClickPointInteractiveControlWillNotTestIsNeverSelected
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
-    // Interactive Control tests a static outdoor Click Point that faces away from the camera with no
-    // mouse position, so it can never be clicked. It is nearest the ray's centre here.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         StubIC.addPoint('away', -0.3, 1.5, 2.3, { facesAway = true })
         StubIC.addPoint('threeDegrees', -0.3 + 0.1048, 1.5, 2.3)
@@ -326,7 +300,6 @@ TEST_F(CompanionModTest, AClickPointInteractiveControlWillNotTestIsNeverSelected
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
 
-    // With only the Click Point that faces away in the cone nothing is selected, clicked or drawn.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points[2].inRange = false; StubIC.executed = {}", "=hideSecond"), 0);
     FRAMES(3);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil");
@@ -347,7 +320,7 @@ TEST_F(CompanionModTest, ATriggerThatRestsHalfWayNeitherClicksNorStopsAHoldFlick
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "half-way is not a pull";
     headset.SetHandInputs(kRight, Trigger(0.7f));
     FRAMES(1);
-    headset.SetHandInputs(kRight, Trigger(0.5f));  // wobbling between 0.4 and 0.6 while held
+    headset.SetHandInputs(kRight, Trigger(0.5f));
     FRAMES(1);
     headset.SetHandInputs(kRight, Trigger(0.7f));
     FRAMES(1);
@@ -362,7 +335,7 @@ TEST_F(CompanionModTest, AClickDoesNotHappenWhenTheTriggerWasAlreadyDownBeforeTh
     SetGameTime(10000);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
-    FRAMES(2);  // trigger held, Motion Controller still: not in use, nothing to click with
+    FRAMES(2);
     headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(3);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
@@ -377,7 +350,6 @@ TEST_F(CompanionModTest, ThePointerRayIsALineFromTheFingertipWithADotWhereItLand
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     FRAMES(2);
 
-    // On a Click Point the ray ends on it.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         drawPass()
         assert(#debugLines == 1 and #debugPoints == 1, "one line and one dot")
@@ -387,8 +359,7 @@ TEST_F(CompanionModTest, ThePointerRayIsALineFromTheFingertipWithADotWhereItLand
         assert(math.abs(dot.x + 0.3) < 1e-4 and math.abs(dot.z - 2.3) < 1e-4, "the dot is at the end")
     )luau", "=drawOnClickPoint"), 0);
 
-    // Aimed past it, the ray runs on a fixed length along the aim.
-    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f, 0.0f, 0.5f));  // turned 0.5 rad
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f, 0.0f, 0.5f));
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         drawPass()
@@ -418,7 +389,7 @@ TEST_F(CompanionModTest, ThePointerRayIsHiddenWithoutActiveClickPointsWithoutAPo
     EXPECT_EQ(drawn(), "2") << "Pointer Hand in use and a Click Point to hit";
 
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false", "=outOfRange"), 0);
-    FRAMES(4);  // Interactive Control deactivates the Click Point; the ray has nothing to hit
+    FRAMES(4);
     EXPECT_EQ(drawn(), "0") << "no active Click Points";
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = true", "=inRange"), 0);
     FRAMES(2);
@@ -431,7 +402,7 @@ TEST_F(CompanionModTest, ThePointerRayIsHiddenWithoutActiveClickPointsWithoutAPo
     FRAMES(1);
     EXPECT_EQ(drawn(), "2") << "back when tracking returns while the hand is still in use";
 
-    AdvanceGameTime(3100);  // the Motion Controller lies still for more than 3 s
+    AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
     EXPECT_EQ(drawn(), "0") << "a Motion Controller left lying still has no ray";
@@ -476,9 +447,6 @@ TEST_F(CompanionModTest, ThePointerRayStartsAtTheFingertipWhereverTheCabStandsAn
     )luau", "=originAndDirection"), 0);
 }
 
-// The game renders some frames with no update before them (Sequential Dual-Pass's second pass), after the cab moved again:
-// the camera path draws the ray for each frame from where the head is then, so it rides with the cab instead of a copy
-// lagging behind in one eye.
 TEST_F(CompanionModTest, ThePointerRayRidesWithTheCabInAFrameRenderedWithoutAnUpdate) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -521,8 +489,6 @@ TEST_F(CompanionModTest, ThePointerRayStaysOnTheFingerAfterASnapTurnAndTheRecent
     PICK_UP_AND_AIM(kRight, 0.5f, 0.1f, -0.3f);
     FRAMES(2);
 
-    // What must not change while the hand and head are held still is the ray's origin (the fingertip) and direction in
-    // the head's own frame (the Cyclopean Audio Listener Node is the head in the world).
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local function inverseRotate(qx, qy, qz, qw, x, y, z)
             qx, qy, qz = -qx, -qy, -qz
@@ -549,7 +515,6 @@ TEST_F(CompanionModTest, ThePointerRayStaysOnTheFingerAfterASnapTurnAndTheRecent
             string.format("hand offset in the head frame %.3f %.3f %.3f", before[1], before[2], before[3]))
     )luau", "=baseline"), 0);
 
-    // Snap Turn: the cab view turns, the ray turns with the hand.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.worldBefore = { debugLines[1].x0, debugLines[1].z0 }
         assert(VRCompanion:snapTurnRight(nil, 20000) == true, "snap turn happened")
@@ -561,7 +526,6 @@ TEST_F(CompanionModTest, ThePointerRayStaysOnTheFingerAfterASnapTurnAndTheRecent
             "the hand moved in the world with the turn")
     )luau", "=afterSnapTurn"), 0);
 
-    // The Recenter Action moves the head and the hand in tracking space together; the ray follows the finger.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenter"), 0);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "sameAs(handInHeadFrame(), before)", "=afterRecenter"), 0);
@@ -613,7 +577,6 @@ TEST_F(CompanionModTest, ThePointerRayLooksTheSameInBothPassesUnderSequentialDua
     PICK_UP_AND_AIM(kRight, 0.3f, -0.1f, -0.4f);
     FRAMES(2);
 
-    // One update per logical frame; the camera is placed and the ray drawn in each of the two passes.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local lines = {}
         for pass = 0, 1 do
@@ -709,8 +672,6 @@ TEST_F(CompanionModTest, ClickPointsOnAVehicleExteriorAndOnAPlacedObjectCanBeCli
         StubIC.points[1].inRange = false
         StubIC.addPoint('doorHandle', line.x0 + dx * 2, line.y0 + dy * 2, line.z0 + dz * 2, { outdoor = true })
     )luau", "=addExterior"), 0);
-    // Interactive Control looks at the door handle on the vehicle's update tick only: the first tick activates it, the next
-    // treats it as clickable.
     FRAMES(2 * OutdoorTickFrames(L));
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -727,15 +688,12 @@ TEST_F(CompanionModTest, ClickPointsOnAVehicleExteriorAndOnAPlacedObjectCanBeCli
         StubIC.points[2].inRange = false
         StubIC.addPoint('gateControl', line.x0 + dx * 5, line.y0 + dy * 5, line.z0 + dz * 5)
     )luau", "=addPlaced"), 0);
-    // The door handle goes out of range on the vehicle's next tick.
     FRAMES(2 * OutdoorTickFrames(L));
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "gateControl");
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "StubIC.executed[2]"), "gateControl");
 }
-
-// ---- Interactive Control missing, mismatched, or taking over from the mouse ----
 
 namespace {
 int CountWarnings() {
@@ -745,7 +703,7 @@ int CountWarnings() {
     }
     return count;
 }
-} // namespace
+}
 
 TEST_F(CompanionModTest, WithoutInteractiveControlTheModWarnsExactlyOnceAndDrawsNothing) {
     FakeTrackedHeadset headset;
@@ -753,7 +711,7 @@ TEST_F(CompanionModTest, WithoutInteractiveControlTheModWarnsExactlyOnceAndDraws
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, nullptr));
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     headset.SetHandInputs(kRight, Trigger(1.0f));
-    FRAMES(30);  // NextFrame fails the test if the update raises an error
+    FRAMES(30);
     EXPECT_EQ(CountWarnings(), 1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1") << "the Pointer Hand itself is unaffected";
     ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 0 and #debugPoints == 0)", "=nothingDrawn"), 0);
@@ -772,7 +730,7 @@ std::string InteractiveControlWarning(const std::string& reason) {
     return "[FS25_VR] [Warning] Interactive Control support disabled: " + reason
         + ". Motion Controllers cannot select Click Points; Interactive Control itself is unchanged.";
 }
-} // namespace
+}
 
 TEST_F(CompanionModTest, TheInteractiveControlWarningSaysTheModIsNotLoaded) {
     FakeTrackedHeadset headset;
@@ -857,7 +815,6 @@ TEST_F(CompanionModTest, TheMouseKeepsSelectingUntilThePointerHandIsInUseAndTake
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
-    // One Click Point under the desk mouse (screen 0.4, 0.6), far from where the ray will point.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         StubIC.addPoint('underMouse', 30, 1.5, 2.3, { screenX = 0.4, screenY = 0.6 })
         StubIC.mouseX, StubIC.mouseY = 0.4, 0.6
@@ -922,22 +879,12 @@ TEST_F(CompanionModTest, AClickPointInteractiveControlStoppedUpdatingIsNoLongerS
     FRAMES(3);
     ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 1, 'drawn while it updates')", "=whileUpdating"), 0);
 
-    // The vehicle is gone: Interactive Control no longer updates its Click Points, and they stay marked
-    // active, but nobody can click them any more. Interactive Control updates every Click Point it has at
-    // least every half second (those outside the cab only on the vehicle's tick), so one it has not updated
-    // for longer is gone.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points = {}", "=vehicleGone"), 0);
     FRAMES(40);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 0, 'hidden once nothing updates it'); assert(#StubIC.executed == 0)", "=afterwards"), 0);
 }
-
-// ---- Click Points outside the cab ----
-//
-// Interactive Control updates the Click Points in a cab every frame, from the vehicle's draw, but those on a vehicle's
-// exterior only on the vehicle's update tick, every few frames (StubIC.outdoorTickFrames). Between two ticks it does not
-// look at them, and the controller a pull executes is the one it took as clickable on the last tick.
 
 TEST_F(CompanionModTest, AClickPointOutsideTheCabStaysSelectedBetweenTheVehiclesTicksAndEveryPullClicksIt) {
     FakeTrackedHeadset headset;
@@ -952,7 +899,6 @@ TEST_F(CompanionModTest, AClickPointOutsideTheCabStaysSelectedBetweenTheVehicles
         ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle") << "frame " << frame << ": the ray stays on it";
     }
 
-    // Each pull clicks it once, whichever frame between two ticks it comes on.
     for (int pull = 1; pull <= tick; ++pull) {
         headset.SetHandInputs(kRight, Trigger(1.0f));
         FRAMES(1);
@@ -970,8 +916,6 @@ TEST_F(CompanionModTest, APullTheMomentTheRayLandsOnAClickPointOutsideTheCabClic
     const int tick = OutdoorTickFrames(L);
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     FRAMES(2);
-    // The door handle comes into range on the next frame's tick, where the ray points: Interactive Control activates it
-    // before the ray selects it, so it takes it as clickable only on its next tick.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true }); StubIC.framesToOutdoorTick = 1", "=comesIntoRange"), 0);
     FRAMES(1);
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -991,18 +935,15 @@ TEST_F(CompanionModTest, APullWaitingForTheVehiclesTickIsDroppedWhenTheRayLeaves
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     const int tick = OutdoorTickFrames(L);
-    // A switch in the cab 3 degrees off the ray's centre, which Interactive Control updates every frame.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('cabSwitch', -0.3 + 0.1048, 1.5, 2.3)", "=addSwitch"), 0);
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     FRAMES(2);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "cabSwitch");
 
-    // The door handle comes into range on the ray's centre, and the pull comes before the vehicle's next tick.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true }); StubIC.framesToOutdoorTick = 1", "=comesIntoRange"), 0);
     FRAMES(1);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
-    // The ray moves onto the switch and back before that tick: the pull was for the door handle, and it is not kept.
     headset.SetHandInputs(kRight, Trigger(0.0f));
     headset.SetHandPointing(kRight, HandAt(0.3f - 0.1048f, 0.0f, -0.3f));
     FRAMES(1);
@@ -1017,8 +958,6 @@ TEST_F(CompanionModTest, APullInteractiveControlCouldNotTakeForHalfASecondIsNotC
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     const int tick = OutdoorTickFrames(L);
-    // Interactive Control keeps the door handle active but runs no mouse test on it while it projects off the screen, so
-    // it never takes it as clickable.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true, offScreen = true })", "=addPoint"), 0);
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     FRAMES(2 * tick);
@@ -1028,7 +967,6 @@ TEST_F(CompanionModTest, APullInteractiveControlCouldNotTakeForHalfASecondIsNotC
     FRAMES(40);
     ASSERT_EQ(EvalLua(L, "#StubIC.executed"), "0");
 
-    // On the screen again, Interactive Control takes it as clickable on a tick; the pull from earlier is not clicked then.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].offScreen = false", "=onScreen"), 0);
     FRAMES(2 * tick);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
@@ -1038,14 +976,6 @@ TEST_F(CompanionModTest, APullInteractiveControlCouldNotTakeForHalfASecondIsNotC
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1") << "a new pull clicks it";
 }
 
-// ---- The Pointer Ray starts at the index fingertip of the Virtual Hand and runs along the finger ----
-//
-// The fingertip and the finger's direction are a fixed offset in the grip frame of each hand (the relaxed glove
-// finger, VRCompanion.VIRTUAL_HAND_POINTER), applied to the GRIP pose. The numbers below are written out here on
-// purpose, as the derivation scripts/derive_virtual_hand_pointer.py prints them for the left hand (metres, grip frame:
-// -Y runs toward the fingertips, -Z from the little finger toward the thumb, +X out of a left palm); the right hand is
-// the left with X negated. The tests move the grip pose and the aim pose to different places and turns, so a ray
-// that started at either of them could not pass.
 namespace {
 
 int CountLogLines(const std::string& text) {
@@ -1056,8 +986,6 @@ int CountLogLines(const std::string& text) {
     return count;
 }
 
-// A hand picked up: it moves a little, then holds an aim pose (turned by aimYaw) and a different grip pose (turned
-// by gripYaw), both in tracking space.
 #define PICK_UP_WITH_GRIP(hand, ax, ay, az, aimYaw, gx, gy, gz, gripYaw) \
     do { \
         SetGameTime(10000); \
@@ -1068,8 +996,6 @@ int CountLogLines(const std::string& text) {
         FRAMES(1); \
     } while (0)
 
-// In Lua: the ray origin and direction the worked example expects for a hand whose grip pose is at (gx, gy, gz) and
-// turned gripYaw, in the cab at the origin (tracking space -> world is a half turn about Y, 1.5 m up).
 constexpr const char* kFingerWorkedExample = R"luau(
     _G.LEFT_TIP, _G.LEFT_DIRECTION = { x = -0.0052, y = -0.0905, z = -0.0441 }, { x = 0.3349, y = -0.9232, z = -0.1885 }
     _G.RIGHT_TIP, _G.RIGHT_DIRECTION = { x = 0.0052, y = -0.0905, z = -0.0441 }, { x = -0.3349, y = -0.9232, z = -0.1885 }
@@ -1088,7 +1014,7 @@ constexpr const char* kFingerWorkedExample = R"luau(
     end
 )luau";
 
-} // namespace
+}
 
 TEST_F(CompanionModTest, ThePointerRayStartsAtTheIndexFingertipAndRunsAlongTheFingerOfTheRightHand) {
     FakeTrackedHeadset headset;
@@ -1097,7 +1023,6 @@ TEST_F(CompanionModTest, ThePointerRayStartsAtTheIndexFingertipAndRunsAlongTheFi
     ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
     ASSERT_EQ(RunLuauChunk(L, kFingerWorkedExample, "=fingerExample"), 0);
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', 0, 0, 0)", "=addPoint"), 0);
-    // The aim pose is somewhere else and turned another way than the grip pose.
     PICK_UP_WITH_GRIP(kRight, 0.30f, -0.20f, -0.40f, 0.2f, 0.25f, -0.10f, -0.20f, 0.5f);
     FRAMES(2);
 
@@ -1146,7 +1071,6 @@ TEST_F(CompanionModTest, WithTheFingerDirectionSwitchOffTheRayStartsAtTheFingert
         assertRay(VRCompanion:getPointerRay(), ex, ey, ez, dx, dy, dz, "right hand, aim direction")
     )luau", "=fingertipAimDirection"), 0);
 
-    // The one switch turns the finger direction back on.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION = true", "=followFinger"), 0);
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1162,12 +1086,11 @@ TEST_F(CompanionModTest, WhileTheGripPoseIsNotTrackedTheRayStartsAtTheAimPoseAsI
     ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
     ASSERT_EQ(RunLuauChunk(L, kFingerWorkedExample, "=fingerExample"), 0);
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', 0, 0, 0)", "=addPoint"), 0);
-    // A runtime that refuses the grip pose: the controller is on, only its grip pose is not tracked.
     SetGameTime(10000);
     headset.SetHandPose(kRight, HandAt(0.30f - 0.1f, -0.20f, -0.40f));
     FRAMES(1);
     headset.SetHandPose(kRight, HandAt(0.30f, -0.20f, -0.40f, 0.0f, 0.2f));
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f, 0.0f, 0.5f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f, 0.0f, 0.5f), false);
     FRAMES(2);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1180,8 +1103,7 @@ TEST_F(CompanionModTest, WhileTheGripPoseIsNotTrackedTheRayStartsAtTheAimPoseAsI
     EXPECT_EQ(CountLogLines("Pointer Ray: placed from the aim pose"), 1);
     EXPECT_EQ(CountLogLines("from the index finger"), 0);
 
-    // The grip pose comes back (a runtime that could not locate it for a moment): the ray moves to the finger.
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f, 0.0f, 0.5f), /*tracked=*/true);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f, 0.0f, 0.5f), true);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local ex, ey, ez, dx, dy, dz = expectedFingerRay(RIGHT_TIP, RIGHT_DIRECTION, 0.25, -0.10, -0.20, 0.5)

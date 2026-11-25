@@ -1,13 +1,3 @@
-// The Companion Mod's notifications in the game's language (ticket #292, spec #280): every blinking warning and in-game
-// notification the mod composes is looked up by a text key that modDesc.xml defines in English and German, and is today's
-// English text where the game has no text for the key. Console output and log lines stay English. Seen from outside: the
-// shipped Companion Mod is loaded in modDesc order, the game's texts are a stub g_i18n holding modDesc.xml's texts in one
-// language (as the game holds a mod's l10n), the commands are run as the console runs them, and the test asserts what the
-// game was asked to show and what the console and log.txt were given.
-//
-// The Seat Offset limit message is tested in test_seat_set.luau, with the scene it needs; the HUD load alert in
-// test_hud_load_alert.cpp and the spray can's marker type in test_hand_tools_spray_can_feedback.cpp.
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 #include <algorithm>
@@ -23,8 +13,6 @@
 
 namespace {
 
-// The text of a repo-relative file, found as the mod itself is found (ResolveProjectPath). A file that cannot be found or read
-// fails the test, so no check below passes over an empty file.
 std::string ReadProjectFile(const std::string& relativePath) {
     const std::filesystem::path path = ResolveProjectPath(relativePath);
     std::ifstream file;
@@ -45,7 +33,6 @@ struct ModText {
     std::string de;
 };
 
-// modDesc.xml's <l10n> texts by name, each with its English and German text ("" where a language is missing).
 std::map<std::string, ModText> ModDescTexts() {
     const std::string modDesc = ReadProjectFile("mods/FS25_VRCompanion/modDesc.xml");
     std::map<std::string, ModText> texts;
@@ -63,7 +50,6 @@ std::map<std::string, ModText> ModDescTexts() {
     return texts;
 }
 
-// The mod's action names (modDesc.xml <actions>): the engine shows the text input_<action> for each by convention.
 std::set<std::string> ModDescActions() {
     const std::string modDesc = ReadProjectFile("mods/FS25_VRCompanion/modDesc.xml");
     std::set<std::string> actions;
@@ -74,8 +60,6 @@ std::set<std::string> ModDescActions() {
     return actions;
 }
 
-// The text keys the mod's source names: string literals shaped as the mod's own keys (vr<Subsystem>_<name>) or as an action's
-// text (input_<ACTION>).
 std::set<std::string> KeysInModSource() {
     std::set<std::string> keys;
     const std::regex keyRe(R"re("((?:vr[A-Za-z0-9]*_[A-Za-z0-9_]+)|(?:input_[A-Z0-9_]+))")re");
@@ -97,8 +81,6 @@ std::set<std::string> KeysInModSource() {
 
 enum class Language { English, German };
 
-// A notification the mod shows: how to make the mod show it (Luau run against the loaded mod; the last notification shown is
-// the one asserted), and what the player reads in English and in German.
 struct Notification {
     std::string what;
     std::string chunk;
@@ -112,15 +94,12 @@ std::string Command(const std::string& name, const std::vector<std::string>& arg
     return chunk + ")";
 }
 
-// From the Hidden HUD (set with vrHudState 0, after `before`), the HUD Toggle Action pressed `presses` times: the last press's
-// notification is the one asserted.
 std::string CycleHud(int presses, const std::string& before = "") {
     std::string chunk = before + "\nrunCommand('vrHudState', '0')";
     for (int i = 0; i < presses; ++i) chunk += "\n_G.shown = {}\nVRCompanion:cycleHudState()";
     return chunk;
 }
 
-// In order: a fresh game runs them one after another.
 const std::vector<Notification>& Notifications() {
     static const std::vector<Notification> notifications = {
         { "Hand Tools off", Command("vrHandTools", { "off" }),
@@ -186,7 +165,6 @@ const std::vector<Notification>& Notifications() {
 
 class NotificationTextsTest : public CompanionModTest {
 protected:
-    // The game at map load, with the game's texts in the language and an Injector of the version (the build's by default).
     void StartGame(Language language, const std::string& injectorVersion = "") {
         bridge_ = injectorVersion.empty() ? std::make_unique<fs25vr::VRBridge>(nullptr, nullptr)
                                           : std::make_unique<fs25vr::VRBridge>(nullptr, nullptr, injectorVersion);
@@ -205,7 +183,6 @@ protected:
         )luau", "=missionAndMap"), 0);
     }
 
-    // The game's texts: modDesc.xml's in the language, as the game holds a mod's l10n.
     void UseGameTexts(Language language) {
         std::string fields;
         for (const auto& [name, text] : ModDescTexts()) {
@@ -216,8 +193,6 @@ protected:
         UseTexts(fields);
     }
 
-    // The game's texts in one language, as the game's I18N has them: hasText, and getText reading "Missing ..." for a missing
-    // key. Every key the mod asks for is recorded in askedKeys.
     void UseTexts(const std::string& fields) {
         const std::string chunk = "local texts = { " + fields + R"luau( }
             _G.askedKeys = {}
@@ -250,7 +225,6 @@ protected:
         return { list.begin(), list.end() };
     }
 
-    // What the player reads for the notification: the last text shown.
     std::string ShowNotification(const Notification& n) {
         EXPECT_EQ(RunLuauChunk(L, "_G.shown = {}; _G.reply = nil\n" + n.chunk, "=notify"), 0) << n.what;
         const std::vector<std::string> shown = Shown();
@@ -265,7 +239,7 @@ protected:
     std::unique_ptr<fs25vr::VRBridge> bridge_;
 };
 
-}  // namespace
+}
 
 TEST_F(NotificationTextsTest, UnderTheGamesEnglishTextsEachNotificationIsTodaysEnglishText) {
     ASSERT_NO_FATAL_FAILURE(StartGame(Language::English));
@@ -278,7 +252,7 @@ TEST_F(NotificationTextsTest, UnderTheGamesGermanTextsEachNotificationIsGerman) 
 
     const std::map<std::string, ModText> texts = ModDescTexts();
     for (const std::string& key : AskedKeys()) {
-        if (key.rfind("vr", 0) != 0) continue;  // the game's own texts
+        if (key.rfind("vr", 0) != 0) continue;
         const auto text = texts.find(key);
         EXPECT_TRUE(text != texts.end() && !text->second.en.empty() && !text->second.de.empty())
             << "the mod asked for " << key << ", which modDesc.xml does not define in English and German";

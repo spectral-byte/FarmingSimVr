@@ -1,8 +1,5 @@
 name: Release
 
-# Pushing a version tag (v1.2.0, or v1.2.0-pre.1 for a pre-release) builds and tests exactly as CI does
-# and then creates a DRAFT GitHub release holding the zip bundle, the Setup exe and the symbols zip.
-# The workflow never publishes: read the draft, write the notes and publish it by hand.
 on:
   push:
     tags: ['v*']
@@ -11,7 +8,6 @@ permissions:
   contents: read
 
 jobs:
-  # Fails before anything is built when the tag and the Companion Mod's version disagree.
   check-tag:
     runs-on: windows-latest
     timeout-minutes: 5
@@ -27,7 +23,6 @@ jobs:
         shell: pwsh
         run: scripts/check_release_tag.ps1 -Tag $env:GITHUB_REF_NAME
 
-  # The same steps CI runs on every change (configure, build, both test runs, package, Installer test).
   build-and-test:
     needs: check-tag
     uses: ./.github/workflows/build-and-test.yml
@@ -36,7 +31,6 @@ jobs:
     needs: [check-tag, build-and-test]
     runs-on: windows-latest
     timeout-minutes: 10
-    # The only write access to the repository in any workflow.
     permissions:
       contents: write
     env:
@@ -52,8 +46,6 @@ jobs:
           path: built
           merge-multiple: true
 
-      # Packaging names the assets after the Companion Mod's four-part version (FS25_VR_v1.2.0.0.zip);
-      # releases drop its last .0 (FS25_VR_v1.2.0.zip), which is what the tag names.
       - name: Name the assets for the release
         shell: pwsh
         run: |

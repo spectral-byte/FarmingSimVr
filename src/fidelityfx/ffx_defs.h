@@ -1,10 +1,5 @@
 #pragma once
 
-// Minimal declarations of the FidelityFX API (ffx-api, amd_fidelityfx_loader_dx12.dll) that the
-// interceptor touches: the five entry points, the header every descriptor starts with, and the
-// upscaler's create and dispatch descriptors. Layouts follow the public ffx_api.h / ffx_upscale.h;
-// only the upscale descriptors are interpreted, every other descriptor type is forwarded untouched.
-
 #include <cstdint>
 
 namespace fs25vr {
@@ -30,13 +25,11 @@ using ffxConfigureDescHeader = ffxApiHeader;
 using ffxQueryDescHeader = ffxApiHeader;
 using ffxDispatchDescHeader = ffxApiHeader;
 
-// Opaque to the interceptor: handed through to the loader as received.
 struct ffxAllocationCallbacks;
 
 inline constexpr ffxStructType_t FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE = 0x00010000u;
 inline constexpr ffxStructType_t FFX_API_DISPATCH_DESC_TYPE_UPSCALE = 0x00010001u;
 
-// FfxApiCreateContextUpscaleFlags
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE = 1u << 0;
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS = 1u << 1;
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION = 1u << 2;
@@ -48,9 +41,6 @@ inline constexpr uint32_t FFX_UPSCALE_ENABLE_DEBUG_CHECKING = 1u << 7;
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE = 1u << 8;
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION = 1u << 9;
 
-// FfxApiResourceState (from memory of ffx_api_types.h; unverified against the SDK header). Only the
-// combined read state the motion vector pass leaves its texture in is needed: D3D12's
-// NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE.
 inline constexpr uint32_t FFX_API_RESOURCE_STATE_COMPUTE_READ = 1u << 1;
 inline constexpr uint32_t FFX_API_RESOURCE_STATE_PIXEL_READ = 1u << 2;
 inline constexpr uint32_t FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ =
@@ -123,10 +113,8 @@ using PFN_ffxConfigure = ffxReturnCode_t (*)(ffxContext*, const ffxConfigureDesc
 using PFN_ffxQuery = ffxReturnCode_t (*)(ffxContext*, ffxQueryDescHeader*);
 using PFN_ffxDispatch = ffxReturnCode_t (*)(ffxContext*, const ffxDispatchDescHeader*);
 
-// Magic identifier to safely identify virtual FidelityFX contexts: 'VFFX'
 inline constexpr uint32_t VIRTUAL_FFX_CONTEXT_MAGIC = 0x56464658;
 
-// Opaque handle handed to the game in place of the two real upscaler contexts.
 struct VirtualFfxContext {
     uint32_t magic = VIRTUAL_FFX_CONTEXT_MAGIC;
     uint32_t id = 0;
@@ -137,4 +125,4 @@ struct VirtualFfxContext {
     ffxApiDimensions2D maxUpscaleSize{};
 };
 
-} // namespace fs25vr
+}

@@ -23,7 +23,6 @@ HMODULE LoadedSystemDxgi() {
     return module;
 }
 
-// The built Injector's path, with the forward slashes CMake writes turned into backslashes.
 std::wstring InjectorPath() {
     std::wstring result;
     for (const char* c = INJECTOR_DLL_PATH; *c; ++c) {
@@ -32,7 +31,6 @@ std::wstring InjectorPath() {
     return result;
 }
 
-// Passes each call on through the system's exports, the way the proxy does (SystemDxgi), and counts the calls.
 class CountingEntry final : public IDxgiFactoryEntry {
 public:
     std::atomic<int> calls{0};
@@ -52,7 +50,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 TEST(DxgiExportHooksTest, FindExportReadsTheExportTable) {
     HMODULE dxgi = LoadedSystemDxgi();
@@ -64,7 +62,6 @@ TEST(DxgiExportHooksTest, FindExportReadsTheExportTable) {
 }
 
 TEST(DxgiExportHooksTest, FindExportGivesNoAddressForAForwardedExport) {
-    // The system's version.dll forwards VerLanguageNameW to kernel32: there is no code of its own to hook.
     wchar_t path[MAX_PATH];
     const UINT length = GetSystemDirectoryW(path, MAX_PATH);
     ASSERT_GT(length, 0u);
@@ -83,8 +80,6 @@ TEST(DxgiExportHooksTest, FactoryCallsThroughTheSystemExportsReachTheEntryAndSti
     ASSERT_TRUE(hooks.Install(dxgi));
     EXPECT_TRUE(hooks.IsInstalled());
 
-    // Called the way any module calls them. The entry passes each on through the same, hooked, export; that call
-    // goes straight to the system instead of back to the entry.
     auto create = reinterpret_cast<PFN_CreateDXGIFactory>(GetProcAddress(dxgi, "CreateDXGIFactory"));
     auto create1 = reinterpret_cast<PFN_CreateDXGIFactory1>(GetProcAddress(dxgi, "CreateDXGIFactory1"));
     auto create2 = reinterpret_cast<PFN_CreateDXGIFactory2>(GetProcAddress(dxgi, "CreateDXGIFactory2"));
@@ -162,13 +157,12 @@ TEST(InjectorStartupTest, RecognisesAnFs25VrModuleByItsVersionResource) {
     EXPECT_TRUE(IsFs25VrModule(injector));
     FreeLibrary(injector);
 
-    EXPECT_FALSE(IsFs25VrModule(LoadedSystemDxgi()));          // a version resource of another product
-    EXPECT_FALSE(IsFs25VrModule(GetModuleHandleW(nullptr)));   // no version resource
+    EXPECT_FALSE(IsFs25VrModule(LoadedSystemDxgi()));
+    EXPECT_FALSE(IsFs25VrModule(GetModuleHandleW(nullptr)));
     EXPECT_FALSE(IsFs25VrModule(nullptr));
 }
 
 TEST(InjectorStartupTest, TheSystemsDxgiIsNoEarlierInjector) {
-    // The test process loads the system's dxgi.dll, not an Injector from before FS25 VR was version.dll.
     EXPECT_EQ(FindEarlierInjector(), nullptr);
 }
 
@@ -182,4 +176,4 @@ TEST(SystemDxgiTest, TellsTheSystemsDxgiFromOtherModules) {
     EXPECT_FALSE(IsInSystemDxgi(nullptr));
 }
 
-} // namespace fs25vr
+}

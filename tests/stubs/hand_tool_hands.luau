@@ -1,54 +1,3 @@
--- Hand Tools: the game's empty hands (ADR-0033)
--- StubHandTool.installHands(variant)   defines the global HandToolHands (the class the game's hands are made of; TARGET_MASK,
---   and the events onDraw / onUpdate / onHeldStart as the game's event dispatch reads them off the class at every call), and makes
---   the targeter honour target types (PlayerTargeter:addTargetType / :removeTargetType, :getLastLookRay, unless the spray can's
---   chunk gave them already). Each update the targeter fills closestTargetsByKey[HandToolHands] with the closest loose object the
---   look ray meets between the type's minimum (0.5 m) and maximum distance (spec.pickupDistance), measured from the ray's origin,
---   as { node, x, y, z, distance }. LIKE THE GAME'S POOL it is ONE table per targeter that the next update overwrites: a mod that
---   keeps a reference across frames reads another frame's target. Install it AFTER the other chunks that extend the targeter.
---   variant   how the class is in this "game version": nil / "ok", "drawMissing" (a game update renamed onDraw to onDrawOverlays,
---   which the draw calls instead), "drawReshaped" (onDraw takes no parameters), "canPickUpMissing" (getCanPickUpNode is gone;
---   the hands tool has getCanPickUpTarget instead), "canPickUpReshaped" (it takes no node).
---
--- StubHandTool.hands(player, options) -> tool   the hands tool (spec_hands), player.hands, not yet held. Like the game's registered functions,
---   updateKinematicNode, getKinematicNode, getIsHoldingItem, getCanPickUpNode, orientRotationNodeToItem, pickUpTarget,
---   dropHeldItem, throwHeldItemWithForceVector and onHeldItemJointBroken are COPIED onto the tool when it is made (a wrap of the
---   class does not reach this tool; its events go through the class at every call). tool.spec_hands: hasSuperStrength (false),
---   currentMaximumMass (StubHandTool.HANDS.MAXIMUM_MASS), pickupDistance (StubHandTool.HANDS.PICKUP_DISTANCE), heldItemNode,
---   heldItemJointId (nil: the stub makes no joint), currentHoldDistance, kinematicNode, kinematicRotationNode (a child of it).
---   spec_hands.dirtyFlag (1) with tool:raiseDirtyFlags(flag) recorded in StubHandTool.dirtyRaised ({ tool, flag }); tool.isServer
---   (true, a single player game); tool:getIsAwaitingJointCreation() (spec_hands.awaitingJoint, false: the game's server makes the joint
---   a few physics frames after the pick-up, and until then the rotation node is not at the object); the engine's setJointFrame
---   (jointId, frame, node) recorded in StubHandTool.jointFrames ({ jointId, frame, node }). The stub makes no joint: a test sets
---   spec_hands.heldItemJointId itself.
---   Holding it (StubHandTool.hold) adds its target type to the player's targeter (0.5 m to pickupDistance), putting it away
---   (StubHandTool.drop) removes it. It is NOT Player.currentHandTool: getHeldHandTool() stays nil. Holding another tool puts the held
---   hands away, putting that tool away takes them again.
--- StubHandTool.superStrength(tool, on)   the game's gsPlayerSuperStrengthToggle: the mass limit rises to
---   StubHandTool.HANDS.SUPER_STRENGTH_MASS, the pickup distance to SUPER_STRENGTH_DISTANCE (10 m), and the target type is added
---   again. The object's own getCanBePickedUp is not asked under super strength.
--- StubHandTool.looseObject(x, y, z, mass, options) -> object   a loose object (a sphere of options.radius, 0.15 m, with a node
---   at its centre) at the world position. object.node, object.mass (the game's unit, tonnes), object.canBePickedUp (true: false
---   is an object that refuses the pick-up, like a strapped-down one). StubHandTool.looseObjects[node] -> object.
--- The hands tool's methods, as the game has them and as a test sees what they did:
---   getCanPickUpNode(node)   false for no node, a node that is gone, while holding something, a mass over currentMaximumMass, or an
---     object that refuses (unless super strength)
---   pickUpTarget(target)   false unless getCanPickUpNode(target.node); otherwise holds it (heldItemNode, currentHoldDistance =
---     target.distance), puts the rotation node at the object's centre and the kinematic node along the look ray; recorded in
---     StubHandTool.pickUps as { tool, node, x, y, z, distance }
---   dropHeldItem(noEventSend)   recorded in StubHandTool.drops ({ tool, held = node }) when something was held; lets go
---   throwHeldItemWithForceVector(dirX, dirY, dirZ, force, noEventSend)   recorded in StubHandTool.throws ({ tool, node, dirX,
---     dirY, dirZ, force }); lets go
---   onHeldItemJointBroken(jointIndex, impulse, noEventSend)   what the game's joint break report calls: recorded in
---     StubHandTool.breaks ({ tool, jointIndex }); lets go. dropHeldItem is the game's own letting go: it passes jointIndex nil.
---   updateKinematicNode()   the game's (nothing unless the hands are held and the player is the owner): while holding, the kinematic node goes to the look ray's origin plus its direction times
---     currentHoldDistance, turned to the ray's heading (level); run each tick after the targeter for a held hands tool
--- StubHandTool.pressPickUp(tool)   the game's pick-up button: pickUpTarget with the targeter's closest target for the hands, when
---   getCanPickUpNode accepts it. StubHandTool.breakJoint(tool): the held item's joint breaks (onHeldItemJointBroken(1, 500)).
---
--- The draw: StubHandTool.draw() renders "crosshair" (nothing under the centre), "pickUpCrosshair" (holding, or the hands' target
--- is one getCanPickUpNode accepts), for the owner in the first person view, as the game's onDraw does; StubHandTool.rendering(tool).
-
     StubHandTool.looseObjects, StubHandTool.looseObjectList = {}, {}
     StubHandTool.pickUps, StubHandTool.drops, StubHandTool.throws, StubHandTool.breaks = {}, {}, {}, {}
     StubHandTool.dirtyRaised, StubHandTool.jointFrames = {}, {}
@@ -64,7 +13,6 @@
         return object
     end
 
-    -- the closest loose object a ray meets between a minimum and a maximum distance of its origin (a sphere hit)
     local function castAtLooseObjects(into, x, y, z, dx, dy, dz, minDistance, maxDistance)
         local length = math.sqrt(dx * dx + dy * dy + dz * dz)
         if length < 1e-9 then return nil end
@@ -86,7 +34,7 @@
         into.node, into.x, into.y, into.z, into.distance = bestObject.node, x + dx * best, y + dy * best, z + dz * best, best
         return into
     end
-    StubHandTool.castAtLooseObjects = castAtLooseObjects  -- for the stubs of other features whose ray cast meets the same objects
+    StubHandTool.castAtLooseObjects = castAtLooseObjects
 
     function StubHandTool.installHands(variant)
         variant = variant or "ok"
@@ -94,11 +42,9 @@
         StubHandTool.dirtyRaised, StubHandTool.jointFrames = {}, {}
         local Class = { TARGET_MASK = 1 }
         _G.HandToolHands = Class
-        -- the engine's setJointFrame(jointId, frameIndex, node): the joint's frame goes to the node's world pose
         _G.setJointFrame = function(jointId, frame, node) table.insert(StubHandTool.jointFrames, { jointId = jointId, frame = frame, node = node }) end
         local H = StubHandTool.HANDS
 
-        -- ---- the targeter: target types with a minimum and a maximum distance, the last look ray
         local PlayerTargeter = _G.PlayerTargeter
         if PlayerTargeter.addTargetType == nil then
             function PlayerTargeter:addTargetType(key, mask, minDistance, maxDistance)
@@ -135,7 +81,6 @@
             end
         end
 
-        -- ---- the class: the functions the game registers on the hands tool's type (copied onto each tool)
         local registered = {}
         function registered.getIsHoldingItem(self) return self.spec_hands.heldItemNode ~= nil end
         function registered.getKinematicNode(self) return self.spec_hands.kinematicNode, self.spec_hands.kinematicRotationNode end
@@ -209,7 +154,6 @@
         for name, fn in pairs(registered) do Class[name] = fn end
         StubHandTool.handsRegistered = registered
 
-        -- ---- the events, read off the class at every call
         local function onDraw(self)
             local spec = self.spec_hands
             local player = self:getCarryingPlayer()
@@ -243,9 +187,6 @@
             end
         end)
 
-        -- ---- the hands are held when no Hand Tool is (the game: Player.hands is held and Player:getHeldHandTool() is nil; taking a
-        -- Hand Tool puts the hands away, putting it away takes them again). Held hands target loose objects, put away they stop
-        -- (the game's onHeldStart / onHeldEnd). Player.currentHandTool is never the hands.
         local baseHold, baseDrop = StubHandTool.hold, StubHandTool.drop
         local function startHands(hands)
             hands.isHeld, hands.carryingPlayer = true, hands.player
@@ -298,12 +239,12 @@
         spec.heldItemNode, spec.heldItemJointId, spec.currentHoldDistance = nil, nil, 0
         spec.kinematicNode = StubScene.newNode("handsKinematic", 0)
         spec.kinematicRotationNode = StubScene.newNode("handsKinematicRotation", spec.kinematicNode)
-        for name, fn in pairs(StubHandTool.handsRegistered) do tool[name] = fn end  -- copied onto the tool, as the game does
+        for name, fn in pairs(StubHandTool.handsRegistered) do tool[name] = fn end
         spec.dirtyFlag, spec.awaitingJoint = 1, false
-        tool.isServer = true  -- a single player game is the server: it applies the rotation node to the joint itself
+        tool.isServer = true
         tool.raiseDirtyFlags = function(self, flag) table.insert(StubHandTool.dirtyRaised, { tool = self, flag = flag }) end
         StubHandTool.hands_ = tool
-        player.hands = tool  -- the game: Player.hands
+        player.hands = tool
         return tool
     end
 

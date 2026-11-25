@@ -1,4 +1,3 @@
-# Operating System Files
 Thumbs.db
 Thumbs.db:encryptable
 ehthumbs.db
@@ -9,14 +8,12 @@ ehthumbs_vista.db
 .Spotlight-V100
 .Trashes
 
-# Editor directories and files
 .idea/
 *.suo
 *.user
 *.userosscache
 *.sln.docstates
 
-# Build artifacts
 build/
 Testing/
 bin/
@@ -33,14 +30,11 @@ scratch/
 *.obj
 .deps/
 
-# Local agent tooling (per-machine, not part of the project)
 .claude/
 .agents/
 skills-lock.json
 
-# Proprietary / third-party reference scripts (keep local copies only, never commit)
 /dataS/
 /reference/
 
-# Per-machine CMake presets (CMakePresets.json is the shared one)
 CMakeUserPresets.json

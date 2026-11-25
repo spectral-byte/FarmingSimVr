@@ -34,7 +34,6 @@ struct OpenXrRuntimeInfo {
     XrSystemId systemId = XR_NULL_SYSTEM_ID;
     std::string systemName;
     bool d3d12ExtensionSupported = false;
-    // The runtime offers XR_KHR_win32_convert_performance_counter_time and it was enabled.
     bool win32TimeConversionEnabled = false;
 
     uint32_t recommendedEyeWidth = 0;
@@ -84,25 +83,12 @@ public:
     const HeadPose& GetLastPose() const { return m_lastPose; }
     const HeadPose& GetRawPose() const { return m_rawPose; }
 
-    // ---- Motion Controllers (ADR-0025) ----
-    // True when the Motion Controller action set was declared and attached for this session. False
-    // when the runtime refused any step (the session and head tracking are unaffected).
     bool HasMotionControllerActions() const { return m_input.IsReady(); }
-    // One hand's state (0 = left, 1 = right), located at the head pose's predicted display time in
-    // the same Recenter-aware reference space. Untracked defaults when the action set is unavailable.
     HandState GetHandState(uint32_t hand);
-    // A short vibration on one hand (0 = left, 1 = right): `durationSeconds` long at `amplitude`
-    // (clamped to 0..1) at the runtime's default frequency. False, and nothing played, for a hand that
-    // does not exist, a duration of zero or less, an unavailable action set, or a runtime that fails
-    // the call; never an error for the session.
     bool PulseHaptic(uint32_t hand, double durationSeconds, float amplitude);
 
     EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
     bool LocateActiveViews(XrTime time = 0);
-    // "Now" in the runtime's time base. Extrapolates from the last predicted display time once
-    // frames run; before the first frame converts the performance counter through the runtime
-    // (XR_KHR_win32_convert_performance_counter_time) or, without it, converts the counter to
-    // nanoseconds directly.
     XrTime GetCurrentXrTime() const;
 
     struct PerformanceCounterSample {
@@ -110,31 +96,18 @@ public:
         int64_t frequency = 0;
     };
     using PerformanceCounterSource = std::function<PerformanceCounterSample()>;
-    // Replaces the QueryPerformanceCounter/Frequency reads (tests drive a fake clock).
     void SetPerformanceCounterSource(PerformanceCounterSource source);
 
-    // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
-    // observer per `owner` (the Virtual Gamepad publishes its snapshot and plays its rumble from here); clearing is by the same
-    // owner. Safe from any thread, and from inside an observer: a frame calls the observers it began with.
     using FrameBeginObserver = std::function<void()>;
     void SetFrameBeginObserver(const void* owner, FrameBeginObserver observer);
     void ClearFrameBeginObserver(const void* owner);
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
-    // `fovY`/`fovX` of the result are the rendered FOV (ADR-0005): symmetric, covering every edge of `fov`, at the
-    // aspect of the eye swapchain (`swapchainAspect`; 0 uses the headset FOV's own aspect). The tangents, angles and
-    // offsets keep describing the headset's own FOV.
-    // `fovOverscanPercent` widens the rendered FOV's tangents by (1 + percent / 100) (FOV Overscan).
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect = 0.0f, float fovOverscanPercent = 0.0f);
 
-    // FOV Overscan, in percent (0 to 20; clamped). A new value is stored here and takes effect when the next frame
-    // begins, so the pair in progress keeps the FOV it began with.
     void SetFovOverscan(float percent);
     float GetFovOverscan() const { return m_requestedFovOverscan.load(); }
     static constexpr float kMaxFovOverscanPercent = 20.0f;
-    // Clamps a percent to 0..kMaxFovOverscanPercent; a number that is not 0 or more (NaN included) counts as 0.
     static float ClampFovOverscan(float percent);
-    // The overscan only touches the stereoscopic view: while a menu or 2D Floating Window Mode is shown the eyes are
-    // rendered without it (it shows again, with the next frame, when the stereoscopic view is back).
     void SetFovOverscanSuspended(bool suspended) { m_fovOverscanSuspended.store(suspended); }
 
     uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
@@ -146,24 +119,13 @@ public:
     ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_queue; }
 
     bool CreateEyeSwapchains(uint32_t width = 0, uint32_t height = 0, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
-    // Picks the supported swapchain format that a plain copy from a back buffer of
-    // `backBufferFormat` can target (same format family; UNORM/sRGB variants allowed). For 8-bit
-    // families the sRGB variant is preferred over UNORM, whatever the back buffer's variant.
-    // Returns DXGI_FORMAT_UNKNOWN when none is compatible.
     static DXGI_FORMAT SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported);
-    // Called when the game creates its swap chain, before any DXGI overrides are applied. Releases
-    // OpenXR and enters Pass-Through Mode if no eye-swapchain format is copy-compatible with the
-    // back buffer. Returns whether VR is still active.
     bool EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat);
     void DestroyEyeSwapchains();
     bool HasEyeSwapchains() const { return m_hasEyeSwapchains; }
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
 
     bool CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer);
-    // Clears the game's back buffer to black on the game's queue and leaves it in the PRESENT state
-    // the game expects, so the next Present puts a black frame on the Desktop Mirror Window. Call it
-    // after the frame's eye copy, which has already taken what the headset needs. Returns false and
-    // does nothing when there is no back buffer, device or queue (unit tests, Pass-Through).
     bool ClearBackBufferToBlack(ID3D12Resource* backBuffer);
     bool BeginFrame();
     bool EndFrame();
@@ -171,19 +133,13 @@ public:
     bool SubmitFramePair();
     bool SubmitMenuQuad(const XrPosef* customPose = nullptr, const XrExtent2Df* customSize = nullptr);
 
-    // The menu quad's geometry is the MenuQuad module's (spec #247); these ask it, and the manager submits what it says.
     XrPosef ComputeMenuQuadPose() const { return m_menuQuad.Pose(); }
     static XrPosef ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance) {
         return MenuQuad::PoseFromHeadPose(headPose, distance);
     }
-    // Places the quad in front of `customPose`, else of the last polled head (the head as located in m_localSpace).
     void AlignMenuQuadToHeadPose(const HeadPose* customPose = nullptr);
     bool HasMenuQuadPose() const { return m_menuQuad.HasPose(); }
     XrExtent2Df ComputeMenuQuadSize() const;
-    // Menu Distance: how far in front of the head the menu quad (menus and 2D Floating Window Mode) is placed, in metres.
-    // The quad keeps its size, so further away it fills less of the view. A quad already placed moves straight back or
-    // forward along the way it faces, so it stays in front of the head that placed it. Clamped to kMinMenuQuadDistance..
-    // kMaxMenuQuadDistance; NaN counts as the default. The setting outlives Shutdown, like the FOV Overscan.
     static constexpr float kDefaultMenuQuadDistance = MenuQuad::kDefaultDistance;
     static constexpr float kMinMenuQuadDistance = MenuQuad::kMinDistance;
     static constexpr float kMaxMenuQuadDistance = MenuQuad::kMaxDistance;
@@ -194,30 +150,17 @@ public:
     XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
     void ResetMenuQuadSettings() { m_menuQuad.ResetSettings(); }
 
-    // Where the ray of `hand` (0 = left, 1 = right) lands on the panel the next SubmitMenuQuad()
-    // submits, in normalized panel coordinates (see PanelHit). The hand's aim pose and the layer are
-    // both in the Recenter-aware local space, so the test holds across a Recenter. No hit for an
-    // untracked hand. Whether a panel is visible is the caller's (VRBridge's) knowledge.
     PanelHit GetPanelHit(uint32_t hand);
-    // The same for a ray the caller gives, in the space the hand poses are in (the Pointer Ray starts at the
-    // index fingertip and runs along the finger, which only the Companion Mod knows). `direction` need not be
-    // a unit vector. No hit for an untracked `hand`, or a direction without a length.
     PanelHit GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction);
-    // Pure ray (origin, -Z of rayOrientation) against a quad of `quadSize` at `quadPose`; the quad
-    // is hit from its front side only, like it is seen.
     static PanelHit ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
                                       const Vector3& rayOrigin, const Quaternion& rayOrientation) {
         return MenuQuad::RayHit(quadPose, quadSize, rayOrigin, rayOrientation);
     }
-    // The same for a ray with a direction vector (any length above zero; `distance` is along the unit direction).
     static PanelHit ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
                                            const Vector3& rayOrigin, const Vector3& rayDirection) {
         return MenuQuad::RayHitAlong(quadPose, quadSize, rayOrigin, rayDirection);
     }
 
-    // While active the drawn cursor sits at (u, v) in PanelHit coordinates (clamped onto the panel)
-    // and MirrorWindowController ignores the Win32 cursor: the Pointer Ray has control of the cursor.
-    // Inactive means the desk mouse has it.
     void SetPointerCursorOverride(bool active, float u = 0.0f, float v = 0.0f) {
         m_pointerCursor.active = active;
         m_pointerCursor.u = std::fmin(1.0f, std::fmax(0.0f, u));
@@ -244,7 +187,6 @@ public:
     const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.GetLastSubmittedCursorQuadLayer(); }
     bool HasLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.HasLastSubmittedCursorQuadLayer(); }
 
-    // Logs a back buffer that is not the eye swapchain size, once per session (Shutdown clears the guard).
     void LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight);
 
     float GetIpd() const { return m_ipd; }
@@ -263,16 +205,9 @@ public:
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
-    // The headset is on and the game has the focus. A sleeping headset drops to SYNCHRONIZED and the dashboard to
-    // VISIBLE; neither ends the running session.
     bool IsSessionFocused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     XrSessionState GetSessionState() const { return m_sessionState; }
 
-    // Drains the runtime event queue and drives the session lifecycle: begin on READY,
-    // end on STOPPING, release resources and enter Pass-Through Mode on EXITING,
-    // LOSS_PENDING or instance loss. BeginFrame polls too; a caller that must see the lifecycle
-    // settled before it reaches BeginFrame (DxgiProxy::OnPresent) calls this first. A second poll
-    // in the same frame finds an empty queue.
     void PollEvents();
     bool HasTrackingSpaces() const {
         return m_localSpace != XR_NULL_HANDLE &&
@@ -285,9 +220,6 @@ public:
     static Vector3 ComputeEyePosition(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
     static HeadPose ComputeEyePose(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
 
-    // Records the head pose handed to the Companion Mod for this eye's render. The next
-    // CopyBackBufferToEye for that eye uses it (instead of the pose polled at frame begin)
-    // as the pose the eye is submitted with. Consumed by the copy.
     void RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose);
     bool HasRecordedRenderPose(uint32_t eyeIndex) const {
         return eyeIndex < 2 && m_hasRenderPose[eyeIndex];
@@ -313,7 +245,6 @@ private:
 
     ID3D12Device* m_device = nullptr;
     ID3D12CommandQueue* m_queue = nullptr;
-    // The Direct3D 12 side of the eye copy and the clear to black; it follows m_device and m_queue.
     D3D12EyeCopy m_eyeCopy;
     XrResult DispatchEndFrame(const XrFrameEndInfo& endInfo);
 
@@ -321,7 +252,6 @@ private:
     bool m_hasEyeSwapchains = false;
     OpenXrCursorOverlay m_cursorOverlay;
     OpenXrInput m_input;
-    // The frame whose hand snapshot (sync + poses) is held; valid only while that frame is begun.
     uint64_t m_frameSerial = 0;
     uint64_t m_handsFrameSerial = 0;
     bool m_handPosesStale = false;
@@ -329,13 +259,11 @@ private:
     MenuCursorState m_menuCursorState;
     PointerCursorOverride m_pointerCursor;
     float m_ipd = 0.064f;
-    // One-time log guards. Per instance and cleared by Shutdown, so each OpenXR session logs these again.
     float m_lastLoggedIpd = 0.0f;
     bool m_loggedEyeCopySizeMismatch = false;
     uint32_t m_headPoseLocateFailures = 0;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
-    // The menu quad's pose, size, Menu Distance and panel hit; the manager owns the space it is submitted in.
     MenuQuad m_menuQuad;
     XrCompositionLayerQuad m_lastSubmittedQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     bool m_focusedSinceBegin = false;
@@ -344,8 +272,6 @@ private:
     XrTime m_lastPredictedDisplayTime = 0;
     int64_t m_lastPredictedQpc = 0;
     PerformanceCounterSource m_counterSource;
-    // Copy-on-write: an edit builds a new list under the mutex, a frame takes a reference to the current one (no copy, no
-    // allocation) and walks it without the lock.
     using FrameBeginObserverList = std::vector<std::pair<const void*, FrameBeginObserver>>;
     std::mutex m_frameBeginObserversMutex;
     std::shared_ptr<const FrameBeginObserverList> m_frameBeginObservers = std::make_shared<const FrameBeginObserverList>();
@@ -362,15 +288,10 @@ private:
     void ClearRenderPoses();
 
     EyeProjection m_eyeProjections[2];
-    // The eye swapchain's width / height, or 0 while the swapchains do not exist.
     float SwapchainAspect(uint32_t eyeIndex) const;
-    // Makes the requested FOV Overscan the one the views are located with.
     void LatchFovOverscan();
-    // Recomputes the rendered FOV of the located projections (the swapchains were created or destroyed).
     void RefreshRenderedFov();
-    // Logs the headset's own per-eye FOV and the rendered FOV, each only when it differs from what was last logged.
     void LogFovIfChanged();
-    // What LogFovIfChanged last logged. Two FOVs are the same when every angle is within 1e-4 radians.
     static bool NearlyEqualAngle(float a, float b) { return !(std::abs(a - b) > 1e-4f); }
     struct HeadsetFov {
         float left = 0.0f, right = 0.0f, up = 0.0f, down = 0.0f;  // radians
@@ -390,8 +311,6 @@ private:
     bool m_loggedHeadsetFovValid = false;
     bool m_loggedRenderedFovValid = false;
     float m_loggedFovOverscan = 0.0f;
-    // The overscan last set, and the one the located projections are rendered with: it is taken over from the requested
-    // one when a frame begins (or while no frame is in flight).
     std::atomic<float> m_requestedFovOverscan{0.0f};
     std::atomic<bool> m_fovOverscanSuspended{false};
     float m_fovOverscan = 0.0f;
@@ -406,9 +325,8 @@ private:
     bool CheckD3D12ExtensionSupport();
     bool EnumerateSwapchainImagesHelper(EyeSwapchain& sc);
     bool EnsureCursorTextureUploaded();
-    // Copy-compatible eye format, the back buffer format if the runtime query failed, or UNKNOWN.
     DXGI_FORMAT NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFormat);
     void EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat);
 };
 
-} // namespace fs25vr
+}

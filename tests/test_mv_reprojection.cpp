@@ -34,7 +34,7 @@ RelativeTransform Identity() {
 // Reverse-Z depth of a point z metres in front of the camera: d = n (f - z) / (z (f - n)).
 float DepthAtMetres2() { return 0.45f; } // 1 * (11 - 2) / (2 * 10)
 
-} // namespace
+}
 
 TEST(MvReprojectionTest, ReverseZMapsNearToOneAndFarToZero) {
     EXPECT_NEAR(ReverseZToViewDepth(1.0f, 1.0f, 11.0f), 1.0f, 1e-5f);
@@ -228,7 +228,6 @@ TEST(MvReprojectionTest, GridSamplesAreSpreadAcrossTheImage) {
     EXPECT_EQ(GridSampleCoordinate(0, 4, 200), 25u);
     EXPECT_EQ(GridSampleCoordinate(1, 4, 200), 75u);
     EXPECT_EQ(GridSampleCoordinate(3, 4, 200), 175u);
-    // A grid denser than the image clamps to the last pixel.
     EXPECT_EQ(GridSampleCoordinate(7, 8, 4), 3u);
 }
 
@@ -260,7 +259,7 @@ TEST(MvReprojectionTest, SummaryReportsMeanMedianAndSkippedFractionPerConvention
     EXPECT_EQ(stats.skipped, 4u);
     EXPECT_DOUBLE_EQ(stats.skippedFraction, 0.5);
     EXPECT_DOUBLE_EQ(stats.meanToPrevious, 4.0);   // (1+2+3+10)/4
-    EXPECT_DOUBLE_EQ(stats.medianToPrevious, 2.5); // between 2 and 3
+    EXPECT_DOUBLE_EQ(stats.medianToPrevious, 2.5);
     EXPECT_DOUBLE_EQ(stats.meanToCurrent, 25.0);
     EXPECT_DOUBLE_EQ(stats.medianToCurrent, 25.0);
     EXPECT_EQ(BetterConvention(stats), Convention::ToPrevious);
@@ -283,8 +282,6 @@ TEST(MvReprojectionTest, SummaryOfNothingValidHasNoVerdict) {
     EXPECT_EQ(BetterConvention(empty), Convention::None);
 }
 
-// ---- Convention-agnostic accounting: is the engine vector the predicted displacement at all? ----
-
 namespace {
 
 // A valid sample whose predicted previous-minus-current displacement is (px, py) and whose engine vector
@@ -301,7 +298,7 @@ SampleResult AccountedSample(float ex, float ey, float px, float py, float rx, f
     return s;
 }
 
-} // namespace
+}
 
 TEST(MvReprojectionTest, EvaluateSampleRecordsTheEnginePredictedAndRawVectors) {
     CameraRecord current;
@@ -325,7 +322,7 @@ TEST(MvReprojectionTest, RegressionRatioIsOneWhenTheEngineVectorEqualsThePredict
     std::vector<SampleResult> s = {AccountedSample(-25, 0, -25, 0, -25, 0), AccountedSample(0, 10, 0, 10, 0, 10)};
     SelfCheckStats stats = Summarize(s.data(), s.size());
     EXPECT_NEAR(stats.k, 1.0, 1e-12);
-    EXPECT_NEAR(stats.engineMean, 17.5, 1e-9); // (25 + 10) / 2
+    EXPECT_NEAR(stats.engineMean, 17.5, 1e-9);
     EXPECT_NEAR(stats.predictedMean, 17.5, 1e-9);
 }
 
@@ -356,7 +353,6 @@ TEST(MvReprojectionTest, RawUnitsAreVisibleWhenTheStoredVectorIsNdcLikeAndScaled
     SelfCheckStats stats = Summarize(s.data(), s.size());
     EXPECT_NEAR(stats.k, 1.0, 1e-12);
     EXPECT_NEAR(stats.rawMean, 0.25, 1e-9);
-    // ÃŽÂ£(rawÃ‚Â·p) / ÃŽÂ£(pÃ‚Â·p) = (0.25 * -25) / 625.
     EXPECT_NEAR(stats.kRaw, -0.01, 1e-9);
     EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMinX), 0.25f);
     EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMaxX), 0.25f);
@@ -375,7 +371,7 @@ TEST(MvReprojectionTest, RawRangeCoversValidSamplesOnlyAndAccountingSkipsSkipped
     EXPECT_NEAR(stats.predictedMean, 5.0, 1e-9);
 
     SelfCheckStats none = Summarize(&sky, 1);
-    EXPECT_DOUBLE_EQ(none.k, 0.0); // no valid sample: zeros, not NaN
+    EXPECT_DOUBLE_EQ(none.k, 0.0);
     EXPECT_DOUBLE_EQ(none.rawMinX, 0.0);
 }
 
@@ -417,7 +413,7 @@ Corrected Correct(float mvX, float mvY, float scale, const RelativeTransform& to
     return c;
 }
 
-} // namespace
+}
 
 TEST(MvCorrectionTest, AStaticPointWithTheHeadStillCorrectsToZeroMotionAgainstTheSameEyesPreviousFrame) {
     // Previous frame = the other eye 1 m aside; the same eye's previous camera is where it is now.
@@ -483,11 +479,8 @@ TEST(MvCorrectionTest, AZeroScaleCannotBeCorrectedAndKeepsTheEnginesVector) {
 }
 
 TEST(MvCorrectionTest, CorrectedVectorsPassTheSelfCheckWithSubPixelErrorAgainstTheSameEyesCamera) {
-    // The self-check against the same eye's previous camera, fed the corrected vector, is sub-pixel;
-    // fed the uncorrected one it is off by the camera offset.
     RelativeTransform toPrev = Aside(1.0);
     RelativeTransform toSame = Aside(-0.5);
-    // Engine vector of a static point: previous-frame displacement.
     SampleResult engine = EvaluateSample(150, 25, 0.45f, -25.0f, 0.0f, 1.0f, 1.0f, 200, 100, TestProjection(),
                                          TestProjection(), toSame);
     EXPECT_GT(engine.errToPrevious, 10.0f);
@@ -518,13 +511,7 @@ Corrected CorrectInfinite(float mvX, float mvY, const RelativeTransform& toPrev,
     return c;
 }
 
-} // namespace
-
-// ---- Static-consistency gating (vrDlssMvFix, NGX) ----
-//
-// The correction assumes the pixel is static world. A pixel that moves with the camera (cab interior) or on
-// its own (another vehicle) has an engine vector that disagrees with the static prediction toward the
-// previous rendered frame: |e - d| > max(kStaticGateAbsPx, kStaticGateRelative * |d|). Those pass through.
+}
 
 namespace {
 
@@ -536,7 +523,7 @@ Corrected CorrectGated(float mvX, float mvY, const RelativeTransform& toPrev, co
     return c;
 }
 
-} // namespace
+}
 
 TEST(MvStaticGateTest, TheGateConstantsAreTwoPixelsOrTwentyPercent) {
     EXPECT_FLOAT_EQ(kStaticGateAbsPx, 2.0f);
@@ -600,11 +587,10 @@ TEST(MvStaticGateTest, TheAbsoluteThresholdDecidesForADistantPixel) {
 TEST(MvStaticGateTest, GatingIsOffUnlessRequested) {
     Corrected c = Correct(0.0f, 0.0f, 1.0f, Aside(1.0), Aside(0.0));
     ASSERT_TRUE(c.applied);
-    EXPECT_NEAR(c.x, 25.0f, 1e-2f); // the camera-attached pixel is "corrected" by the full static amount
+    EXPECT_NEAR(c.x, 25.0f, 1e-2f);
 }
 
 TEST(MvStaticGateTest, TheGateWorksInTheUnitsOfTheScaleDlssWillApply) {
-    // Scale 2: stored -12.5 is -25 px. Stored 0 is camera-attached either way.
     Corrected c = {};
     c.applied = CorrectMotionVector(150, 25, 0.45f, -12.5f, 0.0f, 2.0f, 2.0f, 200, 100, TestProjection(), TestProjection(),
                                     TestProjection(), Aside(1.0), Aside(-0.5), c.x, c.y, 1.0f, true);
@@ -622,9 +608,9 @@ TEST(MvStaticGateTest, TheSelfCheckSummaryReportsTheGatedFractionOfValidSamples)
         SampleResult& s = samples[i];
         s.status = static_cast<uint32_t>(SampleStatus::Valid);
         s.predictedX = -25.0f;
-        s.engineX = i < 3 ? 0.0f : -25.0f; // three camera-attached samples
+        s.engineX = i < 3 ? 0.0f : -25.0f;
     }
-    samples[9].status = static_cast<uint32_t>(SampleStatus::Sky); // not counted
+    samples[9].status = static_cast<uint32_t>(SampleStatus::Sky);
     SelfCheckStats stats = Summarize(samples.data(), samples.size());
     EXPECT_EQ(stats.valid, 9u);
     EXPECT_NEAR(stats.gatedFraction, 3.0 / 9.0, 1e-9);
@@ -681,7 +667,6 @@ TEST(MvInfiniteDepthTest, TheSkyCarriesRotationButNoTranslation) {
     ASSERT_TRUE(c.applied);
     EXPECT_NEAR(c.x, 49.5f, 0.2f);
 
-    // A same-eye camera 0.5 m aside moves the sky by nothing (infinitely far).
     Corrected aside = CorrectInfinite(0.0f, 0.0f, Identity(), Aside(-0.5), 0.0f, 99, 49);
     ASSERT_TRUE(aside.applied);
     EXPECT_NEAR(aside.x, 0.0f, 1e-2f);
@@ -689,7 +674,6 @@ TEST(MvInfiniteDepthTest, TheSkyCarriesRotationButNoTranslation) {
 }
 
 TEST(MvInfiniteDepthTest, TheSelfCheckScoresAnInfiniteDepthPointLikeTheFiniteOne) {
-    // Engine vector of the static point 1 m aside: (-25, 0).
     SampleResult r = EvaluateSample(150, 25, 0.5f, -25.0f, 0.0f, 1.0f, 1.0f, 200, 100, InfiniteProjection(),
                                     TestProjection(), Aside(1.0));
     EXPECT_EQ(r.status, static_cast<uint32_t>(SampleStatus::Valid));
@@ -711,7 +695,7 @@ TEST(MvCorrectionTest, ANegativeXScaleConvertsTheCorrectionWithItsSign) {
     ASSERT_TRUE(CorrectMotionVector(150, 25, 0.45f, 12.5f, 0.0f, -2.0f, 2.0f, 200, 100, TestProjection(),
                                     TestProjection(), TestProjection(), Aside(1.0), Aside(-0.5), x, y));
     EXPECT_NEAR(x, -6.25f, 1e-2f);
-    EXPECT_NEAR(x * -2.0f, 12.5f, 2e-2f); // in pixels, as with a positive scale
+    EXPECT_NEAR(x * -2.0f, 12.5f, 2e-2f);
     EXPECT_NEAR(y, 0.0f, 1e-2f);
 }
 
@@ -725,11 +709,6 @@ TEST(MvCorrectionTest, AStaticPointStillCorrectsToZeroUnderAMixedSignScale) {
     EXPECT_NEAR(y, 0.0f, 1e-4f);
 }
 
-// ---- AFR ----
-// Under AFR the previous frame is the other eye and the same eye's previous frame is two frames back. The
-// simulation advances every frame, so the engine's object motion covers one frame where the same-eye
-// history is two frames back: object motion takes the eye-stride factor, camera motion does not.
-
 namespace {
 
 Corrected CorrectAfr(float mvX, float mvY, float scale, const RelativeTransform& toPrev, const RelativeTransform& toSame,
@@ -740,7 +719,7 @@ Corrected CorrectAfr(float mvX, float mvY, float scale, const RelativeTransform&
     return c;
 }
 
-} // namespace
+}
 
 TEST(MvCorrectionAfrTest, TheEyeStrideFactorIsTwoBecauseTheSameEyesHistoryIsTwoFramesBack) {
     EXPECT_FLOAT_EQ(kAfrEyeStride, 2.0f);
@@ -790,11 +769,11 @@ TEST(MvCorrectionAfrTest, AStaticPointStillScoresSubPixelAgainstTheSameEyesCamer
 
 TEST(MvCorrectionAfrTest, AfrFramesResolveTheOtherEyeAsPreviousFrameAndTheSameEyeTwoFramesBack) {
     CameraRecordStore store;
-    ASSERT_TRUE(store.Report(Cam(0, 9.9)));    // frame 0: left
+    ASSERT_TRUE(store.Report(Cam(0, 9.9)));
     store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(1, 10.064))); // frame 1: right
+    ASSERT_TRUE(store.Report(Cam(1, 10.064)));
     store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(0, 10.0)));   // frame 2: left, the current frame
+    ASSERT_TRUE(store.Report(Cam(0, 10.0)));
     ResolvedCameras left = store.Resolve(0);
     ASSERT_TRUE(left.previousFrame.has_value());
     ASSERT_TRUE(left.sameEyePrevious.has_value());
@@ -805,7 +784,7 @@ TEST(MvCorrectionAfrTest, AfrFramesResolveTheOtherEyeAsPreviousFrameAndTheSameEy
     EXPECT_EQ(PlanCorrection(left).decision, CorrectionDecision::Correct);
 
     store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(1, 10.07))); // frame 3: right
+    ASSERT_TRUE(store.Report(Cam(1, 10.07)));
     ResolvedCameras right = store.Resolve(1);
     ASSERT_TRUE(right.previousFrame.has_value());
     ASSERT_TRUE(right.sameEyePrevious.has_value());
@@ -817,11 +796,11 @@ TEST(MvCorrectionAfrTest, AfrFramesResolveTheOtherEyeAsPreviousFrameAndTheSameEy
 
 TEST(MvCorrectionPlanTest, ACameraTripleCorrectsAgainstBothPreviousCameras) {
     CameraRecordStore store;
-    ASSERT_TRUE(store.Report(Cam(0, 9.9)));   // frame 0, left
+    ASSERT_TRUE(store.Report(Cam(0, 9.9)));
     store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(1, 10.064))); // frame 1, right
+    ASSERT_TRUE(store.Report(Cam(1, 10.064)));
     store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(0, 10.0)));  // frame 2, left (current)
+    ASSERT_TRUE(store.Report(Cam(0, 10.0)));
     CorrectionPlan plan = PlanCorrection(store.Resolve(0));
     ASSERT_EQ(plan.decision, CorrectionDecision::Correct);
     EXPECT_NEAR(plan.current.tanHalfFovY, std::tan(0.5f), 1e-6f);
@@ -833,10 +812,10 @@ TEST(MvCorrectionPlanTest, MissingRecordsPassTheEnginesVectorsThrough) {
     CameraRecordStore store;
     EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::MissingRecords);
 
-    ASSERT_TRUE(store.Report(Cam(0, 10.0))); // only the current camera
+    ASSERT_TRUE(store.Report(Cam(0, 10.0)));
     EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::MissingRecords);
 
-    CameraRecordStore start; // first frames: the other eye rendered before, this eye has no previous camera
+    CameraRecordStore start;
     ASSERT_TRUE(start.Report(Cam(1, 10.064)));
     start.AdvanceFrame();
     ASSERT_TRUE(start.Report(Cam(0, 10.0)));
@@ -855,12 +834,6 @@ TEST(MvCorrectionPlanTest, AnUnusableProjectionPassesThrough) {
     EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::UnusableProjection);
 }
 
-// ---- Automatic near plane estimate (vrDlssNearClip auto) ----
-//
-// For static geometry the engine vector is e = R + T / near_true: R the rotation-only displacement, T the
-// translation part of the prediction computed with an assumed near n0. s = sum((e-R).T) / sum(T.T) and
-// near_true = n0 / s. The expected values below are worked out by hand.
-
 namespace {
 
 // n samples cycling through three hand-picked (R, T) pairs, with the engine vector e = R + k T.
@@ -874,7 +847,7 @@ std::vector<SampleResult> NearSamples(size_t n, float k) {
         s.status = static_cast<uint32_t>(SampleStatus::Valid);
         s.rotationX = R[j][0];
         s.rotationY = R[j][1];
-        s.predictedX = R[j][0] + T[j][0]; // the full prediction at the assumed near
+        s.predictedX = R[j][0] + T[j][0];
         s.predictedY = R[j][1] + T[j][1];
         s.engineX = R[j][0] + k * T[j][0];
         s.engineY = R[j][1] + k * T[j][1];
@@ -882,7 +855,7 @@ std::vector<SampleResult> NearSamples(size_t n, float k) {
     return out;
 }
 
-} // namespace
+}
 
 TEST(NearEstimateTest, AKnownNearIsRecoveredExactly) {
     // Assumed 0.15, true 0.1: the translation is 1.5x what was assumed, s = 1.5, near = 0.15 / 1.5.
@@ -902,7 +875,6 @@ TEST(NearEstimateTest, ARightAssumptionGivesAScaleOfOne) {
 }
 
 TEST(NearEstimateTest, RotationAloneCarriesNoInformation) {
-    // e = R everywhere and T = 0: nothing to fit, whatever the rotation is.
     std::vector<SampleResult> samples(30);
     for (SampleResult& s : samples) {
         s.status = static_cast<uint32_t>(SampleStatus::Valid);
@@ -913,7 +885,6 @@ TEST(NearEstimateTest, RotationAloneCarriesNoInformation) {
 }
 
 TEST(NearEstimateTest, TheRotationIsSubtractedBeforeFitting) {
-    // A large rotation on top of the translation must not bias s: with R left in, s would be far from 1.5.
     std::vector<SampleResult> samples = NearSamples(30, 1.5f);
     for (SampleResult& s : samples) {
         s.rotationX += 100.0f; s.predictedX += 100.0f; s.engineX += 100.0f;
@@ -925,7 +896,6 @@ TEST(NearEstimateTest, TheRotationIsSubtractedBeforeFitting) {
 
 TEST(NearEstimateTest, OutliersFromMovingObjectsAreRejected) {
     std::vector<SampleResult> samples = NearSamples(60, 1.5f);
-    // 8 samples belong to something that moves: their vectors are unrelated to the camera.
     for (size_t i = 0; i < 8; ++i) {
         samples[i * 7].engineX += 250.0f;
         samples[i * 7].engineY -= 180.0f;
@@ -989,9 +959,8 @@ TEST(NearEstimateTest, EvaluateSampleSplitsTheRotationFromTheTranslation) {
     ASSERT_EQ(far5.status, static_cast<uint32_t>(SampleStatus::Valid));
     EXPECT_NEAR(near2.rotationX, 50.0f, 1.5f);
     EXPECT_NEAR(near2.rotationY, 0.0f, 1.5f);
-    EXPECT_FLOAT_EQ(near2.rotationX, far5.rotationX); // depth-independent
+    EXPECT_FLOAT_EQ(near2.rotationX, far5.rotationX);
     EXPECT_FLOAT_EQ(near2.rotationY, far5.rotationY);
-    // The translation (prediction minus rotation) does depend on depth.
     EXPECT_GT(std::fabs((near2.predictedX - near2.rotationX) - (far5.predictedX - far5.rotationX)), 1.0f);
 }
 
@@ -1013,7 +982,7 @@ TEST(NearEstimateTest, AWorkedScenePlusTheSolverRecoversTheRendererNear) {
     std::vector<SampleResult> samples;
     for (uint32_t y = 10; y < 90; y += 10) {
         for (uint32_t x = 40; x < 160; x += 10) {
-            const float z = 2.0f + 0.05f * static_cast<float>(x + y); // metres in front of the camera
+            const float z = 2.0f + 0.05f * static_cast<float>(x + y);
             const float depth = truth.nearClip / z;
             SampleResult real = EvaluateSample(x, y, depth, 0.0f, 0.0f, 1.0f, 1.0f, 200, 100, truth, truth, t);
             ASSERT_EQ(real.status, static_cast<uint32_t>(SampleStatus::Valid));
@@ -1028,8 +997,6 @@ TEST(NearEstimateTest, AWorkedScenePlusTheSolverRecoversTheRendererNear) {
     ASSERT_TRUE(sol.valid);
     EXPECT_NEAR(sol.nearClip, 0.5f, 0.01f);
 }
-
-// ---- Robust near estimate: camera-attached and moving pixels, the near field ----
 
 namespace {
 
@@ -1051,7 +1018,6 @@ SampleResult Sample(float rx, float ry, float tx, float ty, float k, float z0) {
 const float kR[3][2] = {{10.0f, 5.0f}, {-7.0f, 2.0f}, {0.0f, 0.0f}};
 const float kT[3][2] = {{2.0f, 0.0f}, {0.0f, 4.0f}, {-3.0f, 1.0f}};
 
-// n pixels of static world at a true scale k, 3 m .. far in front at the true near.
 void AddStatic(std::vector<SampleResult>& out, size_t n, float k, float z0Start) {
     for (size_t i = 0; i < n; ++i) {
         const size_t j = i % 3;
@@ -1060,7 +1026,6 @@ void AddStatic(std::vector<SampleResult>& out, size_t n, float k, float z0Start)
     }
 }
 
-// n pixels that move with the camera: the engine vector is zero while the static prediction is large.
 void AddCameraAttached(std::vector<SampleResult>& out, size_t n, float z0) {
     for (size_t i = 0; i < n; ++i) {
         const size_t j = i % 3;
@@ -1071,7 +1036,6 @@ void AddCameraAttached(std::vector<SampleResult>& out, size_t n, float z0) {
     }
 }
 
-// n pixels of something that moves by its own 60 px on top of the camera's motion.
 void AddMoving(std::vector<SampleResult>& out, size_t n, float k, float z0Start) {
     for (size_t i = 0; i < n; ++i) {
         const size_t j = i % 3;
@@ -1082,7 +1046,7 @@ void AddMoving(std::vector<SampleResult>& out, size_t n, float k, float z0Start)
     }
 }
 
-} // namespace
+}
 
 TEST(RobustNearTest, EvaluateSampleRecordsTheViewDepthAtTheAssumedNear) {
     SampleResult s = EvaluateSample(99, 49, DepthAtMetres2(), 0.0f, 0.0f, 1.0f, 1.0f, 200, 100, TestProjection(),
@@ -1142,7 +1106,7 @@ TEST(RobustNearTest, ALargeScaleCorrectionDoesNotExcludeTheWorldItself) {
 }
 
 TEST(RobustNearTest, WithoutAViewDepthNothingIsExcludedForBeingNear) {
-    std::vector<SampleResult> samples = NearSamples(30, 1.5f); // viewDepth 0: unknown
+    std::vector<SampleResult> samples = NearSamples(30, 1.5f);
     NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
     ASSERT_TRUE(sol.valid);
     EXPECT_EQ(sol.used, 30u);
@@ -1166,7 +1130,7 @@ TEST(RobustNearTest, TooFewInliersRefuseASolutionAndReportTheFraction) {
 TEST(RobustNearTest, AnEverythingNearFieldSetHasNothingLeftToFit) {
     std::vector<SampleResult> samples;
     AddStatic(samples, 40, 1.5f, 3.0f);
-    for (SampleResult& s : samples) s.viewDepth = 0.4f; // all 0.27 m at the true near
+    for (SampleResult& s : samples) s.viewDepth = 0.4f;
     NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
     EXPECT_FALSE(sol.valid);
 }

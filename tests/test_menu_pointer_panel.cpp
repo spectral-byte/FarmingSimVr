@@ -1,12 +1,3 @@
-// Menu pointing in the Injector (spec #71): where a Motion Controller's ray lands on the
-// floating menu / 2D Floating Window Mode panel, in normalized panel coordinates, and the drawn
-// cursor override the Pointer Ray uses. The panel geometry lives here (ADR-0006, ADR-0008); Lua only
-// consumes the hit.
-//
-// Panel coordinates: u runs left to right and v top to bottom, both 0..1, the same convention as the
-// drawn cursor (MenuCursorState::normX/normY). The game's GUI uses a bottom-left origin, so the
-// Companion Mod flips v when it talks to the GUI.
-
 #include <gtest/gtest.h>
 #include "fake_openxr_runtime.h"
 #include "proxy/mirror_window_controller.h"
@@ -28,7 +19,7 @@ Quaternion Yaw(float radians) { return Quaternion(0.0f, std::sin(radians * 0.5f)
 
 constexpr XrExtent2Df kSize{ 1.6f, 0.9f };
 
-} // namespace
+}
 
 TEST(OpenXrManagerTest, RayThroughThePanelCentreHitsAtHalfHalfAndTheRayLength) {
     const PanelHit hit = OpenXrManager::ComputeQuadRayHit(QuadAt(0, 0, -1.5f), kSize, Vector3(0, 0, 0), Quaternion(0, 0, 0, 1));
@@ -89,15 +80,12 @@ TEST(OpenXrManagerTest, ARayGivenByItsDirectionHitsWhereItLandsWhateverTheLength
     }
     EXPECT_FALSE(OpenXrManager::ComputeQuadRayHitAlong(quad, kSize, Vector3(0, 0, 0), Vector3(0, 0, 0)).hit) << "no direction";
     EXPECT_FALSE(OpenXrManager::ComputeQuadRayHitAlong(quad, kSize, Vector3(0, 0, 0), Vector3(0, 0, 1)).hit) << "pointing away";
-    // It is the same ray as a hand turned the same way: the orientation form is this one with -Z rotated.
     const PanelHit byOrientation = OpenXrManager::ComputeQuadRayHit(QuadAt(-1.5f, 0, 0, kPi * 0.5f), kSize, Vector3(0, 0, 0), Yaw(kPi * 0.5f));
     const PanelHit byDirection = OpenXrManager::ComputeQuadRayHitAlong(QuadAt(-1.5f, 0, 0, kPi * 0.5f), kSize, Vector3(0, 0, 0), Vector3(-1, 0, 0));
     EXPECT_TRUE(byDirection.hit);
     EXPECT_NEAR(byDirection.u, byOrientation.u, 1e-5f);
     EXPECT_NEAR(byDirection.v, byOrientation.v, 1e-5f);
 }
-
-// ---- A hand's ray against the panel that is submitted ----
 
 namespace {
 
@@ -110,18 +98,17 @@ HeadPose HandPoseAt(float x, float y, float z) {
     return pose;
 }
 
-// A headset whose head sits at (0, 1.6, 0) looking straight ahead, with the menu quad aligned in front of it.
 void PlaceHeadAndAlignPanel(FakeTrackedHeadset& headset) {
     headset.SetHeadPose(HandPoseAt(0.0f, 1.6f, 0.0f));
     headset.manager->PollHeadPose();
     headset.manager->AlignMenuQuadToHeadPose();
 }
 
-} // namespace
+}
 
 TEST(OpenXrManagerTest, AHandAimedAtThePanelHitsItWhereTheRayLands) {
     FakeTrackedHeadset headset;
-    PlaceHeadAndAlignPanel(headset);  // panel 1.5 m ahead at eye height, 1.6 m x 0.9 m
+    PlaceHeadAndAlignPanel(headset);
 
     headset.SetHandPose(1, HandPoseAt(0.0f, 1.6f, 0.0f));
     headset.SetHandPose(0, HandPoseAt(0.4f, 1.6f + 0.225f, 0.0f));
@@ -152,7 +139,7 @@ TEST(OpenXrManagerTest, AnUntrackedHandOrAnUnknownHandHasNoPanelHit) {
 TEST(OpenXrManagerTest, AGivenRayHitsThePanelOnlyForATrackedHandAndFollowsTheLocalSpaceAfterARecenter) {
     FakeTrackedHeadset headset;
     PlaceHeadAndAlignPanel(headset);
-    headset.SetHandPose(1, HandPoseAt(5.0f, 0.0f, 0.0f));  // the aim pose points at nothing
+    headset.SetHandPose(1, HandPoseAt(5.0f, 0.0f, 0.0f));
     headset.SetHandTracked(0, false);
     headset.NextFrame();
 
@@ -164,7 +151,6 @@ TEST(OpenXrManagerTest, AGivenRayHitsThePanelOnlyForATrackedHandAndFollowsTheLoc
     EXPECT_FALSE(headset.manager->GetPanelHitAlongRay(0, Vector3(0, 1.6f, 0), Vector3(0, 0, -1)).hit) << "untracked hand";
     EXPECT_FALSE(headset.manager->GetPanelHitAlongRay(7, Vector3(0, 1.6f, 0), Vector3(0, 0, -1)).hit) << "no such hand";
 
-    // After a recentre the given ray is in the re-based local space the panel is submitted in, as the hand poses are.
     headset.manager->Recenter();
     headset.NextFrame();
     const XrPosef quad = headset.manager->ComputeMenuQuadPose();
@@ -176,10 +162,8 @@ TEST(OpenXrManagerTest, AGivenRayHitsThePanelOnlyForATrackedHandAndFollowsTheLoc
 
 TEST(OpenXrManagerTest, PanelHitFollowsTheLocalSpaceThePanelIsSubmittedIn) {
     FakeTrackedHeadset headset;
-    PlaceHeadAndAlignPanel(headset);  // panel 1.5 m ahead of (0, 1.6, 0)
+    PlaceHeadAndAlignPanel(headset);
 
-    // The player shifts 2 m to the side and recentres: the local space now has its origin at the head,
-    // and the panel is placed 1.5 m in front of it in that space.
     headset.SetHeadPose(HandPoseAt(2.0f, 1.6f, 0.0f));
     headset.manager->Recenter();
     headset.NextFrame();
@@ -188,8 +172,6 @@ TEST(OpenXrManagerTest, PanelHitFollowsTheLocalSpaceThePanelIsSubmittedIn) {
     EXPECT_NEAR(quad.position.y, 0.0f, 1e-4f);
     EXPECT_NEAR(quad.position.z, -1.5f, 1e-4f);
 
-    // Hands are located in the re-based local space, as the panel is submitted, so a hand at the head
-    // aiming ahead hits where the panel is drawn.
     headset.SetHandPose(1, HandPoseAt(2.0f, 1.6f, 0.0f));
     headset.NextFrame();
     const PanelHit atDrawnPanel = headset.manager->GetPanelHit(1);
@@ -197,12 +179,10 @@ TEST(OpenXrManagerTest, PanelHitFollowsTheLocalSpaceThePanelIsSubmittedIn) {
     EXPECT_NEAR(atDrawnPanel.u, 0.5f, 1e-4f);
     EXPECT_NEAR(atDrawnPanel.v, 0.5f, 1e-4f);
 
-    headset.SetHandPose(1, HandPoseAt(0.0f, 1.6f, 0.0f));  // aimed at where the panel was before the recentre
+    headset.SetHandPose(1, HandPoseAt(0.0f, 1.6f, 0.0f));
     headset.NextFrame();
     EXPECT_FALSE(headset.manager->GetPanelHit(1).hit);
 }
-
-// ---- The drawn cursor follows the Pointer Ray ----
 
 TEST(MirrorWindowControllerTest, CursorIsDrawnWhereThePointerRayLandsWhileItHasControl) {
     FakeTrackedHeadset headset;
@@ -222,4 +202,4 @@ TEST(MirrorWindowControllerTest, CursorIsDrawnWhereThePointerRayLandsWhileItHasC
     EXPECT_FLOAT_EQ(cursor.normY, 0.2f);
 }
 
-} // namespace fs25vr
+}

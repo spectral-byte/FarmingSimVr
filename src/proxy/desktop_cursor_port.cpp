@@ -41,4 +41,4 @@ bool Win32DesktopCursorPort::IsCursorShowing() {
     return ::GetCursorInfo(&info) != FALSE && (info.flags & CURSOR_SHOWING) != 0;
 }
 
-} // namespace fs25vr
+}

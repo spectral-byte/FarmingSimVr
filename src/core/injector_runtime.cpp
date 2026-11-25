@@ -24,13 +24,11 @@ namespace fs25vr {
 
 namespace {
 
-// Live runtimes, oldest first. g_current mirrors the newest so Current() stays lock-free.
 struct LiveRuntimes {
     std::shared_mutex mutex;
     std::vector<InjectorRuntime*> runtimes;
 };
 
-// Function-local so it is constructed before, and destroyed after, the first runtime.
 LiveRuntimes& Live() {
     static LiveRuntimes live;
     return live;
@@ -38,8 +36,6 @@ LiveRuntimes& Live() {
 
 std::atomic<InjectorRuntime*> g_current{nullptr};
 
-// Removes a destroyed runtime. When blocking is not allowed (process termination, where a killed
-// thread may hold the lock) the entry is left behind if the lock is taken: no hook runs after that.
 void Unregister(InjectorRuntime* runtime, bool mayBlock) {
     LiveRuntimes& live = Live();
     std::unique_lock lock(live.mutex, std::defer_lock);
@@ -52,8 +48,6 @@ void Unregister(InjectorRuntime* runtime, bool mayBlock) {
     g_current.store(live.runtimes.empty() ? nullptr : live.runtimes.back());
 }
 
-// The saved Menu Distance, so the main menu is shown at it before the Companion Mod runs. A value the Companion Mod
-// would refuse (out of range) is not used, as the mod does not use it either.
 void ApplySavedMenuDistance(VRBridge& bridge, const std::filesystem::path& settingsFile) {
     const std::optional<float> saved = ReadCompanionSettingFloat(settingsFile, "menuDistance");
     std::ostringstream ss;
@@ -69,7 +63,7 @@ void ApplySavedMenuDistance(VRBridge& bridge, const std::filesystem::path& setti
     LogInfo(ss.str());
 }
 
-} // namespace
+}
 
 InjectorRuntime& InjectorRuntime::Instance() {
     static InjectorRuntime runtime([] {
@@ -95,9 +89,6 @@ InjectorRuntime* InjectorRuntime::FindLive(void* ctx, bool (*pred)(void*, Inject
 }
 
 InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
-    // Every subsystem the caller did not supply is created here, so the runtime owns the whole graph.
-    // A supplied VRBridge brings its collaborators: adopt them, so the bridge and the hooks share one
-    // OpenXR manager and one NGX interceptor.
     if (m_deps.vrBridge) {
         if (!m_deps.openXrManager) m_deps.openXrManager = m_deps.vrBridge->GetOpenXrManager();
         if (!m_deps.ngxInterceptor) m_deps.ngxInterceptor = m_deps.vrBridge->GetNgxInterceptor();
@@ -129,7 +120,6 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
         live.runtimes.push_back(this);
         g_current.store(this);
     }
-    // Detours may be installed only from here on, now that hooks can find this runtime.
     m_proxy->SetOwnedByRuntime(true);
     m_deps.windowController->SetOwnedByRuntime(true);
     m_deps.luauInterceptor->SetOwnedByRuntime(true);
@@ -143,13 +133,11 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
 }
 
 InjectorRuntime::~InjectorRuntime() {
-    // A thread killed at termination may hold the detour, registry or NGX locks: take none of them.
     if (IsProcessTerminating()) {
-        Unregister(this, /*mayBlock=*/false);
+        Unregister(this, false);
         return;
     }
 
-    // Remove this runtime's detours while hooks can still find it, so none fires without its original.
     m_proxy->SetOwnedByRuntime(false);
     m_deps.windowController->SetOwnedByRuntime(false);
     m_deps.luauInterceptor->SetOwnedByRuntime(false);
@@ -157,9 +145,8 @@ InjectorRuntime::~InjectorRuntime() {
     m_proxy->DetachAll();
     m_deps.luauInterceptor->Detach();
 
-    Unregister(this, /*mayBlock=*/true);
+    Unregister(this, true);
 
-    // Do not leave the NGX interceptor pointing at objects we are about to free.
     m_deps.ngxInterceptor->SetFidelityFxInterceptor(nullptr);
     m_deps.ffxInterceptor->DetachAll();
     m_deps.ngxInterceptor->SetDxgiProxy(nullptr);
@@ -167,4 +154,4 @@ InjectorRuntime::~InjectorRuntime() {
     m_deps.ngxInterceptor->SetOpenXrManager(nullptr);
 }
 
-} // namespace fs25vr
+}

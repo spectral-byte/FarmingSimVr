@@ -1,12 +1,3 @@
-// The Pointer Ray on an Animated Object and on an object Object Grab can pick up (ADR-0034, spec #180, ticket #183), seen from outside: the
-// real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (animated_object_test_support.h
-// for the doors, object_grab_test_support.h for the empty hands and the loose objects). When the ray could select both, the one it meets first
-// is the target: where the ray ends, whether a trigger pull toggles the door, whether the trigger or the grip is taken off the Virtual
-// Gamepad, and which pulses and grabs happen. A Click Point within the cone still comes before both. Prior art: test_animated_objects_pointer.cpp
-// (one door), test_object_grab_feedback.cpp and test_object_grab_grip.cpp (one object).
-
-// What the game does each frame before the Companion Mod's update, besides the camera update and the player's own: Interactive Control's update
-// of its Click Points (when a test has them).
 #define HAND_TOOLS_PRE_FRAME_EXTRA_LUA "if StubIC and StubIC.tick then StubIC.tick() end"
 
 #include "animated_object_test_support.h"
@@ -24,19 +15,16 @@ std::string ObjectAt(const char* z) {
     return std::string("_G.object = StubHandTool.looseObject(-0.4, -0.2, ") + z + ", 0.05, { name = 'object' })";
 }
 
-}  // namespace
+}
 
 class VirtualGamepadAnimatedObjectsNearerTest : public VirtualGamepadAnimatedObjectsTest {
 protected:
-    // A door straight ahead in whose zone the player stands, and a loose object straight ahead at `z`.
     void StartWithDoorAndObject(const char* z) {
         ASSERT_NO_FATAL_FAILURE(StartWithDoor());
         ASSERT_EQ(RunLuauChunk(L, ObjectAt(z).c_str(), "=object"), 0);
         EnterZone();
     }
 };
-
-// ---- A loose object in front of a door ------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, WithALooseObjectInFrontOfADoorTheRayEndsOnTheObjectAndAPullTogglesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("1.5"));
@@ -74,8 +62,6 @@ TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectIsTheTargetFromTheMomen
 }
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectInFrontStillWinsWhenTheEnginesCastDoesNotSeeIt) {
-    // The engine's ray cast stops at any rigid body, so a pallet hides the door behind it from the cast. Where it did not (a collision
-    // the cast leaves out), the rule is the nearer of the two hits: the object's distance comes from Object Grab's report.
     ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("1.5"));
     ASSERT_EQ(RunLuauChunk(L, "StubAnimatedObject.castSeesLooseObjects = false", "=castBlind"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -85,8 +71,6 @@ TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectInFrontStillWinsWhenThe
     EXPECT_EQ(Toggles(), 0);
     EXPECT_EQ(Pad().bRightTrigger, 255);
 }
-
-// ---- A door in front of a loose object ------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, WithADoorInFrontOfALooseObjectTheRayEndsOnTheDoorAndAPullTogglesIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("2.5"));
@@ -112,15 +96,12 @@ TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectBehindTheDoorIsNeitherL
     Squeeze(kRight, 0.0f);
     FRAMES(1);
 
-    // The door goes out of reach of the ray: the object is the target, and landing on it is felt as it always was.
     const int pulsesBefore = PulsesTo(kRight);
     LeaveZone();
     FRAMES(3);
     EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 2.35");
     EXPECT_EQ(PulsesTo(kRight), pulsesBefore + 1) << "one light pulse as the ray lands on the object";
 }
-
-// ---- Either one alone, and the Click Point ----------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, AClickPointWithinTheConeWinsOverBothTheObjectAndTheDoor) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("1.5"));
@@ -158,14 +139,12 @@ TEST_F(VirtualGamepadAnimatedObjectsNearerTest, WithOnlyAnObjectOnTheRayObjectGr
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, ADoorOutOfTheZoneDoesNotHideAnObjectInFrontOfOrBehindIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
-    ASSERT_EQ(RunLuauChunk(L, ObjectAt("2.5").c_str(), "=object"), 0);  // behind the door, which the player is not in the zone of
+    ASSERT_EQ(RunLuauChunk(L, ObjectAt("2.5").c_str(), "=object"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 2.35");
     PullTrigger(kRight);
     EXPECT_EQ(Toggles(), 0);
 }
-
-// ---- Object Grab's report ---------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, ObjectGrabsReportOfItsTargetCarriesTheHitsDistanceAlongTheRayFromTheFingertip) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("1.5"));

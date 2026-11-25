@@ -26,7 +26,6 @@ size_t CountOccurrences(const std::string& haystack, const std::string& needle) 
     return count;
 }
 
-// The whole log line containing needle, or "" when there is none.
 std::string LineContaining(const std::string& content, const std::string& needle) {
     size_t pos = content.find(needle);
     if (pos == std::string::npos) return {};
@@ -41,8 +40,6 @@ void RemoveLogAndBackup(const std::filesystem::path& path) {
     std::filesystem::remove(fs25vr::Logger::BackupPathFor(path));
 }
 
-// Sends the Logger singleton to a private file for each test, then puts it back on its
-// default file and level so later tests' output still reaches disk.
 class ThreadTraceTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -73,7 +70,7 @@ void TracedCallSite() {
     FS25VR_TRACE_THREAD("test-macro-site");
 }
 
-} // namespace
+}
 
 TEST_F(ThreadTraceTest, LogsFirstSightingOnly) {
     ThreadTrace trace("test-first");
@@ -91,7 +88,6 @@ TEST_F(ThreadTraceTest, FirstSightingIsOnDiskWithoutAnExplicitFlush) {
     ThreadTrace trace("test-durable");
     trace.Record(100);
 
-    // Read without Logger::Flush: an Info line is on disk as soon as it is logged.
     EXPECT_NE(ReadAll(kTraceLogPath).find("test-durable on thread 100"), std::string::npos);
 }
 

@@ -1,10 +1,3 @@
--- ====================================================================
--- Test Suite for the camera the engine renders through in the cab and on foot
--- The engine renders through whatever raw setCamera last bound (getCamera() reports it); the
--- game's camera manager names the camera the game itself wants shown. Drives the Companion Mod
--- through the vehicle and player camera updates and the Sequential Dual-Pass mission update.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -30,10 +23,6 @@ end
 local EPS = 1e-6
 local function near(a, b) return math.abs(a - b) < EPS end
 
--- --------------------------------------------------------------------
--- Fake engine: flat nodes (world transform = local transform), cameras with lens settings,
--- a rendering camera and a camera manager that names the game's active camera
--- --------------------------------------------------------------------
 local ROOT = 1
 local CAB, PLAYER, SHOP = 10, 20, 30
 local nodes = {}
@@ -80,9 +69,6 @@ local function install()
     _G.setFarClip = function(node, v) nodes[node].farClip = v end
     _G.setProjectionOffset = function() end
     _G.getProjectionOffset = function() return 0, 0 end
-    -- As in the game: the camera manager renders through the cameras registered with it (the
-    -- game's own, and any added with addCamera) and ignores any other; the global setCamera is the
-    -- game's deprecation wrapper and binds nothing
     local registered = { [CAB] = true, [PLAYER] = true, [SHOP] = true }
     _G.setCamera = function(node) end
     _G.getCamera = function() return rendered end
@@ -99,7 +85,6 @@ local function install()
     }
 end
 
--- The game makes one of its own cameras active
 local function gameActivates(node)
     g_cameraManager:setActiveCamera(node)
 end
@@ -176,7 +161,6 @@ local function run(name, state, fn)
     end)
 end
 
--- The engine renders exactly what the given game camera sees: its position, rotation and lens
 local function assertRendersViewOf(camNode, label)
     assert(rendered ~= nil, label .. ": a camera must be rendering")
     local r, c = nodes[rendered], nodes[camNode]
@@ -196,7 +180,6 @@ run("CabWithLostHeadTrackingShowsTheGamesCabView", { mode = "AFR" }, function()
     VRCompanion:onVehicleCameraUpdate(cab, 16.6)
     assert(rendered ~= CAB, "precondition: head-tracked stereo renders through an eye camera")
 
-    -- Tracking drops out while the game moves its cab camera (mouse look, the vehicle driving on)
     state.pose = nil
     nodes[CAB].t = { 6, 2.1, 4 }
     nodes[CAB].r = { 0.05, 2.4, 0 }
@@ -221,7 +204,6 @@ run("OnFootWithLostHeadTrackingShowsTheGamesPlayerView", { mode = "AFR" }, funct
 end)
 
 run("WithoutAVrProjectionTheEyeCameraHasTheGameCamerasFieldOfView", { mode = "AFR", pose = validPose(), projection = false }, function()
-    -- The eye cameras were created on foot, with the player camera's field of view
     VRCompanion:onPlayerCameraUpdate(playerCamera(), 16.6)
     VRCompanion.activePlayerCamera = nil
 
@@ -233,7 +215,6 @@ end)
 
 run("EyeCamerasDeletedWithAVehicleAreRecreatedBeforeRendering", { mode = "AFR", pose = validPose() }, function()
     VRCompanion:onVehicleCameraUpdate(cabCamera(), 16.6)
-    -- The vehicle is deleted (sold, reset) and takes the eye cameras linked under it with it
     nodes[VRCompanion.cameraNodeLeft] = nil
     nodes[VRCompanion.cameraNodeRight] = nil
 
@@ -270,7 +251,6 @@ run("UnloadingTheMapNeverDeletesNodesTheGameAlreadyDeleted", { mode = "AFR", pos
     _G.createTransformGroup = function() nextNodeId = nextNodeId + 1; return addNode(nextNodeId, { 0, 0, 0 }, { 0, 0, 0 }) end
     VRCompanion:onVehicleCameraUpdate(cabCamera(), 16.6)
     assert(VRCompanion.cyclopeanAudioListenerNode ~= nil, "precondition: the Cyclopean Audio Listener Node exists")
-    -- The game deletes its vehicles, and the nodes the mod linked under them, before the mod unloads
     for id in pairs(nodes) do
         if id >= 7000 then nodes[id] = nil end
     end
@@ -301,7 +281,6 @@ run("UnloadingTheMapDeletesTheVrCamera", { mode = "AFR", pose = validPose() }, f
     assert(nodes[vrCamera] == nil, "the VR camera must be deleted when the map unloads")
 end)
 
--- A game screen with a camera of its own (the shop, construction mode) is shown
 local function showShop()
     gameActivates(SHOP)
 end
@@ -339,7 +318,6 @@ run("AfterAGameScreenRestoresTheCameraItReplacedHeadTrackingResumes", { mode = "
     installBridge(state)
     local playerCam = playerCamera()
     VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
-    -- The screen saves the active camera (the VR camera), shows its own, then restores the saved one
     local saved = g_cameraManager:getActiveCamera()
     showShop()
     VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)

@@ -16,3 +16,5 @@ Accepted. Resolves #80.
 - **Queue Lua commands and apply them on the present thread** (rejected: the measured threads match, so the queue would add latency and code for no race).
 - **Lock VRBridge and OpenXrManager state** (rejected: same reason, and it would put a mutex on the per-frame path).
 - **Document the measured model and keep the trace (selected).**
+
+More decisions about this area, from the code comments: [ADR-0042](0042-companion-mod-core-decisions.md), [ADR-0054](0054-vrbridge-decisions.md).

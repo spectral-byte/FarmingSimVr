@@ -1,9 +1,3 @@
-// Hand Tools, nudging how a tool sits in the Tool Hand while the game runs (vrHandToolOffset), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs
-// (companion_mod_stubs.h, StubHandTool). The pressure washer lance is the tool. The test runs the console command and
-// asserts what the player would see: where the tool's root and a point 1 m along it are, measured in the Virtual Hand's frame,
-// and what the command answers.
-
 #include "hand_tools_test_support.h"
 #include <string>
 #include <vector>
@@ -12,13 +6,11 @@ namespace {
 
 using namespace hand_tools_test;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsOffsetTuningTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // The lance in the right hand, with a marker node 1 m along its +Z (the way its nozzle points).
     void StartWithTheLanceInTheRightHand() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         StartOptions options;
@@ -33,7 +25,6 @@ protected:
 
     std::string Command(const std::string& arguments) { return EvalLua(L, "runCommand('vrHandToolOffset'" + arguments + ")"); }
 
-    // Where the root and the marker are in the right Virtual Hand's frame: x, y, z of the root, then of the marker.
     std::vector<double> Placement() {
         std::vector<double> values;
         for (const char* node : { "lance.rootNode", "marker" }) {
@@ -45,7 +36,7 @@ protected:
     }
 };
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadHandToolsOffsetTuningTest, WithoutArgumentsTheCommandListsEveryToolsOffsetAndHowToChangeIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheLanceInTheRightHand());
@@ -70,7 +61,6 @@ TEST_F(VirtualGamepadHandToolsOffsetTuningTest, NudgeMovesTheToolInTheHandAtOnce
     EXPECT_NEAR(after[0] - before[0], 0.01, 1e-4);
     EXPECT_NEAR(after[1] - before[1], -0.02, 1e-4);
     EXPECT_NEAR(after[2] - before[2], 0.03, 1e-4);
-    // The marker moved with the root by the same amount: the tool points the way it did.
     for (int axis = 0; axis < 3; ++axis) {
         EXPECT_NEAR((after[3 + axis] - after[axis]), (before[3 + axis] - before[axis]), 1e-4);
     }
@@ -80,7 +70,6 @@ TEST_F(VirtualGamepadHandToolsOffsetTuningTest, NudgeMovesTheToolInTheHandAtOnce
 TEST_F(VirtualGamepadHandToolsOffsetTuningTest, TurnRollsTheToolInTheHandAboutTheHandsAxesInDegreesAndKeepsItsPlace) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheLanceInTheRightHand());
     const std::vector<double> before = Placement();
-    // The lance points along the fingertips (-Y of the hand's frame).
     EXPECT_NEAR(before[4] - before[1], -1.0, 1e-3);
 
     const std::string answer = Command(", 'lance', 'turn', '90', '0', '0'");
@@ -115,7 +104,6 @@ TEST_F(VirtualGamepadHandToolsOffsetTuningTest, ANudgeStaysForTheNextTimeTheTool
     const std::vector<double> before = Placement();
     Command(", 'lance', 'nudge', '0.04', '0', '0'");
 
-    // Set the controller down (the lance goes back to the camera), then pick it up again.
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); StubHandTool.hold(lance)", "=redo"), 0);
     FRAMES(2);
     ASSERT_EQ(EvalLua(L, "isBelow(lance.rootNode, handHolder('right'))"), "true");

@@ -1,21 +1,12 @@
--- ====================================================================
--- FS25 VR Companion Mod: Config Subsystem
--- Manages XML persistence and settings configuration
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
--- HUD Safe Area constants (the engine's global HUD anchors, ADR-0022)
 VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL = 0.30
 VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL = 0.22
 VRCompanion.MIN_HUD_SAFE_AREA = 0.0
 VRCompanion.MAX_HUD_SAFE_AREA_HORIZONTAL = 0.40
 VRCompanion.MAX_HUD_SAFE_AREA_VERTICAL = 0.35
 
--- HUD Group Margin and scale constants. HUD_GROUP_NAMES is the one ordered list of groups:
--- layout, visibility, save/load and listing in messages all follow it.
 VRCompanion.HUD_GROUP_NAMES = { "speedometer", "map", "info", "controls" }
--- Each group's default margins and scale: the layout a first install starts with, tuned in the headset
 VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS = {
     speedometer = { marginX = 0.30, marginY = 0.20, scale = 0.82 },
     map = { marginX = 0.30, marginY = 0.22, scale = 0.82 },
@@ -27,20 +18,13 @@ VRCompanion.MAX_HUD_GROUP_MARGIN = 0.45
 VRCompanion.MIN_HUD_GROUP_SCALE = 0.50
 VRCompanion.MAX_HUD_GROUP_SCALE = 1.50
 
--- HUD Group visibility (CONTEXT.md, ADR-0022): which groups show in the Streamlined and the Full HUD.
 VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED = { map = false, speedometer = true, info = false, controls = false }
 VRCompanion.DEFAULT_HUD_GROUP_FULL = { map = true, speedometer = true, info = true, controls = true }
 
--- Whether the Controls group shows its full list of controls (maximized) or is minimized, as the
--- player last chose with the game's help toggle (F1). Saved between sessions; starts maximized.
 VRCompanion.DEFAULT_CONTROLS_EXPANDED = true
 VRCompanion.controlsExpanded = VRCompanion.DEFAULT_CONTROLS_EXPANDED
 
--- VR HUD Convergence Parity Constants
--- The HUD Depth the HUD Groups' layouts are set for: there they are drawn at their layout size, and at another HUD Depth
--- smaller or bigger as a panel moved back or forward (ADR-0037).
 VRCompanion.HUD_LAYOUT_DEPTH = 1.8
--- The HUD Depth a new install starts at, until vrHudDepth saves another.
 VRCompanion.DEFAULT_HUD_DEPTH = 2.5
 VRCompanion.DEFAULT_CONVERGENCE_DISPARITY = 0.012
 VRCompanion.DEFAULT_IPD = 0.064
@@ -48,8 +32,6 @@ VRCompanion.MIN_IPD = 0.040
 VRCompanion.MAX_IPD = 0.085
 VRCompanion.MIN_CONVERGENCE_DEPTH = 0.5
 VRCompanion.MAX_CONVERGENCE_DEPTH = 5.0
--- The HUD Depth range vrHudDepth takes. The HUD Groups grow as the depth comes nearer than the one their layouts are set for,
--- so the range stops at 1 m, where the default layout, drawn 1.8 times its size, reaches the screen's edges.
 VRCompanion.MIN_HUD_DEPTH = 1.0
 VRCompanion.MAX_HUD_DEPTH = 5.0
 VRCompanion.MIN_CONVERGENCE_DISPARITY = 0.0
@@ -57,7 +39,6 @@ VRCompanion.MAX_CONVERGENCE_DISPARITY = 0.040
 VRCompanion.CONVERGENCE_PARALLAX_FACTOR = 0.3375
 VRCompanion.CONVERGENCE_SMOOTH_SPEED = 12.0
 
--- Per-group HUD Group Margins and scale multipliers, by group name
 local function newDefaultHudGroupLayouts()
     local layouts = {}
     for _, name in ipairs(VRCompanion.HUD_GROUP_NAMES) do
@@ -68,27 +49,17 @@ local function newDefaultHudGroupLayouts()
 end
 VRCompanion.hudGroupLayout = newDefaultHudGroupLayouts()
 
--- Speedometer group stacking: the fixed gap between the speedometer and the fill levels, and between
--- fill level rows, at scale 1.0. It is multiplied by the group's scale and is not adjustable.
 VRCompanion.HUD_FILL_LEVEL_GAP = 0.004
 
--- The HUD state (Hidden, Streamlined or Full) a map starts in: the one the player last chose, saved between
--- sessions. A first install starts Hidden (VRCompanion.HUD_STATE_HIDDEN).
 VRCompanion.DEFAULT_HUD_STATE = 0
 VRCompanion.persistedHudState = VRCompanion.DEFAULT_HUD_STATE
 
--- VR HUD Notifications
 VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
 VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
 
--- Recenter VR Tracking Space Configuration
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
 VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
 
--- DLSS near plane per camera mode (vrDlssNearClipCab / Outside / OnFoot), in metres; 0 = auto, which the
--- Injector estimates from the engine's motion vectors. The renderer's near differs between a vehicle's
--- inside camera, its other cameras and the on-foot camera, so each can be fixed on its own. The cab and
--- on-foot defaults are the renderer's known nears; the outside cameras vary, so they default to auto.
 VRCompanion.DLSS_NEAR_CLIP_CAB = "cab"
 VRCompanion.DLSS_NEAR_CLIP_OUTSIDE = "outside"
 VRCompanion.DLSS_NEAR_CLIP_ON_FOOT = "onFoot"
@@ -114,7 +85,6 @@ VRCompanion.RECENTER_MODES = {
     VEHICLE_ONLY = "VehicleOnly"
 }
 
--- XML Helper Functions
 local function readXmlFloat(getXmlFloatFn, xmlFile, ...)
     local keys = {...}
     for _, k in ipairs(keys) do
@@ -167,7 +137,6 @@ function VRCompanion:clamp(val, minVal, maxVal)
     return val
 end
 
--- A group's margins and scale clamped to their ranges; anything not given falls back to that group's default
 function VRCompanion:sanitizeHudGroupLayout(groupName, marginX, marginY, scale)
     local defaults = self.DEFAULT_HUD_GROUP_LAYOUTS[groupName]
     return {
@@ -177,7 +146,6 @@ function VRCompanion:sanitizeHudGroupLayout(groupName, marginX, marginY, scale)
     }
 end
 
--- Settings-file key prefix of a group, e.g. "vrSettings.hudGroupMap"
 local function hudGroupSettingsKey(groupName)
     return "vrSettings.hudGroup" .. string.upper(string.sub(groupName, 1, 1)) .. string.sub(groupName, 2)
 end
@@ -245,11 +213,8 @@ function VRCompanion:saveConfiguration(xmlPath)
             end
             setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
-        -- Each subsystem saves its own settings (its saveSettings hook, VRCompanionCore.lua); the engine's setters, any may be nil
         self:runSubsystemSaveSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn, setInt = setXmlIntFn })
         if type(setXmlStringFn) == "function" then
-            -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
-            -- only queues a change until the next frame boundary, so it still reports the old mode here.
             local modeStr = (self.renderingMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
             setXmlStringFn(xmlFile, "vrSettings.renderingMode", modeStr)
             setXmlStringFn(xmlFile, "vrSettings.hudState",
@@ -278,7 +243,6 @@ function VRCompanion:loadConfiguration(xmlPath)
     local controlsExpanded = self.DEFAULT_CONTROLS_EXPANDED
     local renderingModeLoaded = false
 
-    -- Group visibility starts from the defaults; the settings file overrides the keys it has
     for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
         local group = (self.HUD_GROUPS or {})[groupName]
         if group ~= nil then
@@ -299,7 +263,6 @@ function VRCompanion:loadConfiguration(xmlPath)
         if filePath ~= nil and type(loadXmlFn) == "function" and type(getXmlFloatFn) == "function" then
             local ok, xmlFile = pcall(loadXmlFn, "VRCompanionConfig", filePath)
             if ok and xmlFile ~= 0 and xmlFile ~= nil then
-                -- The old hudInsetHorizontal, hudInsetVertical and hudInsetTop keys are ignored (ADR-0022)
                 local loadedSafeAreaHorizontal = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.hudSafeAreaHorizontal")
                 if loadedSafeAreaHorizontal ~= nil then safeAreaHorizontal = loadedSafeAreaHorizontal end
@@ -318,7 +281,6 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.hudConvergenceDepth")
-                -- A depth out of vrHudDepth's range (older versions allowed 0.5 m) loads as the nearest one allowed
                 if loadedDepth ~= nil and loadedDepth == loadedDepth then
                     self.hudConvergenceDepth = self:clamp(loadedDepth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
                 else
@@ -352,7 +314,6 @@ function VRCompanion:loadConfiguration(xmlPath)
                     "vrSettings.hudGroups.controls.expanded")
                 if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
 
-                -- Each subsystem loads its own settings (its loadSettings hook, VRCompanionCore.lua); the engine's getters, any may be nil
                 self:runSubsystemLoadSettings(xmlFile, { has = hasXmlPropertyFn, getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn, getInt = getXmlIntFn })
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
@@ -370,7 +331,6 @@ function VRCompanion:loadConfiguration(xmlPath)
                     end
                 end
 
-                -- The HUD state is saved by name; an unknown or missing one keeps the default
                 local loadedHudState = readXmlString(getXmlStringFn, xmlFile, "vrSettings.hudState")
                 if loadedHudState ~= nil then
                     for state, name in pairs(self.HUD_STATE_NAMES) do
@@ -396,7 +356,6 @@ function VRCompanion:loadConfiguration(xmlPath)
         return false
     end
 
-    -- Defaults are the DEFAULT_* constants; the user settings file is the only XML source.
     local userPath = nil
     local loadedUser = false
     if xmlPath ~= nil then
@@ -410,9 +369,6 @@ function VRCompanion:loadConfiguration(xmlPath)
             end
         end
 
-        -- No saved Stereo Presentation Mode and none chosen this session: apply the default through
-        -- setRenderingMode so it reaches VRBridge and is marked explicit (otherwise a parity-only
-        -- bridge reads as AFR).
         if not renderingModeLoaded and not self.renderingModeExplicit then
             self:setRenderingMode(self.DEFAULT_RENDERING_MODE, false)
         end
@@ -441,7 +397,6 @@ function VRCompanion:loadConfiguration(xmlPath)
     self.controlsExpanded = controlsExpanded
     self:configureHudSafeArea(safeAreaHorizontal, safeAreaVertical)
 
-    -- First run: create the user settings file from the values just applied
     if not loadedUser and userPath ~= nil then
         self:saveConfiguration(userPath)
     end

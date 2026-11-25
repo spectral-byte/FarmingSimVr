@@ -15,12 +15,9 @@
 namespace fs25vr {
 
 namespace {
-// The instance whose detours are live. The detour entry points are plain function pointers, so they
-// resolve the interceptor that installed them here instead of reaching for the singleton.
 std::atomic<NgxInterceptor*> s_featureHost{nullptr};
 std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
 
-// NVSDK_NGX_DLSS_Feature_Flags bits, named for the creation diagnostics.
 constexpr struct { int bit; const char* name; } kDlssCreateFlagNames[] = {
     {1 << 0, "IsHDR"},
     {1 << 1, "MVLowRes"},
@@ -42,11 +39,10 @@ std::string DescribeDlssCreateFlags(int flags) {
     return names.empty() ? "none" : names;
 }
 
-// Jitter offsets closer than this are the same sample position.
 constexpr float kJitterMatchTolerance = 1e-4f;
 // Distinct offsets listed per context in the summary; the count covers all of them.
 constexpr size_t kMaxListedJitterOffsets = 16;
-} // namespace
+}
 
 NgxInterceptor* NgxInterceptor::FeatureHost() {
     return s_featureHost.load();
@@ -62,7 +58,6 @@ NgxInterceptor::NgxInterceptor() {
 
 NgxInterceptor::~NgxInterceptor() {
     if (IsProcessTerminating()) {
-        // Releasing GPU objects while the process is going down is not safe; the OS reclaims them.
         (void)m_mvPass.release();
         return;
     }
@@ -74,8 +69,6 @@ bool NgxInterceptor::MatchesNgxName(LPCWSTR lpLibFileName) {
     std::wstring s(lpLibFileName);
     for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
 
-    // Explicitly reject child plugin DLLs (Super Resolution, Frame Generation,
-    // Ray Reconstruction, Update service) to ensure we hook the core runtime / loader.
     if (s.find(L"dlss") != std::wstring::npos ||
         s.find(L"update") != std::wstring::npos) {
         return false;
@@ -84,7 +77,6 @@ bool NgxInterceptor::MatchesNgxName(LPCWSTR lpLibFileName) {
     auto pos = s.find_last_of(L"\\/");
     std::wstring filename = (pos == std::wstring::npos) ? s : s.substr(pos + 1);
 
-    // Accept nvngx.dll (standard NGX loader) and _nvngx.dll (DriverStore core NGX implementation).
     return filename == L"nvngx.dll" || filename == L"_nvngx.dll" ||
            filename == L"nvngx" || filename == L"_nvngx";
 }
@@ -94,8 +86,6 @@ bool NgxInterceptor::MatchesNgxName(LPCSTR lpLibFileName) {
     std::string s(lpLibFileName);
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
-    // Explicitly reject child plugin DLLs (Super Resolution, Frame Generation,
-    // Ray Reconstruction, Update service) to ensure we hook the core runtime / loader.
     if (s.find("dlss") != std::string::npos ||
         s.find("update") != std::string::npos) {
         return false;
@@ -104,7 +94,6 @@ bool NgxInterceptor::MatchesNgxName(LPCSTR lpLibFileName) {
     auto pos = s.find_last_of("\\/");
     std::string filename = (pos == std::string::npos) ? s : s.substr(pos + 1);
 
-    // Accept nvngx.dll (standard NGX loader) and _nvngx.dll (DriverStore core NGX implementation).
     return filename == "nvngx.dll" || filename == "_nvngx.dll" ||
            filename == "nvngx" || filename == "_nvngx";
 }
@@ -134,7 +123,6 @@ bool NgxInterceptor::AttachDirectInternal(
         return false;
     }
 
-    // Detach any previous attachment
     if (m_isAttached) {
         if (m_detourCreateFeature.IsInstalled()) m_detourCreateFeature.Uninstall();
         if (m_detourReleaseFeature.IsInstalled()) m_detourReleaseFeature.Uninstall();
@@ -145,8 +133,6 @@ bool NgxInterceptor::AttachDirectInternal(
         m_isAttached = false;
     }
 
-    // Publish the host before any detour goes live: a game thread can enter a detour the moment it is
-    // enabled, and an entry point with no host fails the call.
     NgxInterceptor* previousHost = s_featureHost.exchange(this);
 
     bool createInstalled = m_detourCreateFeature.Install(
@@ -222,7 +208,6 @@ void NgxInterceptor::GetTargetUpscalingDimensions(uint32_t& outWidth, uint32_t& 
     outWidth = 0;
     outHeight = 0;
 
-    // Pass-Through Mode: an inactive proxy would report the mirror target resolution, not the headset's.
     DxgiProxy* proxy = GetDxgiProxy();
     if (proxy && proxy->IsActive()) {
         proxy->GetDecoupledTargetResolution(outWidth, outHeight);
@@ -271,7 +256,6 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
     auto pfnGetCaps = reinterpret_cast<PFN_NVSDK_NGX_D3D12_GetCapabilityParameters>(
         GetProcAddress(hNgxModule, "NVSDK_NGX_D3D12_GetCapabilityParameters"));
 
-    // Fall back to nvngx.dll if parameter management functions are not exported by this module (e.g. nvngx_dlss.dll)
     if (!pfnAlloc || !pfnDestroy || !pfnGetCaps) {
         HMODULE hNvngx = GetModuleHandleW(L"nvngx.dll");
         if (!hNvngx) {
@@ -294,7 +278,6 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
     }
 
     if (m_isAttached) {
-        // If already attached to feature functions, but parameter functions were missing, attach parameter detours now
         if (pfnAlloc && !m_detourAllocateParameters.IsInstalled()) {
             if (m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters))) {
                 LogInfo("NgxInterceptor: Successfully attached deferred AllocateParameters detour.");
@@ -336,8 +319,6 @@ void NgxInterceptor::SetFidelityFxInterceptor(FidelityFxInterceptor* interceptor
     m_fidelityFx = interceptor;
 }
 
-// LoadLibrary can be hooked only once per process and this interceptor owns those hooks, so a load of
-// the FidelityFX loader is routed to its interceptor from here.
 void NgxInterceptor::NotifyModuleLoaded(HMODULE hMod, LPCWSTR name) {
     FidelityFxInterceptor* ffx = GetFidelityFxInterceptor();
     if (ffx && FidelityFxInterceptor::MatchesLoaderName(name)) ffx->AttachModule(hMod);
@@ -379,10 +360,6 @@ bool NgxInterceptor::InstallModuleLoadHooks() {
     void* pfnLoadLibraryA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryA"));
     void* pfnLoadLibraryExA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryExA"));
 
-    // Publish the host before any detour goes live. A LoadLibrary detour with no trampoline calls the
-    // hooked LoadLibrary again and recurses until the stack overflows, so the detours must never see a
-    // host other than the one whose trampolines they are. LoadLibrary can be hooked only once, so a
-    // second interceptor stays out while another owns the hooks.
     NgxInterceptor* noHost = nullptr;
     if (!s_loadHookHost.compare_exchange_strong(noHost, this)) {
         LogError("NgxInterceptor: Another interceptor already owns the module load detours.");
@@ -489,7 +466,6 @@ void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolu
     m_nearEstimator.Submit(evalIndex, solution);
     const float estimate = m_nearEstimator.Estimate();
     if (!(estimate > 0.0f)) return;
-    // Once per 2 s, and only while it moves by more than 5% from what was last logged.
     const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now().time_since_epoch()).count();
     const int64_t lastMs = m_nearLastLogMs.load();
@@ -669,7 +645,6 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
     float jitX = 0.0f, jitY = 0.0f, mvX = 1.0f, mvY = 1.0f;
     unsigned int renderW = 0, renderH = 0;
     if (params) {
-        // The engine may request a reset itself, not only our Discontinuity Flush.
         int resetParam = 0;
         if (NVSDK_NGX_SUCCEED(params->Get(NVSDK_NGX_Parameter_Reset, &resetParam)) && resetParam != 0) {
             reset = true;
@@ -708,7 +683,6 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
        << " Render=" << renderW << "x" << renderH
        << " Thread=" << GetCurrentThreadId();
     if (bridge) {
-        // The cameras the engine rendered this frame, the previous frame and this eye's last frame with.
         ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
     }
     LogInfo(ss.str());
@@ -841,7 +815,6 @@ bool NgxInterceptor::UnregisterTrackedParameter(NVSDK_NGX_Parameter* param) {
     return false;
 }
 
-// Intercept entry point: CreateFeature
 NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
     ID3D12GraphicsCommandList* InCmdList,
     NVSDK_NGX_Feature InFeatureID,
@@ -870,7 +843,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
     }
 
-    // Step 0: Query decoupled target resolution and derive internal DLSS render resolution
     uint32_t decoupledW = 0, decoupledH = 0;
     interceptor.GetTargetUpscalingDimensions(decoupledW, decoupledH);
 
@@ -930,11 +902,9 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, presetOverride);
     }
 
-    // Step 1: Clone parameters for isolated mirroring across both underlying features
     auto clonedParams = std::make_shared<NgxParameterImpl>();
     clonedParams->CopyFrom(InParameters);
 
-    // Step 2: Create Left Feature Handle
     NVSDK_NGX_Handle* hLeft = nullptr;
     NVSDK_NGX_Result resLeft = origCreate(InCmdList, InFeatureID, InParameters, &hLeft);
     if (NVSDK_NGX_FAILED(resLeft) || !hLeft) {
@@ -947,7 +917,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         return resLeft;
     }
 
-    // Step 3: Create Right Feature Handle with cloned parameters
     NVSDK_NGX_Handle* hRight = nullptr;
     NVSDK_NGX_Parameter* rightParamsToPass = InParameters;
     NVSDK_NGX_Parameter* nativeRightParams = nullptr;
@@ -968,7 +937,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         nativeRightParams = nullptr;
     }
 
-    // Step 4: Handle Right Feature Creation Failure (Rollback Left to prevent leaks)
     if (NVSDK_NGX_FAILED(resRight) || !hRight) {
         std::stringstream ss;
         ss << "NgxInterceptor: Failed to create right NGX feature: " << resRight
@@ -982,7 +950,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         return resRight;
     }
 
-    // Step 5: Allocate VirtualNgxHandle wrapping both handles
     auto virtualHandle = std::make_unique<VirtualNgxHandle>();
     virtualHandle->Id = interceptor.m_nextVirtualId.fetch_add(1);
     virtualHandle->magic = VIRTUAL_NGX_HANDLE_MAGIC;
@@ -1025,7 +992,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
     return NVSDK_NGX_Result_Success;
 }
 
-// Intercept entry point: ReleaseFeature
 NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHandle) {
     if (!InHandle) {
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
@@ -1043,7 +1009,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHa
         return NVSDK_NGX_Result_Fail;
     }
 
-    // Check if this is a registered virtual handle
     if (interceptor.IsVirtualHandle(InHandle)) {
         auto virtualHandle = interceptor.UnregisterVirtualHandle(InHandle);
         if (!virtualHandle) {
@@ -1067,11 +1032,9 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHa
         return (NVSDK_NGX_FAILED(resLeft)) ? resLeft : resRight;
     }
 
-    // Non-virtual handle: forward directly to original
     return origRelease(InHandle);
 }
 
-// Intercept entry point: EvaluateFeature
 NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     ID3D12GraphicsCommandList* InCmdList,
     const NVSDK_NGX_Handle* InFeatureHandle,
@@ -1096,7 +1059,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     VRBridge* bridge = interceptor.GetVRBridge();
 
-    // Mode transition tracking & discontinuity latching
     int currentMode = bridge ? static_cast<int>(bridge->GetRenderingMode()) : -1;
     int lastMode = interceptor.m_lastRenderingMode.exchange(currentMode);
     if (lastMode != -1 && lastMode != currentMode) {
@@ -1110,8 +1072,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     uint32_t contextIndex = 0;
     bool alternatesEyeContexts = false;
 
-    // One registry lookup resolves the Virtual NGX Handle; the bridge read above is reused
-    // for the bypass and eye-index decisions instead of re-taking the interceptor lock.
     auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
     if (vHandle && vHandle->magic == VIRTUAL_NGX_HANDLE_MAGIC) {
         if (bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible())) {
@@ -1130,9 +1090,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         contextIndex = 0;
     }
 
-    // Check if a Discontinuity Flush is pending for this context
     bool needReset = interceptor.ConsumeDiscontinuity(contextIndex);
-    if (needReset) interceptor.ForgetNearEstimate(); // the scene may have changed: relearn the near
+    if (needReset) interceptor.ForgetNearEstimate();
 
     int prevReset = 0;
     bool hadPrevReset = false;
@@ -1176,19 +1135,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         }
     }
 
-    // Eye-stride compensation only applies when consecutive evaluations of a context are two
-    // frames apart: AFR alternating a virtual handle's two eye contexts during stereo presentation,
-    // which starts at the Companion Mod handshake. SDP per-eye contexts use their own diagnostic
-    // multiplier (1.0x unless set). The monoscopic single-context bypass, a handle that was not split
-    // per eye, and pre-handshake (quad layer) frames are 1.0x.
     bool eyeStride = !isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
     bool dualPassEyeContexts = isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
     float prevScaleX = 1.0f, prevScaleY = 1.0f;
     float scaleMulX = 1.0f, scaleMulY = 1.0f;
-    // Under AFR the eye-stride multiplier (vrDlssMvScale) is only the fallback for when the motion vector
-    // pass is off or has disabled itself. While the pass is available, the correction handles the stride
-    // itself (it scales the object-motion component only), so the multiplier is held back here and applied
-    // below only if the pass did not take over this evaluation.
     float afrFallbackMulX = 1.0f, afrFallbackMulY = 1.0f;
     if (eyeStride) {
         afrFallbackMulX = interceptor.GetMvScaleMultiplierX();
@@ -1199,7 +1149,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     }
     bool wroteScale = false;
     if (mutableParams) {
-        // An absent MV scale means 1.0 to DLSS, which is also what we restore it to.
         float scale = 1.0f;
         if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_X, &scale))) prevScaleX = scale;
         scale = 1.0f;
@@ -1216,9 +1165,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         wroteScale = true;
     }
 
-    // The motion vector pass: DLSS reads the Injector's texture for this one evaluation, then the game's
-    // motion vectors are put back. Monoscopic presentation (menus, 2D Floating Window Mode) and handles
-    // that are not split per eye keep the engine's motion vectors.
     ID3D12Resource* prevMv = nullptr;
     bool swappedMv = false;
     const char* correctionState = "off";
@@ -1228,9 +1174,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Get(NVSDK_NGX_Parameter_Depth, &depth);
         mutableParams->Get(NVSDK_NGX_Parameter_MotionVectors, &mv);
         if (depth && mv) {
-            // Per-eye correction: re-aim the engine's vectors from the previous rendered frame's camera at the
-            // same eye's previous camera. Frames without a usable plan (missing record, a zero
-            // MV scale) get the engine's vectors back unchanged.
             const float effScaleX = prevScaleX * scaleMulX;
             const float effScaleY = prevScaleY * scaleMulY;
             const uint32_t correctionEye = bridge ? bridge->GetActiveEye() : 0;
@@ -1240,13 +1183,11 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             const MvCorrectionRequest* correction = nullptr;
             correctionState = mvreproj::CorrectionDecisionName(plan.decision);
             const bool infiniteDepth = interceptor.m_depthModelInfinite.load();
-            // Near plane: a manual override wins, then the automatic estimate, then the camera record's.
             const float nearOverride = interceptor.m_nearClipOverride.load();
             const float autoNear = nearOverride > 0.0f ? 0.0f : interceptor.m_nearEstimator.Estimate();
             const float forcedNear = nearOverride > 0.0f ? nearOverride : autoNear;
             if (plan.decision == mvreproj::CorrectionDecision::Correct) {
                 if (std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f) {
-                    // Only the camera that rendered the depth buffer reads it.
                     plan.current.infiniteDepth = infiniteDepth;
                     if (forcedNear > 0.0f) {
                         plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = forcedNear;
@@ -1258,10 +1199,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     correctionRequest.sameEye = plan.sameEye;
                     correctionRequest.toPreviousFrame = plan.toPreviousFrame;
                     correctionRequest.toSameEye = plan.toSameEye;
-                    // AFR: the simulation advances every frame, so only the engine's object motion needs the
-                    // eye stride (the same eye's history is two frames back).
                     correctionRequest.objectMotionFactor = eyeStride ? mvreproj::kAfrEyeStride : 1.0f;
-                    // Camera-attached geometry (the cab) and moving objects keep the engine's vector.
                     correctionRequest.gateNonStatic = true;
                     correction = &correctionRequest;
                 } else {
@@ -1273,8 +1211,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                         " Eye=" + std::to_string(correctionEye) + ": " + (correction ? "correcting" : correctionState));
             }
 
-            // Self-check (vrDlssDiag window only): predict the engine's vectors from depth and the camera
-            // records and score them. Measured only; the pass output stays a copy of the engine's vectors.
             MvSelfCheckRequest checkRequest;
             const MvSelfCheckRequest* check = nullptr;
             if (interceptor.m_diagRemaining.load() > 0) {
@@ -1312,17 +1248,11 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", checkEye, evalIndex, skipReason));
                 }
             }
-            // Automatic near plane estimate, running whenever the correction does (not only in diagnostics
-            // windows): every Nth cross-eye evaluation records a sparse self-check against the previous
-            // rendered frame's camera on the engine's original vectors; it is read back a few evaluations
-            // later like any self-check. Missing records are skipped.
             MvSelfCheckRequest nearRequest;
             float recordNear = 0.0f;
             if (bridge) {
                 const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(correctionEye);
                 if (resolved.current) recordNear = resolved.current->nearClip;
-                // One check per evaluation: on its every Nth evaluation the estimate takes the slot, also in a
-                // diagnostics window (which arms itself at start up and on mode changes).
                 if (nearOverride <= 0.0f && resolved.current && resolved.previousFrame &&
                     std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f &&
                     interceptor.m_nearCrossEyeEvals.fetch_add(1) % NgxInterceptor::kNearEstimateInterval ==
@@ -1332,7 +1262,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     if (BuildMvSelfCheckRequest(resolved, correctionEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
                                                 nearRequest, skipReason)) {
                         nearRequest.current.infiniteDepth = infiniteDepth;
-                        // The assumed near n0: whatever the correction is using this frame.
                         if (forcedNear > 0.0f) nearRequest.current.nearClip = nearRequest.previous.nearClip = forcedNear;
                         nearRequest.nearEstimate = true;
                         check = &nearRequest;
@@ -1363,8 +1292,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         }
     }
 
-    // AFR with the pass expected to run but not taking over (it failed on this evaluation, or the engine's
-    // depth or vectors were unavailable): fall back to eye-stride scaling.
     if (eyeStride && mvFixWillRun && !swappedMv && mutableParams) {
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * afrFallbackMulX);
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * afrFallbackMulY);
@@ -1427,7 +1354,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, prevMv);
     }
 
-    // Always undo our write so a reused parameter block never compounds the multiplier
     if (wroteScale) {
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX);
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY);
@@ -1436,7 +1362,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     return res;
 }
 
-// Intercept entry point: AllocateParameters
 NVSDK_NGX_Result NgxInterceptor::Intercept_AllocateParameters(NVSDK_NGX_Parameter** OutParameters) {
     if (!OutParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
@@ -1454,7 +1379,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_AllocateParameters(NVSDK_NGX_Paramete
     return NVSDK_NGX_Result_Success;
 }
 
-// Intercept entry point: GetCapabilityParameters
 NVSDK_NGX_Result NgxInterceptor::Intercept_GetCapabilityParameters(NVSDK_NGX_Parameter** OutParameters) {
     if (!OutParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
@@ -1472,7 +1396,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_GetCapabilityParameters(NVSDK_NGX_Par
     return NVSDK_NGX_Result_Success;
 }
 
-// Intercept entry point: DestroyParameters
 NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter* InParameters) {
     if (!InParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
@@ -1491,10 +1414,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter
     return NVSDK_NGX_Result_Success;
 }
 
-// Intercept entry point: LoadLibraryW
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
     NgxInterceptor* interceptor = LoadHookHost();
-    // No trampoline means the hook is already gone, so the plain call cannot re-enter this detour.
     auto orig = interceptor ? Original<decltype(&LoadLibraryW)>(interceptor->m_detourLoadLibraryW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryW(lpLibFileName);
 
@@ -1506,7 +1427,6 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
     return hMod;
 }
 
-// Intercept entry point: LoadLibraryExW
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryExW)>(interceptor->m_detourLoadLibraryExW) : nullptr;
@@ -1520,7 +1440,6 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
     return hMod;
 }
 
-// Intercept entry point: LoadLibraryA
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryA)>(interceptor->m_detourLoadLibraryA) : nullptr;
@@ -1534,7 +1453,6 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
     return hMod;
 }
 
-// Intercept entry point: LoadLibraryExA
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryExA)>(interceptor->m_detourLoadLibraryExA) : nullptr;
@@ -1548,4 +1466,4 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HA
     return hMod;
 }
 
-} // namespace fs25vr
+}

@@ -29,3 +29,5 @@ Accepted. Verified in the headset: Outside Camera 6DOF, DLSS and FSR anti-aliasi
 - ADR-0016's "two distinct scene-graph camera nodes" and ADR-0015's sub-pass activation of `cameraNodeLeft`/`cameraNodeRight` now refer to the one shared node.
 - The camera manager's active camera is the VR camera while the mod renders, so game code that asks the manager for the active camera gets the VR camera. The mod keeps the game's own camera separately.
 - The node is linked under the camera path's parent (in the cab, under the vehicle), so it can be deleted with a vehicle. The mod recreates it, and remembers the deleted id in case the camera manager still names it active.
+
+More decisions about this area, from the code comments: [ADR-0043](0043-stereo-view-decisions.md).

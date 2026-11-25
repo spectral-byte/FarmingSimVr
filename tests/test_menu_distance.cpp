@@ -1,7 +1,3 @@
-// Menu Distance: `vrMenuDistance [1.0-5.0]` sets how far in front of the head the menu quad (menus and 2D Floating Window
-// Mode) is placed. The setting reaches the Injector through VRBridge, is saved in settings.xml and is sent again on the next
-// map load. These tests run the Companion Mod against a real VRBridge on the Fake Tracked Headset and look only at what leaves
-// the system: where the menu quad is placed, the VRBridge getter, the console replies and the settings store.
 #include "companion_mod_fixture.h"
 #include "core/companion_settings.h"
 #include "core/injector_runtime.h"
@@ -11,7 +7,6 @@
 
 namespace {
 
-// A settings.xml in the temp folder, removed again when the test ends.
 class TempSettingsFile {
 public:
     explicit TempSettingsFile(const std::string& content)
@@ -37,7 +32,6 @@ std::string EngineSettingsXml(const std::string& menuDistanceElement) {
            "</vrSettings>\r\n";
 }
 
-// The head at eye height looking down -Z, no recenter: the quad goes straight ahead of it.
 void PlaceHead(fs25vr::FakeTrackedHeadset& headset) {
     fs25vr::HeadPose head;
     head.position = fs25vr::Vector3(0.0f, 1.7f, 0.0f);
@@ -48,17 +42,14 @@ void PlaceHead(fs25vr::FakeTrackedHeadset& headset) {
     headset.manager->PollHeadPose();
 }
 
-// How far in front of the head, along -Z, the menu quad sits
 float QuadDistanceAhead(fs25vr::FakeTrackedHeadset& headset) {
     return -headset.manager->ComputeMenuQuadPose().position.z;
 }
 
-} // namespace
+}
 
 class MenuDistanceCommandTest : public CompanionModTest {
 protected:
-    // Engine functions a map load needs, recording the console commands registered and removed, over a settings file that
-    // is a store the mocks write to and read from (a value saved in one map load is what the next one finds).
     static constexpr const char* kMapLoadMocks = R"luau(
         _G.registeredCommands = {}
         _G.removedCommands = {}
@@ -125,7 +116,6 @@ TEST_F(MenuDistanceCommandTest, ANumberFromOneToFiveMovesTheShownMenuAtOnceAndPl
     LoadModAndMap(bridge);
     PlaceHead(headset);
 
-    // A menu opens at the default distance
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setMenuVisible(true)", "=openMenu"), 0);
     EXPECT_NEAR(QuadDistanceAhead(headset), 1.5f, 0.001f);
 
@@ -136,7 +126,6 @@ TEST_F(MenuDistanceCommandTest, ANumberFromOneToFiveMovesTheShownMenuAtOnceAndPl
     )luau", "=set"), 0);
     EXPECT_NEAR(QuadDistanceAhead(headset), 3.0f, 0.001f) << "the menu showing moves back at once";
 
-    // The next menu is placed at the new distance too
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setMenuVisible(false); VRBridge.setMenuVisible(true)", "=reopenMenu"), 0);
     EXPECT_NEAR(QuadDistanceAhead(headset), 3.0f, 0.001f);
 
@@ -242,9 +231,6 @@ TEST_F(MenuDistanceCommandTest, AMissingKeyKeepsTheDefaultAndASavedValueOutOfRan
     )luau", "=missingKey"), 0);
 }
 
-// The Injector reads the saved Menu Distance from the Companion Mod's settings.xml when the game starts, so the main menu,
-// shown before any savegame (and so before the Companion Mod) has loaded, is placed at it.
-
 TEST(CompanionSettingsTest, ReadsTheNumberOfAnElementAsTheEngineWritesIt) {
     TempSettingsFile file(EngineSettingsXml("    <menuDistance>2.500000</menuDistance>\r\n"));
     EXPECT_EQ(fs25vr::ReadCompanionSettingFloat(file.Path(), "menuDistance"), 2.5f);
@@ -281,8 +267,6 @@ TEST(CompanionSettingsTest, TheDefaultFileIsTheCompanionModsSettingsUnderTheGame
 
 namespace {
 
-// An Injector started over `settingsFile` on the Fake Tracked Headset, then a menu shown with the head placed:
-// how far ahead the menu is.
 float MainMenuDistanceAtLaunch(const std::filesystem::path& settingsFile, float* bridgeDistance = nullptr) {
     fs25vr::FakeTrackedHeadset headset;
     fs25vr::InjectorRuntime::Dependencies deps;
@@ -295,7 +279,7 @@ float MainMenuDistanceAtLaunch(const std::filesystem::path& settingsFile, float*
     return QuadDistanceAhead(headset);
 }
 
-} // namespace
+}
 
 TEST(MenuDistanceAtLaunchTest, TheMainMenuIsShownAtTheSavedDistanceBeforeTheCompanionModRuns) {
     TempSettingsFile file(EngineSettingsXml("    <menuDistance>3.000000</menuDistance>\r\n"));

@@ -1,10 +1,3 @@
-// Manual Attach, working the PTO stub and the hose couplers with the Pointer Ray (ADR-0035, spec #227, ticket #229), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game and Manual Attach stood in by Lua stubs
-// (manual_attach_test_support.h). The PTO stub and the hose couplers are the vehicle's side of an Implement's hitch; the player points at one
-// and pulls the trigger, and Manual Attach's own PTO or hose path runs for the Implement on that hitch. Covered here: what is offered and when,
-// which Coupling Point of a hitch wins, that each pull runs exactly one path, the pulses, the Virtual Gamepad, and the releases of Manual Attach
-// the support gives up on. Prior art: test_manual_attach_hitch.cpp and test_manual_attach_pointer.cpp.
-
 #include "manual_attach_test_support.h"
 #include <string>
 
@@ -15,8 +8,6 @@ using namespace manual_attach_test;
 
 class VirtualGamepadManualAttachPtoHosesWrapsTest : public VirtualGamepadManualAttachTest {
 protected:
-    // Manual Attach or the game is in a release where something the PTO and hose support relies on is missing or reshaped: the module warns once,
-    // selects nothing, works nothing, and Manual Attach (its key: the handler's own execute path) works as it does without VR.
     void ExpectTheSupportGivesUpWith(const char* variant) {
         SCOPED_TRACE(variant);
         ASSERT_NO_FATAL_FAILURE(StartWithManualAttach(variant));
@@ -34,15 +25,12 @@ protected:
         EXPECT_EQ(Warnings(), 1);
         ReleaseTrigger(kRight);
 
-        // Manual Attach itself still works its candidate with its own key.
         Lua("StubManualAttach.handler:executeAttachment(StubManualAttach.handler.vehicleJointAttachment)");
         EXPECT_EQ(Attached("plow"), "false") << "its detach, as without VR";
     }
 };
 
-}  // namespace
-
-// ---- The PTO stub ---------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnThePtoStubConnectsThePtoAndASecondPullDisconnectsIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -61,8 +49,6 @@ TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnThePtoStubCo
     EXPECT_EQ(PtoConnected("plow"), "false") << "the second pull disconnects it";
 }
 
-// ---- The hose couplers ----------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHoseCouplerConnectsAllTheHosesAndASecondPullDisconnectsThem) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
@@ -78,8 +64,6 @@ TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHoseCoupler
     EXPECT_EQ(Performs("hoses"), 2);
     EXPECT_EQ(HosesConnected("plow"), "false") << "the second pull disconnects them";
 }
-
-// ---- What is offered and when ---------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, ThePtoStubIsOfferedOnlyWhileTheImplementOnTheHitchHasAPto) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -120,7 +104,7 @@ TEST_F(VirtualGamepadManualAttachTest, TheHoseCouplersAreOfferedOnlyWhileTheImpl
 TEST_F(VirtualGamepadManualAttachTest, WithNothingAttachedAtTheHitchNeitherThePtoStubNorTheHoseCouplersAreOffered) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_and_implement"));
-    Lua("plow.hasPto, plow.hasHoses = true, true");  // lined up with the hitch, not on it
+    Lua("plow.hasPto, plow.hasHoses = true, true");
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none");
     POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
@@ -140,7 +124,6 @@ TEST_F(VirtualGamepadManualAttachTest, WithNothingAttachedAtTheHitchNeitherThePt
 
 TEST_F(VirtualGamepadManualAttachTest, APassThroughPtoOutputWithNoNodeOfItsOwnGivesNoPtoCouplingPointAndManualAttachsKeyStillConnectsIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    // A trailer that passes the PTO on to what it tows: its output skips to the tractor's, so the trailer has no output node of its own.
     Lua(R"luau(
         _G.trailer = StubManualAttach.trailer('trailer', { -0.4, -0.2, 2.0 }, { passThroughPto = true })
         _G.baler = StubManualAttach.implement('baler', { hasPto = true })
@@ -160,28 +143,26 @@ TEST_F(VirtualGamepadManualAttachTest, APassThroughPtoOutputWithNoNodeOfItsOwnGi
     EXPECT_EQ(PtoConnected("baler"), "true") << "Manual Attach's own key connects it";
 }
 
-// ---- Which Coupling Point wins --------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachTest, WithTheHitchThePtoStubAndAHoseCouplerAllWithinTheConeTheOneNearestTheCentreOfTheRayIsSelectedAndWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
-    Lua("VRCompanion.pointerConeDegrees = 25");  // wide enough for all three from where the player stands
+    Lua("VRCompanion.pointerConeDegrees = 25");
 
-    POINT_HAND(kRight, kHandX, 0.1f, kHandZ);  // a little above the hitch, nearest the PTO stub
+    POINT_HAND(kRight, kHandX, 0.1f, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearPtoStub);
     PullTrigger(kRight);
     EXPECT_EQ(Performs(), 1);
     EXPECT_EQ(Performs("pto"), 1) << "the PTO stub is worked, not the hitch or the hoses";
     ReleaseTrigger(kRight);
 
-    POINT_HAND(kRight, 0.1f, -0.1f, kHandZ);  // beside it, nearest the hose coupler
+    POINT_HAND(kRight, 0.1f, -0.1f, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHoseCoupler);
     PullTrigger(kRight);
     EXPECT_EQ(Performs(), 2);
     EXPECT_EQ(Performs("hoses"), 1) << "the hose coupler is worked";
     ReleaseTrigger(kRight);
 
-    POINT_HAND(kRight, kHandX, -0.15f, kHandZ);  // on the hitch
+    POINT_HAND(kRight, kHandX, -0.15f, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch);
     PullTrigger(kRight);
     EXPECT_EQ(Performs(), 3);
@@ -220,8 +201,6 @@ TEST_F(VirtualGamepadManualAttachTest, EachPullRunsExactlyOneOfManualAttachsPath
     EXPECT_EQ(BlinkingWarnings(), 1);
 }
 
-// ---- Giving up -------------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, ARenamedPtoActionInfoTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoActionInfoMissing"); }
 TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AReshapedPtoActionInfoTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoActionInfoReshaped"); }
 TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, ARenamedPtoPerformTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoPerformMissing"); }
@@ -251,7 +230,7 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheN
     Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, 0.2, 1.0)");  // 3 cm off the PTO stub's line, 0.7 m ahead: about 2.5 degrees
-    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);                            // the PTO stub is on the ray's centre
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
 
     EXPECT_EQ(DrawnEnd(), kRearPtoStub) << "the PTO stub is nearer the centre";
     EXPECT_EQ(EvalLua(L, "tostring(StubIC.selected())"), "nil") << "the Click Point is not clickable";
@@ -260,7 +239,7 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheN
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0");
     ReleaseTrigger(kRight);
 
-    POINT_HAND(kRight, kHandX - 0.06f, kPtoHandY, kHandZ);  // now the Click Point is nearer the centre
+    POINT_HAND(kRight, kHandX - 0.06f, kPtoHandY, kHandZ);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
     EXPECT_EQ(DrawnEnd(), "-0.37 0.20 1.00");
     PullTrigger(kRight);
@@ -268,15 +247,12 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheN
     EXPECT_EQ(Performs("pto"), 1) << "the PTO stub works nothing then";
 }
 
-// ---- The diagnostics ------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeCouplingPointsIsSelected) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     auto diagnostics = [&]() { return EvalLua(L, "runCommand('vrPointerDiagnostics')"); };
 
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
-    // Only the hitch is called a hitch: the PTO stub and the hose coupler are Coupling Points of a hitch, not hitches.
     EXPECT_NE(diagnostics().find("hitches in reach: 1 | selected: hitch 1 of tractor"), std::string::npos) << diagnostics();
     EXPECT_EQ(diagnostics().find("selected: hitch 1 of tractor ("), std::string::npos) << "no second name for the hitch: " << diagnostics();
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
@@ -286,8 +262,6 @@ TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeC
     POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     EXPECT_NE(diagnostics().find("selected: none"), std::string::npos) << diagnostics();
 }
-
-// ---- The pulses -----------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, MovingFromOneOfAHitchsCouplingPointsToAnotherPulsesAgainButMovingBetweenItsHoseCouplersDoesNot) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -330,8 +304,6 @@ TEST_F(VirtualGamepadManualAttachTest, ThePullThatRanManualAttachsPtoOrHosePathG
     EXPECT_EQ(PulsesTo(kRight), 4) << "and the one that connected the hoses";
     EXPECT_EQ(PulsesTo(kLeft), 0) << "the other hand feels nothing";
 }
-
-// ---- The Virtual Gamepad --------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnThePtoStubOrAHoseCouplerThePointerHandsTriggerReadsReleasedOnThePad) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());

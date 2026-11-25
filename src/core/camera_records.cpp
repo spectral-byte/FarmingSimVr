@@ -23,7 +23,6 @@ Quat Multiply(const Quat& a, const Quat& b) {
     };
 }
 
-// Rotates v by the unit quaternion q: v + 2w(u x v) + 2 u x (u x v), u = q.xyz.
 void Rotate(const Quat& q, const double v[3], double out[3]) {
     const double ux = q.x, uy = q.y, uz = q.z;
     const double cx = uy * v[2] - uz * v[1];
@@ -51,7 +50,7 @@ void AppendRelative(std::ostringstream& ss, const char* label, const std::option
        << " rot=" << rel->rotationAngle * 180.0 / 3.14159265358979323846 << "deg)";
 }
 
-} // namespace
+}
 
 RelativeCamera ComputeRelativeCamera(const CameraRecord& reference, const CameraRecord& other) {
     RelativeCamera rel;
@@ -152,8 +151,6 @@ ResolvedCameras CameraRecordStore::Resolve(uint32_t eye) const {
         }
     }
 
-    // A same-eye record is only the eye's previous render when every frame in between has a record of the
-    // other eye: a frame with no record could have been this eye's own render, and its camera is unknown.
     if (out.sameEyePrevious) {
         for (uint64_t f = out.sameEyePrevious->frame + 1; f < m_frame; ++f) {
             bool otherEyeRendered = false;
@@ -174,4 +171,4 @@ ResolvedCameras CameraRecordStore::Resolve(uint32_t eye) const {
     return out;
 }
 
-} // namespace fs25vr
+}

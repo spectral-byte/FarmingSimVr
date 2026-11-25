@@ -35,3 +35,5 @@ Accepted
 - **Head-Locked 2D Overlay** in `XR_REFERENCE_SPACE_TYPE_VIEW` (rejected: attaches the flat screen rigidly to the player's face, inducing disorientation and simulator sickness).
 - **Head-Tracked Flat Projection on Quad** (rejected: head tracking drives in-engine camera rotation while rendering flat on the quad, creating visual disconnect and dizziness).
 - **Virtual Cinema Model with Gaze-Aligned 6DOF Local Quad** (selected: completely decouples in-game camera look from VR head tracking, restores standard game camera FOV, and allows the player to comfortably view the game as a floating 16:9 monitor in room space).
+
+More decisions about this area, from the code comments: [ADR-0043](0043-stereo-view-decisions.md).

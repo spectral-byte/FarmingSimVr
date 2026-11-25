@@ -1,18 +1,9 @@
-// The Companion Mod's subsystem registry (spec #244, ticket #256): a subsystem registers itself by name when its file loads, with
-// the hooks it needs (map load, map unload, per-frame update) and the console commands it owns, and the core runs them. Seen from
-// outside: the real Companion Mod is loaded in modDesc order, a subsystem is registered the way a file would, and the test drives
-// the mod as the game does (map load, frames, map unload) and asserts what ran, in which order, which console commands the game
-// was given and what log.txt says. Never the registry's contents.
-// Prior art: test_hand_tools_look_ray.cpp (a look ray aimer that raises is logged once and the next one is asked),
-// test_companion_mod.cpp EveryConsoleCommandIsRemovedOnUnloadSoASecondMapLoadsCleanly (the engine's console command table).
-
 #include "companion_mod_fixture.h"
 #include <gtest/gtest-spi.h>
 #include <string>
 
 namespace {
 
-// The game's console command table (a name can only be added while it is free) and the few engine functions a map load calls.
 const char* kEngineStubs = R"luau(
     _G.present = {}
     _G.handlers = {}
@@ -41,8 +32,6 @@ int CountLines(const std::string& text) {
     return count;
 }
 
-// A fresh Lua state with the mod loaded and a subsystem whose update hook raises, driven for one update with no expectation of
-// the error. Static and self-contained so that EXPECT_NONFATAL_FAILURE can run it.
 void UpdateOnceWithARaisingHookAndNoExpectation() {
     lua_State* state = luaL_newstate();
     luaL_openlibs(state);
@@ -68,7 +57,7 @@ protected:
     fs25vr::VRBridge bridge_{nullptr, nullptr};
 };
 
-}  // namespace
+}
 
 TEST_F(SubsystemRegistryTest, HooksRunAtMapLoadOnEveryUpdateAndAtMapUnloadAndNothingRunsBeforeThat) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -218,8 +207,6 @@ TEST_F(SubsystemRegistryTest, ConsoleCommandsThatAreNotWellFormedRaiseWhenTheSub
     )luau", "=consoleCommandValidation"), 0);
 }
 
-// The order of a map's update: the registry moved the subsystems' updates into hooks, but the steps the core runs between them
-// keep their places (spec #244: the order of effects the game and the Injector observe stays).
 TEST_F(SubsystemRegistryTest, AnUpdateRunsTheCoresStepsAndTheSubsystemsInTheOrderTheyRanBeforeTheRegistry) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local order = {}
@@ -282,12 +269,10 @@ TEST_F(SubsystemRegistryTest, AHookThatRaisesIsLoggedOnceWithTheSubsystemAndHook
     EXPECT_EQ(CountLines("alpha update failed"), 1) << "the error text is in the line";
     EXPECT_EQ(CountLines("Subsystem 'beta'"), 0) << "a subsystem that works is not reported";
 
-    // Everything after the one that raised still ran, every time
     EXPECT_EQ(EvalLua(L, "events[1]"), "beta:mapLoad");
     EXPECT_EQ(EvalLua(L, "#events"), "32") << "map load, 30 updates, map unload";
     EXPECT_EQ(EvalLua(L, "events[32]"), "beta:mapUnload");
 
-    // A second map does not log the same hook again
     const size_t before = s_capturedLogs.size();
     ASSERT_EQ(RunLuauChunk(L, R"luau(VRCompanion:loadMap("again"); VRCompanion:update(16); VRCompanion:deleteMap())luau", "=raisingHooksAgain"), 0);
     int errorsOnSecondMap = 0;
@@ -322,9 +307,6 @@ TEST_F(SubsystemRegistryTest, DesktopMirrorsCommandExistsAfterMapLoadIsGoneAfter
     )luau", "=desktopMirrorThroughTheRegistry"), 0);
 }
 
-// Every console command the mod adds, subsystem by subsystem and in the core: the whole set exists once a map has loaded and not
-// one is left once it has unloaded, so a subsystem that forgets to remove (or to add) a command fails here. The names are written
-// out on purpose: a command added or dropped is a decision, and this list is where it shows. Ticket #261.
 TEST_F(SubsystemRegistryTest, EveryConsoleCommandTheModAddsExistsAfterMapLoadAndNoneRemainsAfterMapUnload) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local expected = {
@@ -370,7 +352,6 @@ TEST_F(SubsystemRegistryTest, EveryConsoleCommandTheModAddsExistsAfterMapLoadAnd
     )luau", "=everyConsoleCommand"), 0);
 }
 
-// The standalone Luau runner has the same rule: a hook error in the log fails the run unless the chunk expects it.
 TEST(SubsystemRegistryLuauRunnerTest, ALoggedHookErrorFailsTheRunUnlessTheChunkExpectsIt) {
     LuauTestRunner runner;
     const char* line = "print(\"[FS25_VR] [Error] Subsystem 'boom' update hook raised: kaput\")";

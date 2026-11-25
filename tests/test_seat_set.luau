@@ -1,16 +1,3 @@
--- ====================================================================
--- Test Suite for the Seat Set Action (spec #166, ticket #170): in a cab the player leans to where they
--- want their eyes and presses it; the Seat Offset takes up how far the head was from where it would rest
--- and the view recenters as the Recenter Action does. Drives the whole Companion Mod through what the
--- engine calls (the in-cab camera update, the action callback, the action event registration) over a mock
--- scene graph, and asserts on what the engine would see: where the engine camera, the eye camera and the
--- audio listener are, the bridge calls, the saved settings and the blinking warnings.
--- Axes: forward, up and right, in the in-cab camera's parent space. There forward is +Z and the vehicle's
--- left is +X (the engine's vehicles are modelled that way). The head pose is in the tracking space, where
--- -Z is forward and +X is right; a cab looking out of the windscreen has its head tracking node turned a
--- half turn (origRotY pi), so a lean (x, y, z) in the tracking space is (-x, y, -z) in the cab.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -35,9 +22,6 @@ end
 
 local function near(a, b) return math.abs(a - b) < 0.0005 end
 
--- --------------------------------------------------------------------
--- Mock scene: nodes with a parent, a local translation and a yaw (as in test_seat_offset.luau)
--- --------------------------------------------------------------------
 local CAB = 999
 local nodes, nextNode
 
@@ -65,7 +49,6 @@ local function installScene()
     end
     _G.localToLocal = function(from, to, x, y, z)
         if from ~= to and nodeOf(to).parent == from then
-            -- into the frame of a child of `from`: undo the child's translation and yaw
             local c = nodeOf(to)
             return VRCompanion:rotateVectorByYaw(x - c.t[1], y - c.t[2], z - c.t[3], -c.yaw)
         end
@@ -76,8 +59,6 @@ local function installScene()
     _G.localRotationToLocal = function(from, to, rx, ry, rz) return rx, ry + nodeOf(from).yaw, rz end
 end
 
--- A bridge whose head pose is the table `state.pose` (nil: tracking lost). It records the calls; a recenter puts the head
--- pose back at the tracking space's origin, as re-zeroing the tracking space does.
 local function installBridge(state)
     state.flushes, state.recenters = 0, 0
     _G.VRBridge = {
@@ -130,15 +111,12 @@ local function setup(pose)
     installBridge(state)
     resetCompanion()
     saves, motionControllerResets, warnings = 0, 0, {}
-    -- The save entry point the other settings use, and the Motion Controller references a recenter resets
     VRCompanion.saveConfiguration = function() saves = saves + 1 return true end
     VRCompanion.resetMotionControllerMovement = function() motionControllerResets = motionControllerResets + 1 end
     _G.g_currentMission = nil
     _G.g_cameraManager = nil
 end
 
--- A vehicle of model `config` whose cameras are `cams` (the in-cab camera first, as the game lists them), with camera
--- `index` active
 local function makeVehicle(config, cams, index)
     local veh = { configFileName = config, spec_enterable = { cameras = cams, camIndex = index or 1 } }
     veh.getActiveCamera = function(self) return self.spec_enterable.cameras[self.spec_enterable.camIndex] end
@@ -153,7 +131,6 @@ local function freshModel()
 end
 
 local nextCameraNode = 100
--- A fallback in-cab camera, with no head tracking node, with its eye point at (0.3, 1.4, -0.2)
 local function fallbackCab()
     nextCameraNode = nextCameraNode + 1
     nodeOf(nextCameraNode).t = { 0.3, 1.4, -0.2 }
@@ -165,8 +142,6 @@ local function fallbackCab()
     }
 end
 
--- An in-cab camera with a head tracking node at (0, 1.6, 0.2), looking out of the windscreen (origRotY pi), turned by
--- `lookYaw` from there by the mouse or a Snap Turn
 local nextHeadNode = 500
 local function trackedCab(lookYaw)
     nextCameraNode = nextCameraNode + 1
@@ -194,8 +169,6 @@ end
 
 local function translationOf(id) local t = nodeOf(id).t return { x = t[1], y = t[2], z = t[3] } end
 
--- The three places the head-tracked view puts the head: the engine camera node, the eye camera and the Cyclopean Audio
--- Listener Node
 local function viewAfterUpdate(cam)
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     return {
@@ -214,12 +187,10 @@ local function assertMoved(view, base, dx, dy, dz, label)
     end
 end
 
--- What the console command prints for the Seat Offset of the cab being shown
 local function offsetText() return VRCompanion:consoleCommandSeatOffset() end
 
 print("Running Seat Set Action Tests...")
 
--- Slice 1: a press absorbs the lean, and the view rests where the head was (head tracking node path)
 test("PressAbsorbsALeanIntoTheSeatOffsetAndTheViewRestsWhereTheHeadWas", function()
     setup()
     local cam = trackedCab(0)
@@ -237,7 +208,6 @@ test("PressAbsorbsALeanIntoTheSeatOffsetAndTheViewRestsWhereTheHeadWas", functio
     assert(string.find(text, "forward 0.200, up 0.050, right 0.100", 1, true), "the lean is the offset, got: " .. tostring(text))
 end)
 
--- The press at a lean in a cab built by `makeCam`: the view at the lean, then at rest after the press
 local function leanAndPress(makeCam, pose, lookYaw)
     setup()
     local cam = makeCam(lookYaw)
@@ -249,7 +219,6 @@ local function leanAndPress(makeCam, pose, lookYaw)
     return cam, base, leaned, viewAfterUpdate(cam)
 end
 
--- Slice 2: the fallback path, with no head tracking node, takes up the lean as well
 test("PressAbsorbsALeanInTheFallbackCabPathToo", function()
     local _, base, leaned, seated = leanAndPress(fallbackCab, poseAt(-0.15, 0.08, 0.1))
     assertMoved(leaned, base, 0.15, 0.08, -0.1, "the lean")
@@ -257,7 +226,6 @@ test("PressAbsorbsALeanInTheFallbackCabPathToo", function()
     assert(string.find(offsetText(), "forward -0.100, up 0.080, right -0.150", 1, true), "got: " .. tostring(offsetText()))
 end)
 
--- Slice 3: a lean made while looking to the side lands in the right place in the cab
 test("PressAbsorbsALeanMadeWhileLookingToTheSideWhereItIsInTheCab", function()
     -- looking a quarter turn from the windscreen, the tracking space's forward (-Z) points along the cab's +X: a lean of 0.2 forward
     -- and 0.1 right in the tracking space is (0.2, 0, 0.1) in the cab, which is 0.1 forward and 0.2 to the cab's left (right -0.2)
@@ -283,7 +251,6 @@ test("PressAddsTheLeanToTheSeatOffsetAlreadySet", function()
     assert(string.find(offsetText(), "forward 0.200, up 0.000, right 0.250", 1, true), "got: " .. tostring(offsetText()))
 end)
 
--- Slice 4: what a press does besides the offset
 local function pressAt(mode)
     setup()
     local cam = trackedCab(0)
@@ -308,7 +275,6 @@ for _, mode in ipairs({ "Both", "VehicleOnly" }) do
     end)
 end
 
--- Slice 5: past the limit the offset stops at it, and a short blinking warning names the axes that stopped
 test("PressPastTheLimitStopsAtTheLimitAndWarnsNamingOnlyTheClampedAxes", function()
     setup()
     local cam = trackedCab(0)
@@ -339,8 +305,6 @@ test("PressPastTheLimitOnSeveralAxesNamesThemAll", function()
         and string.find(warnings[1], "right", 1, true) == nil, "forward and up stopped, got: " .. tostring(warnings[1]))
 end)
 
--- The limit warning in the game's language (ticket #292): the game's German texts (the mod's modDesc.xml l10n) name the axes in
--- German; English is today's text
 local GERMAN_TEXTS = {
     vrSeatOffset_limitReached = "VR-Sitzposition an der Grenze von %s m angehalten: %s",
     vrSeatOffset_axisForward = "vorwärts",
@@ -376,7 +340,6 @@ test("WhereTheGameHasNoTextTheLimitWarningIsEnglish", function()
     assert(#shown == 1 and shown[1] == "VR seat position stopped at the 0.5 m limit: forward, up", "got: " .. tostring(shown[1]))
 end)
 
--- Slice 6: outside an in-cab camera in the head-tracked view with no menu shown, a press does nothing
 local function assertPressDoesNothing(label)
     local flushes, savesBefore = state.flushes, saves
     VRCompanion:onSeatSetAction()
@@ -387,7 +350,6 @@ local function assertPressDoesNothing(label)
     assert(#warnings == 0, label .. ": nothing shown, got: " .. tostring(warnings[1]))
 end
 
--- An in-cab camera with a lean, a Seat Offset of (0.1, 0, 0) to see it unchanged
 local function leaningInCab()
     setup(poseAt(0.1, 0.05, -0.2))
     local cam = trackedCab(0)
@@ -444,8 +406,6 @@ test("PressWhileAMenuIsShownDoesNothing", function()
     assertOffsetUnchanged("with the menu gone")
 end)
 
--- What the cab camera hook stands down for is the menu quad being shown (isMenuQuadShown), so a press does nothing then even
--- if the menu were not counted as taking the input; and a Stereo Dialog (input taken, no quad) is a menu shown too
 test("PressWhileTheMenuQuadIsShownDoesNothingWhateverTheInputSays", function()
     leaningInCab()
     local takesInput = VRCompanion.doesMenuTakeInput
@@ -472,7 +432,7 @@ end)
 
 test("PressWhileTheGameShowsACameraOfItsOwnDoesNothing", function()
     leaningInCab()
-    _G.g_cameraManager = { getActiveCamera = function() return 424242 end }  -- the shop's camera, say
+    _G.g_cameraManager = { getActiveCamera = function() return 424242 end }
     assertPressDoesNothing("with another camera shown")
     _G.g_cameraManager = nil
     assertOffsetUnchanged("with the cab camera back")
@@ -485,7 +445,6 @@ test("PressWithHeadTrackingLostDoesNothing", function()
     assertOffsetUnchanged("with tracking back")
 end)
 
--- Slice 7: the action event is registered like the other VR actions, kept active, and re-registered when the engine drops it
 test("TheSeatSetActionEventIsRegisteredActiveAndKeptThere", function()
     local registered, texts, active, visible = {}, {}, {}, {}
     local nextEventId = 200
@@ -517,7 +476,6 @@ test("TheSeatSetActionEventIsRegisteredActiveAndKeptThere", function()
     assert(event.startActive == true and active[event.id] == true, "and it is active")
     assert(visible[event.id] == true and texts[event.id] == "Set VR Seat Position", "its text is shown, from the l10n")
 
-    -- The periodic check leaves it alone, and puts it back when the engine dropped it
     local before = nextEventId
     VRCompanion:registerActionEvents(false)
     assert(nextEventId == before, "nothing is re-registered while the event is in place")
@@ -528,7 +486,6 @@ test("TheSeatSetActionEventIsRegisteredActiveAndKeptThere", function()
     _G.g_inputBinding, _G.g_i18n = nil, nil
 end)
 
--- An input binding that accepts every registration, for the checks of the other VR action events' bookkeeping below
 local function installAcceptingInputBinding()
     local nextEventId = 400
     _G.g_inputBinding = {
@@ -548,21 +505,18 @@ local function installAcceptingInputBinding()
     VRCompanion:registerActionEvents(true)
 end
 
--- Like the other VR action events, the frame update registers a Seat Set event that has no id (not on a 30th frame, when it
--- would check anyway)
 test("TheUpdateRegistersTheSeatSetEventWhenItHasNoId", function()
     installAcceptingInputBinding()
     assert(VRCompanion.seatSetActionEventId ~= nil, "registered to begin with")
     VRCompanion.seatSetActionEventId = nil
-    VRCompanion.frameTicks = 1  -- the update makes it frame 2
-    VRCompanion.lastControlledVehicle = nil  -- and no vehicle transition re-registers everything on its way
+    VRCompanion.frameTicks = 1
+    VRCompanion.lastControlledVehicle = nil
     VRCompanion:update(16.6)
     local registeredAgain = VRCompanion.seatSetActionEventId ~= nil
     _G.g_inputBinding = nil
     assert(registeredAgain, "the update registers the Seat Set event again between the periodic checks")
 end)
 
--- Leaving the map forgets the event and that it was logged, as for the other VR action events, so the next map logs it again
 test("DeleteMapForgetsTheSeatSetEventIdAndThatItWasLogged", function()
     installAcceptingInputBinding()
     assert(VRCompanion.seatSetActionEventId ~= nil and VRCompanion.seatSetLoggedOnce == true, "registered and logged to begin with")
@@ -573,7 +527,6 @@ test("DeleteMapForgetsTheSeatSetEventIdAndThatItWasLogged", function()
     assert(logged == false, "the event is logged again on the next map, got " .. tostring(logged))
 end)
 
--- The in-cab camera hangs from a free node in world space: a lean is the vehicle's forward, up and right, wherever it points
 test("PressInAVehicleFacingAwayFromTheMapsForwardTakesTheLeanInTheVehiclesFrame", function()
     setup()
     local cam = trackedCab(0)

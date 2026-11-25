@@ -13,8 +13,6 @@
 namespace fs25vr {
 
 namespace {
-// The instance whose detours are live. The detour entry points are plain function pointers, so they
-// resolve the interceptor that installed them here instead of reaching for a singleton.
 std::atomic<FidelityFxInterceptor*> s_host{nullptr};
 
 constexpr struct { uint32_t bit; const char* name; } kUpscaleCreateFlagNames[] = {
@@ -41,11 +39,9 @@ std::string DescribeUpscaleCreateFlags(uint32_t flags) {
     return names.empty() ? "none" : names;
 }
 
-// Jitter offsets closer than this are the same sample position.
 constexpr float kJitterMatchTolerance = 1e-4f;
 constexpr size_t kMaxListedJitterOffsets = 16;
 
-// Walks the descriptor chain for the first descriptor of the given type.
 template <typename Desc>
 Desc* FindInChain(ffxApiHeader* head, ffxStructType_t type) {
     for (ffxApiHeader* h = head; h; h = h->pNext) {
@@ -66,7 +62,7 @@ bool IsLoaderFileName(std::basic_string<Char> s) {
     for (const char* p = ".dll"; *p; ++p) withExt.push_back(static_cast<Char>(*p));
     return filename == base || filename == withExt;
 }
-} // namespace
+}
 
 FidelityFxInterceptor* FidelityFxInterceptor::Host() {
     return s_host.load();
@@ -78,7 +74,6 @@ FidelityFxInterceptor::FidelityFxInterceptor() {
 
 FidelityFxInterceptor::~FidelityFxInterceptor() {
     if (IsProcessTerminating()) {
-        // Releasing GPU objects while the process is going down is not safe; the OS reclaims them.
         (void)m_mvPass.release();
         return;
     }
@@ -132,7 +127,6 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
                                               uint64_t dispatchIndex, ffxApiResource& savedMv, const char*& state) {
     VRBridge* bridge = GetVRBridge();
     state = "off";
-    // The switch is vrDlssMvFix, shared with DLSS.
     std::shared_ptr<NgxInterceptor> ngx = bridge ? bridge->GetNgxInterceptor() : nullptr;
     if (!ngx || !ngx->IsMvFixEnabled() || m_mvFixDisabled.load()) return false;
 
@@ -153,7 +147,6 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     const MvCorrectionRequest* correction = nullptr;
     if (plan.decision == mvreproj::CorrectionDecision::Correct) {
         if (std::fabs(conventions.mvScaleX) > 1e-6f && std::fabs(conventions.mvScaleY) > 1e-6f) {
-            // The dispatch's own camera fields describe the camera that rendered this frame.
             plan.current.infiniteDepth = conventions.depthInfinite;
             if (conventions.hasProjection) {
                 plan.current.tanHalfFovY = conventions.tanHalfFovY;
@@ -167,8 +160,6 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
             correctionRequest.sameEye = plan.sameEye;
             correctionRequest.toPreviousFrame = plan.toPreviousFrame;
             correctionRequest.toSameEye = plan.toSameEye;
-            // AFR: the simulation advances every frame, so only the engine's object motion needs the eye
-            // stride (the same eye's history is two frames back). Sequential Dual-Pass replays one time.
             correctionRequest.objectMotionFactor =
                 bridge->GetRenderingMode() == VRRenderingMode::AFR ? mvreproj::kAfrEyeStride : 1.0f;
             correction = &correctionRequest;
@@ -178,15 +169,12 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
         }
     }
 
-    // Self-check (diagnostic window only): score the vectors the upscaler will read against the prediction
-    // from depth and the camera records. Measured only.
     MvSelfCheckRequest checkRequest;
     const MvSelfCheckRequest* check = nullptr;
     if (m_diagRemaining.load() > 0) {
         std::string skipReason;
         if (BuildMvSelfCheckRequest(resolved, eye, dispatchIndex, conventions.mvScaleX, conventions.mvScaleY,
                                     correction ? &plan : nullptr, checkRequest, skipReason)) {
-            // The dispatch's own camera fields describe the camera that rendered this frame.
             if (correction) checkRequest.current = plan.current;
             checkRequest.current.infiniteDepth = conventions.depthInfinite;
             check = &checkRequest;
@@ -237,7 +225,6 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
         return false;
     }
 
-    // The pass's texture has the engine's format and size; it is left in the combined shader-read state.
     savedMv = desc.motionVectors;
     desc.motionVectors.resource = corrected;
     desc.motionVectors.state = FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ;
@@ -267,8 +254,6 @@ bool FidelityFxInterceptor::AttachDirect(PFN_ffxCreateContext pfnCreate, PFN_ffx
         Detach();
     }
 
-    // Publish the host before any detour goes live: a game thread can enter a detour the moment it is
-    // enabled, and an entry point with no host fails the call.
     FidelityFxInterceptor* previousHost = s_host.exchange(this);
 
     bool createInstalled = m_detourCreate.Install(reinterpret_cast<void*>(pfnCreate),
@@ -459,7 +444,6 @@ void FidelityFxInterceptor::RecordDiagnostics(uint64_t dispatchIndex, uint32_t c
     while (remaining > 0 && !m_diagRemaining.compare_exchange_weak(remaining, remaining - 1)) {}
     if (remaining == 0) return;
 
-    // The engine may request a reset itself, not only our Discontinuity Flush.
     if (desc.reset) reset = true;
 
     VRBridge* bridge = GetVRBridge();
@@ -555,7 +539,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_CreateContext(ffxContext* conte
         ? FindInChain<ffxCreateContextDescUpscale>(desc, FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE)
         : nullptr;
     if (!upscale) {
-        // Frame generation and every other context type: not ours to split.
         return origCreate(context, desc, memCb);
     }
 
@@ -649,7 +632,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Configure(ffxContext* context, 
     VirtualFfxContext* virtualContext = (context && *context) ? host->GetVirtualContext(*context) : nullptr;
     if (!virtualContext) return orig(context, desc);
 
-    // Both eye contexts must hold the same settings.
     ffxContext left = virtualContext->left;
     ffxContext right = virtualContext->right;
     ffxReturnCode_t resLeft = orig(&left, desc);
@@ -665,7 +647,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Query(ffxContext* context, ffxQ
     VirtualFfxContext* virtualContext = (context && *context) ? host->GetVirtualContext(*context) : nullptr;
     if (!virtualContext) return orig(context, desc);
 
-    // Both contexts share one description, so they answer alike.
     ffxContext left = virtualContext->left;
     return orig(&left, desc);
 }
@@ -682,7 +663,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
     VirtualFfxContext* virtualContext = host->GetVirtualContext(*context);
     if (!virtualContext) return orig(context, desc);
 
-    // Not an upscale dispatch: there is no eye to route and no history to reset.
     if (desc->type != FFX_API_DISPATCH_DESC_TYPE_UPSCALE) {
         ffxContext left = virtualContext->left;
         return orig(&left, desc);
@@ -690,7 +670,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
 
     VRBridge* bridge = host->GetVRBridge();
 
-    // Mode transition tracking & discontinuity latching
     int currentMode = bridge ? static_cast<int>(bridge->GetRenderingMode()) : -1;
     int lastMode = host->m_lastRenderingMode.exchange(currentMode);
     if (lastMode != -1 && lastMode != currentMode) {
@@ -716,8 +695,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
         wroteReset = true;
     }
 
-    // The motion vector pass: FSR3 reads the Injector's texture for this one dispatch. Monoscopic presentation
-    // (menus, 2D Floating Window Mode) keeps the engine's vectors.
     const bool bypass = bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible());
     ffxApiResource savedMv{};
     const char* mvState = "off";
@@ -729,14 +706,13 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
 
     uint64_t index = host->m_dispatchCount.fetch_add(1);
     host->RecordDiagnostics(index, contextIndex, *upscale, needReset, isDualPass);
-    (void)mvState; // named in the [Diag] MvCorrection line while a diagnostic window is armed
+    (void)mvState;
 
     ffxReturnCode_t res = orig(&target, desc);
 
-    // Always undo our writes so a reused descriptor never carries our reset or texture into later dispatches.
     if (wroteReset) upscale->reset = false;
     if (swappedMv) upscale->motionVectors = savedMv;
     return res;
 }
 
-} // namespace fs25vr
+}

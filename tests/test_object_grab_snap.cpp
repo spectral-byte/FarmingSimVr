@@ -1,11 +1,4 @@
-﻿// Object Grab, the hold snaps (ADR-0033, spec #156, ticket #162), seen from outside: the real Companion Mod runs against the real VRBridge over
-// FakeTrackedHeadset, with the game stood in by Lua stubs (the game's empty hands and loose objects in object_grab_test_support.h). Without
-// super strength, yanking a heavy Held Object breaks the game's joint: the game calls onHeldItemJointBroken with the joint's index, and the
-// hands let go. A test fires that report (StubHandTool.breakJoint) and asserts the haptic pulses the hand got, what the Virtual Gamepad
-// reads for the grip, and what the game was called with. A drop by the game itself (dropHeldItem, which reports no joint) stays clean.
-// Prior art: test_object_grab_carry.cpp (the carry and the game's own drop) and test_hand_tools_haptics.cpp (pulses).
-
-#include "object_grab_test_support.h"
+﻿#include "object_grab_test_support.h"
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -20,7 +13,6 @@ constexpr const char* kBaleAhead = "_G.bale = StubHandTool.looseObject(-0.4, -0.
 
 class VirtualGamepadObjectGrabSnapTest : public VirtualGamepadObjectGrabTest {
 protected:
-    // The right hand pointing at the bale and squeezing: the bale is its Held Object.
     void StartCarrying(const StartOptions& startOptions = StartOptions()) {
         ASSERT_NO_FATAL_FAILURE(Start(startOptions));
         ASSERT_EQ(RunLuauChunk(L, kBaleAhead, "=bale"), 0);
@@ -30,7 +22,6 @@ protected:
         ASSERT_EQ(PickUps(), 1) << "the grab";
     }
 
-    // The pulses that reached a hand after the first `from` ones.
     std::vector<FakeOpenXrControllers::HapticPulse> PulsesAfter(size_t from, uint32_t hand) const {
         std::vector<FakeOpenXrControllers::HapticPulse> result;
         const auto& all = headset.HapticPulses();
@@ -51,7 +42,7 @@ protected:
     }
 };
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadObjectGrabSnapTest, ASnapWhenTheGameClockIsUnavailableStillPulsesAndTheDiagnosticsStillAnswer) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
@@ -75,7 +66,7 @@ TEST_F(VirtualGamepadObjectGrabSnapTest, TheDiagnosticsStillAnswerAfterASnapWhen
 TEST_F(VirtualGamepadObjectGrabSnapTest, AJointBreakWhileCarryingGivesTheCarryingHandOneSharpPulse) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     const size_t before = PulseCount();
-    float grabStrength = 0.0f;  // the strongest felt so far: the grab
+    float grabStrength = 0.0f;
     for (const auto& pulse : headset.HapticPulses()) grabStrength = std::max(grabStrength, pulse.amplitude);
 
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.breakJoint(hands)", "=snap"), 0);
@@ -123,7 +114,7 @@ TEST_F(VirtualGamepadObjectGrabSnapTest, ASnapOfTheGripLetGoInTheSameBreathStill
 TEST_F(VirtualGamepadObjectGrabSnapTest, TheGamesOwnDropAndThrowEndTheCarryWithoutAPulse) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     const size_t before = PulseCount();
-    ASSERT_EQ(RunLuauChunk(L, "hands:dropHeldItem()", "=gameDrops"), 0);  // getting into a vehicle, taking a Hand Tool: no joint index
+    ASSERT_EQ(RunLuauChunk(L, "hands:dropHeldItem()", "=gameDrops"), 0);
     FRAMES(5);
     EXPECT_EQ(SharpPulsesAfter(before), 0) << "a drop is not a snap";
 
@@ -162,7 +153,7 @@ TEST_F(VirtualGamepadObjectGrabSnapTest, WithSuperStrengthTheJointDoesNotBreakAn
     ASSERT_EQ(PickUps(), 1);
     const size_t before = PulseCount();
 
-    for (int i = 0; i < 6; ++i) {  // yanked about
+    for (int i = 0; i < 6; ++i) {
         headset.SetHandPointing(kRight, HandAt(i % 2 == 0 ? 0.9f : -0.7f, 0.5f, -0.6f, 0.8f, 1.4f));
         FRAMES(2);
     }
@@ -170,8 +161,6 @@ TEST_F(VirtualGamepadObjectGrabSnapTest, WithSuperStrengthTheJointDoesNotBreakAn
     EXPECT_EQ(Drops(), 0);
     EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode == pallet.node)"), "true");
 }
-
-// ---- The game's report, as the wraps see it -----------------------------------------------------------------------------------
 
 TEST_F(CompanionModTest, AJointBreakReportThatIsMissingOrReshapedTurnsObjectGrabOffWithOneWarningAndPickingUpIsTheGames) {
     for (const char* shape : { "HandToolHands.onHeldItemJointBroken = nil", "HandToolHands.onHeldItemJointBroken = function() end" }) {

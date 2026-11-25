@@ -1,8 +1,3 @@
-// Manual Attach, its prompts and keys follow the hitch the Pointer Ray is on (ADR-0035, spec #227, ticket #230), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game and Manual Attach stood in by Lua stubs
-// (manual_attach_test_support.h). The stand-in records what its draw sets, the input help prompts and the context box, and what its key does, so
-// the tests read what the player would see and what the key would work. Prior art: test_manual_attach_pointer.cpp.
-
 #include "manual_attach_test_support.h"
 #include <string>
 
@@ -13,21 +8,19 @@ using namespace manual_attach_test;
 
 class VirtualGamepadManualAttachPromptsTest : public VirtualGamepadManualAttachTest {
 protected:
-    // The input help prompt Manual Attach shows for an attachment ("joint", "pto", "hoses"): its text, or "hidden".
     std::string Prompt(const char* kind) {
         return EvalLua(L, std::string("(function() local p = StubManualAttach.prompts[") + "'" + kind +
                           "']; return p and p.visible and p.text or 'hidden' end)()");
     }
-    // The text of Manual Attach's context box, or "none".
     std::string ContextBox() { return EvalLua(L, "tostring(StubManualAttach.contextBox or 'none')"); }
 };
 
-}  // namespace
+}
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, WithTwoHitchesInReachThePromptsAndContextBoxDescribeTheHitchTheRayIsOnNotTheNearestOne) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_front_and_rear"));
-    Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");  // detach at the rear hitch, attach at the front one
+    Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");
     FRAMES(1);
     ASSERT_EQ(Prompt("joint"), "Attach") << "with the ray on neither, Manual Attach's own nearest candidate, the front hitch";
     ASSERT_EQ(ContextBox(), "frontLoader");
@@ -72,8 +65,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, ManualAttachsOwnKeysActOnTheImplem
     EXPECT_EQ(Attached("rearPlow"), "true") << "the attach key works the pointed hitch, not Manual Attach's nearest one";
     EXPECT_EQ(Attached("frontLoader"), "false");
 
-    // The PTO / hoses key runs Manual Attach's own path for the pointed hitch's Implement too.
-    FRAMES(2);  // the hitch has an Implement on it now, and the candidates follow
+    FRAMES(2);
     Lua("StubManualAttach.pressKey('pto')");
     Lua("StubManualAttach.pressKey('hoses')");
     EXPECT_EQ(Performs("pto"), 1);
@@ -86,7 +78,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, WithTheRayOnNoHitchManualAttachsPr
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_front_and_rear"));
     Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // over both hitches
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     ASSERT_EQ(DrawnEnd(), "none");
     FRAMES(2);
     EXPECT_EQ(Prompt("joint"), "Attach");

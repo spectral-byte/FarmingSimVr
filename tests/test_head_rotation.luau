@@ -1,10 +1,3 @@
--- ====================================================================
--- Test Suite for Head Rotation: the head's rotation reaches the view intact at any head yaw
--- Drives the in-cab and on-foot camera updates on a mock scene graph whose engine reads Euler
--- angles in either of two conventions, and asserts on the world rotation of the camera the
--- engine renders through.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -33,10 +26,6 @@ local function near(a, b, eps)
     return math.abs(a - b) < (eps or EPS)
 end
 
--- --------------------------------------------------------------------
--- Mock GIANTS scene graph: nodes with a parent, a local translation and a local rotation
--- matrix. Cameras look along local -Z.
--- --------------------------------------------------------------------
 local ROOT = 1
 local scene = {}
 local nextNodeId = 5000
@@ -70,8 +59,6 @@ local function axisRotation(axis, angle)
     return { { c, -s, 0 }, { s, c, 0 }, { 0, 0, 1 } }
 end
 
--- How the fake engine reads Euler angles: "YXZ" composes R = Ry * Rx * Rz, "ZYX" composes
--- R = Rz * Ry * Rx. Whichever the engine uses, the head's rotation must reach the view intact.
 local eulerOrder = "YXZ"
 
 local function rotMatrix(rx, ry, rz)
@@ -84,13 +71,8 @@ local function rotMatrix(rx, ry, rz)
     return m
 end
 
--- Within this cosine of a convention's singularity (for "ZYX" a yaw of +-90 degrees, for "YXZ"
--- a pitch of +-90 degrees) the engine's single-precision extraction reads only rounding noise
 local SINGULARITY_COS = 1e-3
 
--- Euler angles (rx, ry, rz) of a rotation matrix in the fake engine's convention. At the
--- singularity the other two angles turn about one axis and are read from rounding noise, which
--- is modelled as reading them as zero: the view stops pitching while yaw still works.
 local function eulerOf(m)
     if eulerOrder == "ZYX" then
         local s = math.max(-1, math.min(1, -m[3][1]))
@@ -307,10 +289,6 @@ local function assertWorldRotation(node, expected, label)
     end
 end
 
--- --------------------------------------------------------------------
--- An in-cab camera on a vehicle standing on a slope, looking out of the windshield
--- (rotation "-18 180 0"), with the game's level head tracking node beside it
--- --------------------------------------------------------------------
 local VEHICLE, CAB_CAMERA, CAB_HEAD_NODE = 10, 11, 12
 
 local function installCabCamera()
@@ -326,9 +304,6 @@ local function installCabCamera()
     return cam
 end
 
--- --------------------------------------------------------------------
--- The on-foot camera: player yaw node -> pitch node (held level in VR) -> first person camera
--- --------------------------------------------------------------------
 local PLAYER_YAW, PLAYER_PITCH, PLAYER_CAMERA = 20, 21, 22
 
 local function installPlayerCamera()
@@ -374,7 +349,6 @@ test("InTheCabAfterMouseLookTheHeadRotationComposesOnTheTurnedView", function()
         setup(state)
         local ok, err = pcall(function()
             local cam = installCabCamera()
-            -- The player turned the view a quarter turn to the left with the mouse or a snap turn
             cam.rotY = math.pi + math.pi / 2
             VRCompanion:onVehicleCameraUpdate(cam, 16.6)
 
@@ -401,7 +375,6 @@ test("OnFootEveryHeadYawKeepsTheHeadsPitchAndRollInEitherEulerConvention", funct
 
                 local label = string.format("%s, head yaw %.3f", order, yaw)
                 assert(bound ~= nil and bound ~= PLAYER_CAMERA, label .. ": an eye camera must be bound for rendering")
-                -- The mod's head tracking node: the player's yaw node turned to face forward
                 local base = matMul((worldTransform(PLAYER_YAW)), axisRotation("Y", math.pi))
                 local expected = matMul(base, headMatrix(0.35, yaw, 0.1))
                 assertWorldRotation(bound, expected, label .. ", eye camera")
@@ -442,7 +415,6 @@ test("WithTrackingLostTheViewKeepsTheEngineCamerasPitchWhenItFacesAQuarterTurn",
         setup(state)
         local ok, err = pcall(function()
             local cam = installCabCamera()
-            -- The vehicle stands level, turned so the engine camera faces a quarter turn in the world
             scene[VEHICLE].m = axisRotation("Y", -math.pi / 2)
             VRCompanion:onVehicleCameraUpdate(cam, 16.6)
 

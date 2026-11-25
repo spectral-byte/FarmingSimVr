@@ -1,60 +1,6 @@
--- Hand Tools: the chainsaw (ADR-0029)
--- The chainsaw for StubHandTool, shaped after the game's HandToolChainsaw. Run after hand_tool.luau (and after the Companion
--- Mod is loaded or before it: HandToolChainsaw is read at map load too), then call StubHandTool.installChainsaw(variant).
---
--- StubHandTool.installChainsaw(variant)   defines the globals the game defines: ChainsawCutState, HandToolChainsaw,
---   PlayerCamera and g_cameraManager, and makes the targeter honour target types: PlayerTargeter:addTargetType(key, mask,
---   minDistance, maxDistance) and :removeTargetType(key) (the spray can's chunk's, when it has added them), and each update fills
---   closestTargetsByKey[HandToolChainsaw] with the closest trunk the look ray meets, measured from the ray's origin and only between
---   the type's minimum and maximum distance (the game's tryAddTargetWithMask), as { node, x, y, z, distance }. Holding a chainsaw
---   adds its target type (trees, from HandToolChainsaw.MINIMUM_CUT_DISTANCE, or 0 when the class has none, to 3 m), as the game's
---   onHeldStart does; putting it away removes it. The minimum is read at that moment, so a test sets it before the player takes the
---   saw in hand.
---   variant   how HandToolChainsaw.onUpdate is in this "game version": nil / "ok", "missing" (a game update renamed it to
---             onUpdateTick, which the event dispatch calls instead) or "reshaped" (it takes no parameters, and updates the
---             chainsaw being held), or "rollMissing" / "rollReshaped" (the roll action's handler,
---             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok"), or "drawMissing" /
---             "drawReshaped" (the draw event, HandToolChainsaw.onDraw, is gone: a game update renamed it to onDrawOverlays,
---             which the draw calls instead / takes no parameters and draws the chainsaw being held; onUpdate is as "ok"), or
---             "minimumMissing" (HandToolChainsaw.MINIMUM_CUT_DISTANCE is gone: a game update dropped or renamed it; onUpdate is as "ok")
--- The game keeps the chainsaw's handlers on the specialization class and its event dispatch calls them as
--- Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
---   HandToolChainsaw.onUpdate(tool, dt)       the chainsaw's update (run each tick by StubHandTool.tick): targets the tree the
---                                             targeter found, aligns the split plane (updateSplitPlane), turns the model to
---                                             face the camera, validates the cut, shows the Cut Ring, advances a cut
---   HandToolChainsaw.onDraw(tool)             the chainsaw's draw (StubHandTool.draw): renders "crosshair", the game's default one at
---                                             the centre of the view, while the saw is idle
---   HandToolChainsaw.onCutAction(tool, _, v)  the ACTIVATE_HANDTOOL handler (v > 0 starts a cut on the targeted tree, or
---                                             delimbing without one; v = 0 stops); recorded in StubHandTool.useCalls
---   HandToolChainsaw.onRollAction(tool, _, d) the AXIS_ROTATE_HANDTOOL handler (rollInput += d, applied by the next update
---                                             when not cutting, to spec.currentCutRoll, clamped to +-pi/2)
---   HandToolChainsaw.MINIMUM_CUT_DISTANCE     the nearest a trunk can be to the targeter's ray start and still be found (0 here, so
---                                             existing tests find a trunk anywhere along the ray; a test sets the game's own)
---   HandToolChainsaw.MAXIMUM_CUT_DISTANCE     a cut stops when the targeter's last ray starts this far from the cut node
--- and, as the game's registerFunction does, on the tool itself: updateSplitPlane, calculateCutPlane, updateRingSelector,
--- testIfCutValid, beginCutting, stopCutting, beginDelimbing, stopDelimbing, updateCutting, setCurrentCutState.
--- PlayerCamera.getRotation(camera) -> pitch, yaw, roll   the player camera's rotation from its look direction (the game's):
---   updateSplitPlane takes the cut plane's yaw from it. The player's camera gets it as a method when a chainsaw is made.
---
--- StubHandTool.chainsaw(player, options) -> tool   the chainsaw (spec_chainsaw), not yet held. options.cutTime: ms a cut takes
---   (default 600). tool.rootNode, tool.graphicalNodeParent, tool.graphicalNode (the model), and in tool.spec_chainsaw:
---   currentCutState (ChainsawCutState.IDLE / CUTTING / DELIMBING), currentCutRoll, cameraRotationNode (the node the cut plane
---   hangs from: at the targeted tree's hit point while idle), splitPlaneNode, cutGuideNode (the model rides it while cutting),
---   ringNode (the marker, visible while a tree is targeted), cutNode (a child of the model 0.4 m along the bar and 4 cm below its
---   centre line, as in the game's models), targetedTree ({ node, x, y, z, distance }), cuttingTreeNode, lastDelimbPosX .. lastDelimbNormalZ.
--- StubHandTool.tree(x, z, radius, y0, y1) -> tree   a vertical trunk: node, x, z, radius, y0, y1. A held chainsaw's targeter
---   hits the closest trunk its look ray meets between the class's minimum cut distance and 3 m. StubHandTool.trees lists them.
--- StubHandTool.treeAcross(ray, distance, radius) -> tree   a tall trunk whose surface the ray meets, horizontally, at `distance`;
---   ray = { x, y, z, dirX, dirY, dirZ }
--- StubHandTool.barRay(tool) -> x, y, z, dirX, dirY, dirZ   where the chainsaw's bar points now: the root's origin and +Z
--- StubHandTool.modelDirection(tool) -> dirX, dirY, dirZ   the way the model's +Z points in the world
--- StubHandTool.cuts   every tree the game cut through, in order: { tree, x, y, z, normalX, normalY, normalZ, upX, upY, upZ }
---   where the plane was (calculateCutPlane); StubHandTool.inputLocks: how many times the cut locked the player's input minus unlocks
-
     local nodes = StubScene.nodes
     StubHandTool.trees, StubHandTool.cuts, StubHandTool.inputLocks = {}, {}, 0
 
-    -- ---- engine functions the scene stub lacks ----------------------------------------------------------------------
     local function qmul(ax, ay, az, aw, bx, by, bz, bw)
         return aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
                aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz
@@ -76,8 +22,6 @@
         local px, py, pz, pw = getWorldQuaternion(getParent(node))
         setQuaternion(node, qmul(-px, -py, -pz, pw, qx, qy, qz, qw))
     end
-    -- the direction is the node's +Z, in the space of its parent; the up vector keeps the node's +Y near it. (The flashlight's
-    -- chunk, hand_tool_flashlight.luau, defines one for nodes below the world root; a game that loads both keeps that one.)
     _G.setDirection = _G.setDirection or function(node, dx, dy, dz, ux, uy, uz)
         local zx, zy, zz = normalize(dx, dy, dz)
         local xx, xy, xz = normalize(uy * zz - uz * zy, uz * zx - ux * zz, ux * zy - uy * zx)
@@ -111,7 +55,6 @@
         return worldToLocal(to, tx + wx, ty + wy, tz + wz)
     end
 
-    -- ---- trees and the targeter ---------------------------------------------------------------------------------------
     local MAX_TARGET_DISTANCE = 3.0
 
     function StubHandTool.tree(x, z, radius, y0, y1)
@@ -156,20 +99,17 @@
         return nil
     end
 
-    -- the game's testSplitShape: how far the tree reaches in the plane, around the node the plane hangs from
     _G.testSplitShape = function(treeNode, x, y, z, nx, ny, nz, yx, yy, yz, width, depth)
         local tree = treeOfNode(treeNode)
         if tree == nil then return nil end
         return -tree.radius, tree.radius, -tree.radius, tree.radius
     end
 
-    -- ---- the chainsaw -------------------------------------------------------------------------------------------------
     function StubHandTool.installChainsaw(variant)
         variant = variant or "ok"
         StubHandTool.trees, StubHandTool.cuts, StubHandTool.inputLocks = {}, {}, 0
         local State = { IDLE = 0, CUTTING = 1, DELIMBING = 2 }
         _G.ChainsawCutState = State
-        -- (a minimum of 0 leaves a trunk anywhere along the look ray found; a test sets it to the game's own)
         local Class = { MINIMUM_CUT_DISTANCE = 0, MAXIMUM_CUT_DISTANCE = 1.5 }
         if variant == "minimumMissing" then Class.MINIMUM_CUT_DISTANCE = nil end
         _G.HandToolChainsaw = Class
@@ -182,7 +122,6 @@
             return -math.atan2(dy, math.sqrt(dx * dx + dz * dz)), math.atan2(dx, dz), 0
         end
 
-        -- the targeter: target types with a minimum and a maximum distance (the spray can's chunk may have added them)
         local PlayerTargeter = _G.PlayerTargeter
         if PlayerTargeter.addTargetType == nil then
             function PlayerTargeter:addTargetType(key, mask, minDistance, maxDistance)
@@ -207,7 +146,6 @@
             end
         end
 
-        -- a chainsaw taken in hand targets trees, one put away stops what it is doing and targets none (the game's onHeldStart)
         local baseHold, baseDrop = StubHandTool.hold, StubHandTool.drop
         function StubHandTool.hold(tool)
             baseHold(tool)
@@ -223,7 +161,6 @@
             baseDrop(tool)
         end
 
-        -- ---- the functions the game registers on the tool
         local functions = {}
         function functions.setCurrentCutState(self, cutState, isVerticalCut)
             self.spec_chainsaw.currentCutState = cutState
@@ -272,7 +209,6 @@
             return not (maxY - minY >= spec.maximumCutDiameter or maxZ - minZ >= spec.maximumCutDiameter)
         end
 
-        -- the Cut Ring sits on the targeted trunk at the height of the cut node
         function functions.updateRingSelector(self, targetedTree, isCutPossible)
             local spec = self.spec_chainsaw
             setVisibility(spec.ringNode, targetedTree ~= nil)
@@ -302,7 +238,6 @@
                 localToWorld(spec.splitPlaneNode, spec.cutMinimumY, 0, spec.cutMinimumZ)
             spec.cutEndPositionX, spec.cutEndPositionY, spec.cutEndPositionZ =
                 localToWorld(spec.splitPlaneNode, spec.cutMaximumY, 0, spec.cutMinimumZ)
-            -- the model rides the cut guide, which moves along the cut in the world
             link(spec.cutGuideNode, self.graphicalNode)
             setTranslation(self.graphicalNode, 0, 0, 0)
             setRotation(self.graphicalNode, 0, 0, 0)
@@ -343,7 +278,6 @@
             if spec.currentCutTime >= spec.cutTime then self:stopCutting(true) end
         end
 
-        -- ---- the specialization's own handlers: on the class, not on the tool
         local function update(self, dt)
             local spec = self.spec_chainsaw
             local carryingPlayer = self:getCarryingPlayer()
@@ -357,7 +291,6 @@
                     spec.currentCutRoll = math.clamp(spec.currentCutRoll + 0.001 * spec.rollInput * dt, -math.pi * 0.5, math.pi * 0.5)
                     spec.rollInput = 0
                 end
-                -- the model faces the camera
                 local upX, upY, upZ = localDirectionToLocal(spec.cameraRotationNode, getParent(self.graphicalNode), 0, 1, 0)
                 local dirX, dirY, dirZ = localDirectionToLocal(getCamera(), getParent(self.graphicalNode), 0, 0, -1)
                 setDirection(self.graphicalNode, dirX, dirY, dirZ, upX, upY, upZ)
@@ -423,14 +356,12 @@
         function Class.onRollAction(self, _, inputDelta)
             self.spec_chainsaw.rollInput = self.spec_chainsaw.rollInput + inputDelta
         end
-        -- the roll action's handler gone, or reshaped to take no parameters
         if variant == "rollMissing" then
             Class.onRollAction = nil
         elseif variant == "rollReshaped" then
             Class.onRollAction = function() end
         end
 
-        -- the game's event dispatch: spec[eventName](object, ...), the class read at every call
         table.insert(StubHandTool.updaters, function(dt)
             local held = StubHandTool.heldTool
             if held ~= nil and held.spec_chainsaw ~= nil then
@@ -439,7 +370,6 @@
             end
         end)
 
-        -- the draw: the default crosshair at the centre of the view while the saw is idle
         local function draw(self)
             if self.spec_chainsaw.currentCutState == State.IDLE then StubHandTool.render(self, "crosshair") end
         end
@@ -468,7 +398,6 @@
 
         tool.graphicalNodeParent = StubScene.newNode("chainsawModelParent", tool.rootNode)
         tool.graphicalNode = StubScene.newNode("chainsawModel", tool.graphicalNodeParent)
-        -- below the bar's centre line, as in the game's models (at the lower edge of the chain)
         spec.cutNode = StubScene.newNode("chainsawCutNode", tool.graphicalNode, 0, -0.04, 0.4)
         spec.cutGuideNode = createTransformGroup("chainsawCutGuideNode")
         link(getRootNode(), spec.cutGuideNode)

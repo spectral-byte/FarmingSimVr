@@ -1,9 +1,3 @@
-// Manual Attach, which hitch the Pointer Ray works (ADR-0035, spec #227, ticket #228), seen from outside: the real Companion Mod runs against the
-// real VRBridge over FakeTrackedHeadset, with the game and Manual Attach stood in by Lua stubs (manual_attach_test_support.h). Covered here:
-// which hitches can be pointed at (within Manual Attach's reach, with an Implement lined up or on them, of a farm the player may use), which one
-// is worked when there are several, a trailer's own hitch, and what Manual Attach refuses (the pull still takes the ray and shows its warning).
-// Prior art: test_animated_objects_pointer.cpp.
-
 #include "manual_attach_test_support.h"
 #include <string>
 
@@ -20,9 +14,7 @@ constexpr const char* kTractorOutOfReach = R"luau(
     StubManualAttach.detectAll()
 )luau";
 
-}  // namespace
-
-// ---- Which hitches can be pointed at ----------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadManualAttachTest, AHitchWithNothingLinedUpAndNothingOnItIsNotSelectedAndThePullIsTheTriggersOwn) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -57,7 +49,7 @@ TEST_F(VirtualGamepadManualAttachTest, AHitchOutsideManualAttachsReachIsNotSelec
 TEST_F(VirtualGamepadManualAttachTest, TheReachIsManualAttachsOwnConstantNotACopyOfIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorOutOfReach);
-    Lua("StubManualAttach.Handler.PLAYER_MIN_DISTANCE_SQ = 16");  // a release with a longer reach
+    Lua("StubManualAttach.Handler.PLAYER_MIN_DISTANCE_SQ = 16");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 3.00");
 }
@@ -82,8 +74,6 @@ TEST_F(VirtualGamepadManualAttachTest, AnImplementOfAnotherFarmIsNeverAttachedBy
     EXPECT_EQ(Performs(), 0);
     EXPECT_EQ(Attached("plow"), "false");
 }
-
-// ---- Which hitch is worked -----------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, WithTwoHitchesInReachThePullWorksTheOneTheRayIsOnWhicheverIsNearer) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -155,8 +145,6 @@ TEST_F(VirtualGamepadManualAttachTest, ATrailersOwnHitchWorksTheSameWay) {
     EXPECT_EQ(EvalLua(L, "tostring(StubManualAttach.performs[1].attacherVehicle == trailer)"), "true");
     EXPECT_EQ(Attached("second"), "true") << "the trailer tows the next trailer";
 }
-
-// ---- What Manual Attach refuses ------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, ARefusedDetachStillTakesTheRayAndThePullShowsManualAttachsWarning) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());

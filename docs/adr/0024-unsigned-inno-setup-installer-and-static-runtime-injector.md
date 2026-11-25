@@ -19,3 +19,5 @@ Accepted, amended: the Injector is the game's `version.dll` now, its version res
 - Upgrading from an Injector built before the version resource existed leaves that old Injector in `dxgi.dll.fs25vr-backup`, and uninstalling restores it. Later upgrades are clean.
 - Changing `ProductName` in `src/dxgi.rc.in` makes every earlier Injector look foreign; change it together with `IsOurInjector`.
 - Every dependency linked into `dxgi.dll` must use the static runtime. The OpenXR loader sets its own dynamic runtime as a static library, so `CMakeLists.txt` resets it.
+
+More decisions about this area, from the code comments: [ADR-0058](0058-installer-decisions.md), [ADR-0059](0059-build-ci-and-tool-decisions.md).

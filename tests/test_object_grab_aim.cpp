@@ -1,10 +1,3 @@
-// Object Grab, the Pointer Hand aims the empty hands (ADR-0033, spec #156), seen from outside: the real Companion Mod runs against the
-// real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool, and the game's empty
-// hands and loose objects in object_grab_test_support.h). The game's PlayerTargeter reads Player:getLookRay() once per update, as the
-// game's does, and the stub keeps the ray it cast. A test asserts that ray (where it starts and which way it points) against the
-// Pointer Ray the Companion Mod placed and the head's ray, and what the game's pick-up button then picks up. Prior art:
-// test_hand_tools_look_ray.cpp (the look ray seen from the targeter).
-
 #include "object_grab_test_support.h"
 #include <string>
 
@@ -23,7 +16,7 @@ constexpr const char* kBaleAhead = "_G.bale = StubHandTool.looseObject(-0.4, -0.
 // behind (so that an object a touching hand is in is above the hands target's 0.5 m minimum), along the finger.
 constexpr float kReachBehind = 0.6f;
 
-}  // namespace
+}
 
 #define OBJECT_GRAB_START() \
     FakeTrackedHeadset headset; \
@@ -45,15 +38,12 @@ TEST_F(CompanionModTest, WithEmptyHandsAndThePointerHandInUseTheTargeterCastsThe
         << "the targeter cast " << EvalLua(L, "rayText(targeterRay())") << ", the Pointer Ray is " << EvalLua(L, "rayText(pointerRay())");
     EXPECT_GT(Number(L, "apart(targeterRay(), headRay())"), 0.3) << "and not from the head: the hand is held away from it";
 
-    // The hand moves; the ray follows (the targeter reads the ray before the mod's update of its frame).
     headset.SetHandPointing(kRight, HandAt(-0.3f, 0.1f, -0.4f, 0.5f, 0.8f));
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), " + expected + ")"), "true")
         << "the targeter cast " << EvalLua(L, "rayText(targeterRay())") << ", the Pointer Ray is " << EvalLua(L, "rayText(pointerRay())");
 }
 
-// The game's empty hands are Player.hands, held while no Hand Tool is: Player:getHeldHandTool() is nil then (the game's holders and
-// winches read it that way), and answers the Hand Tool once one is held.
 TEST_F(CompanionModTest, OnFootWithEmptyHandsTheGameHoldsNoHandToolAndTheHandAimsThem) {
     OBJECT_GRAB_START();
     EXPECT_EQ(EvalLua(L, "tostring(foot.player:getHeldHandTool())"), "nil") << "the game: no Hand Tool is held";
@@ -160,7 +150,7 @@ TEST_F(CompanionModTest, ASetDownHandHandsTheRayBackToTheHeadAndAHandThatMovesAi
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false");
 
-    AdvanceGameTime(3100);  // the hand lay still for longer than a Motion Controller counts as in use
+    AdvanceGameTime(3100);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "set down: the head's ray";
 
@@ -193,7 +183,6 @@ TEST_F(CompanionModTest, OnlyTheLocalPlayersLookRayIsTheHands) {
     EXPECT_EQ(EvalLua(L, "sameRay(otherRay, otherHead)"), "true") << "another player's look ray is the game's: " << EvalLua(L, "rayText(otherRay)");
 }
 
-// The game's pick-up button picks up what the targeter found along the hand's ray.
 TEST_F(CompanionModTest, TheGamesPickUpButtonPicksUpWhatThePointerRayIsOn) {
     OBJECT_GRAB_START();
     ASSERT_EQ(RunLuauChunk(L, kBaleAhead, "=bale"), 0);
@@ -206,18 +195,15 @@ TEST_F(CompanionModTest, TheGamesPickUpButtonPicksUpWhatThePointerRayIsOn) {
 
 TEST_F(CompanionModTest, TheGamesPickUpButtonPicksUpWhatTheHeadLooksAtWhenNoHandAims) {
     OBJECT_GRAB_START();
-    FRAMES(2);  // the camera update places the head in the world
+    FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "local r = headRay(); _G.bale = StubHandTool.looseObject(r[1] + r[4] * 1.5, r[2] + r[5] * 1.5, r[3] + r[6] * 1.5, 0.05, { name = 'bale' })", "=bale"), 0);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressPickUp(hands)", "=pressPickUp"), 0);
     EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode == bale.node)"), "true") << "as in the game";
 }
 
-// A hand that touches the object: its fingertip is at the surface (or has gone a few centimetres into it). The ray starts further back so
-// that the hit is not under the 0.5 m minimum distance of the hands target type.
 TEST_F(CompanionModTest, ATouchingHandPicksUpWhatItTouchesAndAnObjectOutOfReachIsNotPickedUp) {
     OBJECT_GRAB_START();
-    // The fingertip at world (-0.4, -0.2, 0.3); the object's centre 0.2 m ahead of it: the fingertip is 5 cm inside its surface.
     ASSERT_EQ(RunLuauChunk(L, "_G.touched = StubHandTool.looseObject(-0.4, -0.2, 0.5, 0.05, { name = 'touched', radius = 0.15 })", "=touched"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressPickUp(hands)", "=pressPickUp"), 0);
@@ -227,14 +213,12 @@ TEST_F(CompanionModTest, ATouchingHandPicksUpWhatItTouchesAndAnObjectOutOfReachI
 
 TEST_F(CompanionModTest, AnObjectFurtherThanThePickupDistanceIsNotTargeted) {
     OBJECT_GRAB_START();
-    // 6 m ahead of the fingertip: past the game's 3 m reach.
     ASSERT_EQ(RunLuauChunk(L, "_G.far = StubHandTool.looseObject(-0.4, -0.2, 6.3, 0.05, { name = 'far' })", "=far"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressPickUp(hands)", "=pressPickUp"), 0);
     EXPECT_EQ(EvalLua(L, "#StubHandTool.pickUps"), "0");
 }
 
-// The game counts its empty hands as a hand tool; here they are none, so the Hand Tools' diagnostics do not call them an unsupported tool.
 TEST_F(CompanionModTest, TheEmptyHandsAreNotAnUnsupportedHandTool) {
     OBJECT_GRAB_START();
     FRAMES(2);

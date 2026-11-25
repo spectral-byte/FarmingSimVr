@@ -1,106 +1,3 @@
-; Inno Setup script for the FS25 VR Installer (see CONTEXT.md: Installer, Injector, Companion Mod).
-; Built by scripts\package_release.ps1, which passes:
-;   /DAppVersion=<modDesc version>   /DStageDir=<staged bundle folder>   /DOutputDir=<where to write the Setup exe>
-; The staged bundle folder is the one the zip bundle is made from, so both carry identical files:
-;   x64\version.dll, mods\FS25_VRCompanion.zip, LICENSE, THIRD_PARTY_NOTICES.txt
-;
-; The Injector is the game's version.dll (docs/adr/0038-the-injector-is-the-games-version-dll.md). FS25 VR up to
-; 1.1.9 was the game's dxgi.dll instead: an upgrade removes that one and puts back a dxgi.dll it had moved aside
-; (ReShade, for one). A dxgi.dll that is not ours is never touched.
-;
-; Command line (besides Inno's standard switches such as /VERYSILENT, /SUPPRESSMSGBOXES, /DIR=):
-;   /FS25VR_DOCUMENTS=<folder>   hidden, test-only: replaces the user's Documents folder
-;   /FS25VR_GAMEEXE=<file name>  hidden, test-only: replaces the game's exe file name (FarmingSimulator2025Game.exe)
-;                                that Windows' crash dump key is written for (see below), so the Installer
-;                                test never touches the key of the real game. Not a file name: no key.
-;   /FS25VR_NOCRASHDUMPS         leaves Windows' crash dump setting for the game alone (see below): no key and
-;                                no record. An upgrade given the switch keeps what the install before it made.
-;                                In a wizard run it unticks the Crash Dumps page's checkbox.
-;   /FS25VR_RESOLUTION=<W>x<H>   sets the game's Render Resolution (see below) without the wizard page.
-;                                Whole numbers from 640 to 8192, e.g. /FS25VR_RESOLUTION=4000x2500.
-;                                An invalid value fails the install before anything is placed. With no
-;                                game.xml the install succeeds and the resolution is skipped (logged).
-;                                If game.xml can't be edited once the files are placed (read-only, locked),
-;                                the install is kept and Setup exits with code 20 (logged).
-;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
-;   /FS25VR_UNINSTALL            runs the existing uninstaller unattended instead of installing (no /DIR needed),
-;                                waits for it and exits with its exit code. With nothing installed it logs
-;                                "FS25 VR is not installed" and exits 1. Setup shows no window and
-;                                no message box for it.
-; Exit codes: 20 = game.xml could not be edited once the files were placed (see /FS25VR_RESOLUTION above);
-;   21 = the files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted (logged);
-;   the new Injector stays inactive while it is there. The Windows crash dump setting never changes the exit code.
-;
-; Running Setup interactively while FS25 VR is installed first asks: Upgrade or reinstall / Uninstall / Cancel
-; (see "Uninstalling through the Setup exe" in [Code]). Silent runs never ask and keep upgrading.
-;
-; Render Resolution
-;   The game's settings file is <Documents>\My Games\FarmingSimulator2025\game.xml. It is NOT
-;   gameSettings.xml (that one holds modsDirectoryOverride). Shape of game.xml (UTF-8 with a BOM, CRLF
-;   line endings, 4-space indent):
-;     <game>
-;       <graphic>
-;         <display>
-;           <width>3840</width>  <height>2160</height>  <fullscreenMode>windowed</fullscreenMode>
-;           ... previousWidth, previousHeight, previousFullscreenMode and more display elements ...
-;   The Installer changes the text of exactly three elements inside <display>: <width>, <height> and
-;   <fullscreenMode> (set to "windowed"). It edits the bytes of the file in place, not through an XML
-;   serializer, so everything else (BOM, line endings, indentation, the previous* elements) stays
-;   identical. Before the first edit ever, game.xml is copied to game.xml.fs25vr-backup next to it; an
-;   existing backup is never overwritten.
-;
-; Render Resolution record (read again by later installs and by the uninstall restore)
-;   {commonappdata}\FS25 VR\render-resolution.ini, next to the uninstaller. UTF-8 with a BOM, one
-;   Key=Value per line after a [RenderResolution] header:
-;     GameXml=<full path of the game.xml that was edited>
-;     Backup=<full path of game.xml.fs25vr-backup>
-;     OriginalWidth= OriginalHeight= OriginalFullscreenMode=      what game.xml held before the Installer
-;     WrittenWidth=  WrittenHeight=  WrittenFullscreenMode=       what the Installer wrote
-;   Restore rule: if game.xml's display width, height and fullscreenMode all still equal the
-;   Written* values, write the Original* values back; otherwise leave game.xml alone. The record is
-;   only written when an edit is applied. When an Installer run applies again and game.xml still holds
-;   the previous Written* values, the Original* values are carried over (so they stay the player's
-;   real settings); otherwise the values found in game.xml become the new Original* values.
-;   Pascal helpers in [Code]: TRenderResolutionRecord, GetRenderResolutionRecordPath,
-;   LoadRenderResolutionRecord (usable from the uninstaller), ReadDisplaySettings, WriteDisplaySettings.
-;   The uninstall (RestoreRenderResolution) applies that rule to the game.xml named in the
-;   record, then deletes the record. It never touches game.xml.fs25vr-backup or the Companion Mod's
-;   modSettings. With no record (the Installer never set a Render Resolution) it does nothing.
-;
-; Windows' own crash dumps for the game (docs/adr/0039-the-installer-turns-on-windows-crash-dumps-for-the-game.md)
-;   Windows Error Reporting writes a dump for an application when a key named after its exe exists under
-;     HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
-;   in the 64-bit registry view. After the files are placed, an administrative install creates it for
-;   FarmingSimulator2025Game.exe with three DWORD values: DumpType 0 (custom), CustomDumpFlags 0x1060 (thread
-;   information, the memory the stacks point at, unloaded modules: the contents of the Injector's own dump) and
-;   DumpCount 3. No DumpFolder, so Windows' default CrashDumps folder applies. It is on unless
-;   /FS25VR_NOCRASHDUMPS is given. The wizard has a "Crash Dumps" page after the Render Resolution page with
-;   one checkbox, ticked (unticked when the switch is given), that says what Windows keeps and where; a silent
-;   run has no page and is answered by the switch alone. A per-user run (/CURRENTUSER) cannot write
-;   HKEY_LOCAL_MACHINE: it has no page, and it logs that the setting was skipped. Unticked is the same as the
-;   switch: no key and no record. Nothing here ever fails the install.
-;   A key that already exists for the exe is the player's or another tool's: install and uninstall leave it
-;   alone (logged).
-;
-; Crash dump record (read again by later installs and by the uninstall)
-;   {commonappdata}\FS25 VR\crash-dumps.ini, next to the uninstaller. UTF-8 with a BOM, one Key=Value per line
-;   after a [CrashDumps] header:
-;     ExeName=<exe file name the key was written for>   (the uninstaller does not get /FS25VR_GAMEEXE)
-;     WrittenDumpType= WrittenCustomDumpFlags= WrittenDumpCount=   the numbers the Installer wrote
-;     CreatedLocalDumpsKey=<1 | 0>   whether the LocalDumps key itself was not there before the write
-;   The record is written before the key and deleted again if the key cannot be written. Remove rule: the
-;   uninstall deletes the exe's key only when a record exists and the key still holds exactly those three
-;   values (no other value, no subkey); then, if CreatedLocalDumpsKey is 1, it deletes LocalDumps too unless
-;   something else has gone into it. Microsoft does not say what a LocalDumps key with nothing in it does (it
-;   may keep crash dumps on for every application), so the Installer leaves the registry as it found it
-;   (docs/adr/0039, item 8). Either way the record is deleted. An upgrade or reinstall keeps the key and its
-;   record while the key is still its own, writes the key when there is none (and, when the earlier record says
-;   the install created LocalDumps and LocalDumps is still empty, carries CreatedLocalDumpsKey=1 forward), and
-;   for a key that was changed since leaves it alone and deletes the record.
-;   Pascal helpers in [Code]: TCrashDumpRecord, SetUpCrashDumps, RemoveCrashDumps, CrashDumpKeyIsUnchanged.
-;
-; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer-and-static-runtime-injector.md).
-
 #ifndef AppVersion
   #error AppVersion is not defined. Build with scripts\package_release.ps1 (or pass /DAppVersion=...).
 #endif
@@ -114,8 +11,6 @@
 #define GameExe "x64\FarmingSimulator2025Game.exe"
 
 [Setup]
-; Fixed application ID: a newer Installer upgrades the existing install under one Add/Remove Programs entry.
-; scripts\test_installer.ps1 looks the uninstall entry up by this ID.
 AppId={{C85F7B59-39C3-48F5-94FB-38E291A376AE}
 AppName=FS25 VR
 AppVersion={#AppVersion}
@@ -130,26 +25,16 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
-; The install target is the player's game folder, not a folder of ours.
 DefaultDirName={autopf}\Farming Simulator 2025
 DirExistsWarning=no
 AppendDefaultDirName=no
-; Upgrades: with the fixed AppId above, a newer Installer starts on the game folder used last time.
-; Precedence for the folder shown/used: /DIR= on the command line, then that previous folder, then
-; DefaultDirName (which game detection may refine). Inno applies this order itself.
 UsePreviousAppDir=yes
 DisableProgramGroupPage=yes
 LicenseFile={#StageDir}\LICENSE
-; Keep the uninstaller out of the game folder.
 UninstallFilesDir={commonappdata}\FS25 VR
 
-; Admin by default. Allowing /CURRENTUSER on the command line only lets the test script run
-; without a UAC prompt from a non-elevated shell; the wizard never offers it.
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline
-; The mods folder and game.xml live under the player's Documents (a user area) even though we run
-; elevated. GetDocumentsDir asks the player's own process for that folder instead of using {userdocs},
-; which is the administrator's when a standard user elevates with an administrator's credentials.
 UsedUserAreasWarning=no
 
 [Messages]
@@ -157,22 +42,14 @@ FinishedLabel=FS25 VR is installed.%n%nBefore you play:%n  1. Start your OpenXR 
 FinishedLabelNoIcons=FS25 VR is installed.%n%nBefore you play:%n  1. Start your OpenXR runtime (Meta Quest Link, Virtual Desktop, SteamVR, ...).%n  2. When you load a savegame, tick "FS25 VR Companion Mod" in the mod selection.
 
 [Files]
-; Injector: into the game's x64 folder.
 Source: "{#StageDir}\x64\version.dll"; DestDir: "{app}\x64"; Flags: ignoreversion
-; Companion Mod: the zip, unchanged (the game reads it as a zip), into the mods folder.
 Source: "{#StageDir}\mods\FS25_VRCompanion.zip"; DestDir: "{code:GetModsDir}"; Flags: ignoreversion
-; Notices travel with the uninstaller.
 Source: "{#StageDir}\LICENSE"; DestDir: "{commonappdata}\FS25 VR"; Flags: ignoreversion
 Source: "{#StageDir}\THIRD_PARTY_NOTICES.txt"; DestDir: "{commonappdata}\FS25 VR"; Flags: ignoreversion
 
 [UninstallDelete]
-; Written by the Injector while the game runs, and when it crashes (the minidump next to the log, under a fixed name).
-; modSettings (the VR settings) is deliberately kept.
 Type: files; Name: "{app}\x64\fs25_vr.log"
 Type: files; Name: "{app}\x64\fs25_vr_crash.dmp"
-; The folder holding the uninstaller, the notices and (while they are in place) the Render Resolution and crash
-; dump records is created by the Installer's own code before Inno places files in it, so Inno would leave it
-; behind empty.
 Type: dirifempty; Name: "{commonappdata}\FS25 VR"
 
 [Code]
@@ -186,12 +63,8 @@ const
     'This folder is not a Farming Simulator 25 installation.' + #13#10#13#10 +
     'Choose the folder that contains x64\FarmingSimulator2025Game.exe.';
 
-{ Game installation detection (Steam libraries, Epic manifests, GIANTS standalone, the Game Pass
-  rejection and the picker page): see game_detection.iss. }
 #include "game_detection.iss"
 
-{ Empty when Dir can be installed to; otherwise the reason it cannot. A Microsoft Store / Game Pass
-  folder is reported as unsupported rather than as "not a Farming Simulator 25 installation". }
 function GameFolderProblem(Dir: String): String;
 begin
   if IsStoreFolder(Dir) then
@@ -212,10 +85,6 @@ begin
   InitializeCrashDumpsPage;
 end;
 
-{ Asks a process of the user who started Setup (normally not elevated) for their Documents folder. That
-  process writes the answer into a folder in Setup's temporary folder, which belongs to the account Setup
-  runs as, so the folder is opened to Authenticated Users first; it goes away with the temporary folder.
-  '' (logged) when that fails. }
 function QueryOriginalUserDocuments: String;
 var
   ProbeDir, ProbeFile, PsPath: String;
@@ -233,7 +102,6 @@ begin
   if not Exec(ExpandConstant('{sys}\icacls.exe'), AddQuotes(ProbeDir) + ' /grant *S-1-5-11:(OI)(CI)M', '',
               SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
     Log('Could not open ' + ProbeDir + ' to the original user (icacls exit code ' + IntToStr(Code) + ').');
-  { A single-quoted PowerShell string: a quote in the path is doubled. }
   PsPath := ProbeFile;
   StringChangeEx(PsPath, '''', '''''', True);
   try
@@ -256,13 +124,8 @@ begin
 end;
 
 var
-  DocumentsDir: String;   { GetDocumentsDir's answer, worked out once }
+  DocumentsDir: String;
 
-{ The Documents folder of the player who started Setup (honors OneDrive redirection through the known
-  folder), unless the hidden test-only /FS25VR_DOCUMENTS switch replaces it. In administrative install mode
-  Setup may run as another account than the player's (a standard user who elevates with an administrator's
-  credentials), and the userdocs constant is then the administrator's Documents; so the player's own
-  process is asked, with userdocs as the fallback. Install only (the uninstaller works from recorded paths). }
 function GetDocumentsDir: String;
 begin
   if DocumentsDir = '' then
@@ -282,9 +145,6 @@ begin
   Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025';
 end;
 
-{ The directory of the game's active mods directory override in gameSettings.xml (not game.xml, which
-  only holds the display settings), or '' when gameSettings.xml is missing/unreadable or has no override
-  element, or the override is inactive or has no directory. The file is only read, never written. }
 function GetModsDirOverride: String;
 var
   Doc, Node, ActiveAttr, DirAttr: Variant;
@@ -318,9 +178,6 @@ begin
   end;
 end;
 
-{ Where the Companion Mod goes: the active mods directory override if there is one, else the
-  default mods folder. Inno records the resolved path with the file, so uninstall removes the mod
-  from wherever it was installed. }
 function GetModsDir(Param: String): String;
 begin
   Result := GetModsDirOverride;
@@ -334,10 +191,6 @@ const
   GameProcessName = 'FarmingSimulator2025Game.exe';
   CloseGameMessage = 'Close Farming Simulator 25 to continue.';
 
-{ True if a process whose image name is FarmingSimulator2025Game.exe is running (any installation,
-  any user: the Installer must not run while the game holds the Injector or can rewrite game.xml). WMI
-  gives the image name without needing process handles. If WMI cannot be queried we cannot tell, so
-  we log it and carry on rather than block every install. }
 function IsGameRunning: Boolean;
 var
   Locator, Service, Processes: Variant;
@@ -353,10 +206,6 @@ begin
   end;
 end;
 
-{ Shared by install and uninstall. Returns True when the game is not running (possibly after the
-  player closed it and chose Retry). Returns False when the caller must stop: the player chose Cancel,
-  or this is a silent run, which logs the reason and fails instead of waiting. A silent run must never
-  show a message box. /SUPPRESSMSGBOXES without /SILENT answers Cancel, so it cannot loop forever. }
 function EnsureGameNotRunning(Silent: Boolean): Boolean;
 begin
   Result := True;
@@ -376,20 +225,10 @@ begin
   end;
 end;
 
-{ ---- The Injector's file in the game's x64 folder, and the one an earlier version used ----
-  The Injector is version.dll. Ours there (recognised by its version resource) is simply overwritten. Any
-  other version.dll is moved to version.dll.fs25vr-backup first and put back by the uninstaller. An
-  existing backup is never overwritten, so an upgrade can't replace the player's original DLL with an older
-  copy of ours.
-  FS25 VR up to 1.1.9 was dxgi.dll, and moved a foreign dxgi.dll (ReShade, ...) to dxgi.dll.fs25vr-backup
-  the same way. Once the files are placed, an upgrade deletes that dxgi.dll of ours (while it is there, the
-  new Injector stays inactive) and puts the backup back. A dxgi.dll that is not ours is left alone. }
-
 const
   InjectorFileName = 'version.dll';
   EarlierInjectorFileName = 'dxgi.dll';
   BackupSuffix = '.fs25vr-backup';
-  { A DLL the player put in place of ours after installing, kept from the uninstall's file removal. }
   KeepSuffix = '.fs25vr-keep';
   OurProductName = 'FS25 VR';  { ProductName in the Injector's version resource: src\injector.rc.in }
   LegacyLogFileName = 'fs25_vr.log';
@@ -429,14 +268,10 @@ begin
   if (ValuePtr = 0) or (ValueLen = 0) then Exit;
   SetLength(Result, ValueLen);
   lstrcpynW(Result, ValuePtr, ValueLen + 1);
-  { ValueLen counts the terminating null; cut the string at it }
   if Pos(#0, Result) > 0 then Result := Copy(Result, 1, Pos(#0, Result) - 1);
   Result := Trim(Result);
 end;
 
-{ An Injector from before the version resource (the v1.0.0 zip bundle and builds up to this Installer)
-  has no ProductName. It carries the name of the log file it writes, fs25_vr.log, as text (ASCII in v1.0.0,
-  UTF-16 in later builds), which no other DLL does. Those Injectors were all dxgi.dll. }
 function IsLegacyInjector(FileName: String): Boolean;
 var
   Raw: AnsiString;
@@ -458,15 +293,13 @@ end;
 
 var
   MovedInjectorGameDir: String;  { the game folder whose foreign version.dll PrepareExistingInjector moved aside }
-  FilesPlaced: Boolean;          { set at ssPostInstall: from then on the uninstaller puts that version.dll back }
+  FilesPlaced: Boolean;
 
 function GameDll(GameDir, FileName: String): String;
 begin
   Result := AddBackslash(GameDir) + 'x64\' + FileName;
 end;
 
-{ Called from PrepareToInstall for the chosen game folder. Moves a foreign version.dll aside (warning
-  the player) and returns '' on success; returns the reason when it can't be done safely. }
 function PrepareExistingInjector(GameDir: String): String;
 var
   Dll, Backup: String;
@@ -490,9 +323,6 @@ begin
     Result := 'Could not move ' + Dll + ' to ' + Backup + '. Close any program using it and try again.';
 end;
 
-{ Uninstall, before Inno removes the files: Inno deletes x64\version.dll by name, whatever it is by then, and
-  x64\dxgi.dll too if an earlier FS25 VR version installed it. If the player has put a DLL of their own there
-  since (ReShade's dxgi.dll, for one), move it out of the way so it survives; RestoreForeignDll puts it back. }
 procedure SetAsideReplacedDll(GameDir, FileName: String);
 var
   Dll, Keep: String;
@@ -508,9 +338,6 @@ begin
     Log('Could not move ' + Dll + ' to ' + Keep + '; the uninstall may remove it.');
 end;
 
-{ Uninstall, an upgrade from an earlier version, and a rolled-back install: put the player's DLL back once
-  ours is gone. One the player put there after installing (set aside by SetAsideReplacedDll) wins over the
-  older one moved aside at install, which then stays under its backup name. }
 procedure RestoreForeignDll(GameDir, FileName: String);
 var
   Dll, Backup, Keep: String;
@@ -540,9 +367,6 @@ begin
     Log('Could not restore ' + Backup + ' as ' + FileName + '.');
 end;
 
-{ Deletes the dxgi.dll of an earlier FS25 VR version, if there is one, and puts back the dxgi.dll it had moved
-  aside. A dxgi.dll that is not ours (ReShade's, ...) is left alone. False when ours is there and could not be
-  deleted. }
 function RemoveEarlierInjector(GameDir: String): Boolean;
 var
   Dll: String;
@@ -567,8 +391,6 @@ procedure RemoveCrashDumps; forward;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  { Before Inno removes the files, so the records are gone and their folder (common appdata, FS25 VR)
-    is removed along with them, and so a DLL that is not ours is out of the way of the removal. }
   if CurUninstallStep = usUninstall then
   begin
     RestoreRenderResolution;
@@ -579,13 +401,9 @@ begin
   if CurUninstallStep = usPostUninstall then
   begin
     RestoreForeignDll(ExpandConstant('{app}'), InjectorFileName);
-    { An earlier version's dxgi.dll that is still there (it was not in this install's file list, or could
-      not be deleted at upgrade) goes too, and what it had moved aside comes back. }
     RemoveEarlierInjector(ExpandConstant('{app}'));
   end;
 end;
-
-{ ---- Render Resolution (file formats are described at the top of this script) ---- }
 
 const
   RenderMinSize = 640;
@@ -611,7 +429,6 @@ begin
   Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025\game.xml';
 end;
 
-{ Whole number from 640 to 8192, digits only. }
 function ParseRenderSize(const S: String; var Value: Integer): Boolean;
 var
   I: Integer;
@@ -648,8 +465,6 @@ begin
   if P > 0 then Result := P + From - 1;
 end;
 
-{ One character per byte, for searching only: positions in the result are byte positions in Raw.
-  (Bytes of 0x80 and up become other characters, which never match the ASCII tags searched for.) }
 function BytesToText(const Raw: AnsiString): String;
 var
   I: Integer;
@@ -659,7 +474,6 @@ begin
     Result[I] := Chr(Ord(Raw[I]));
 end;
 
-{ Finds the text of <Tag>...</Tag> inside the (first) <display> element. }
 function LocateDisplayElement(const Text, Tag: String; var ValueStart, ValueLen: Integer): Boolean;
 var
   SectionStart, SectionEnd, P, Q: Integer;
@@ -689,8 +503,6 @@ begin
   if Result then Value := Trim(Copy(Text, S, L));
 end;
 
-{ Replaces the text of <Tag> inside <display> with NewValue in both Raw and its BytesToText copy Text,
-  leaving every other byte as it is. Text is edited alongside so it need not be rebuilt for the next tag. }
 function SetDisplayElement(var Raw: AnsiString; var Text: String; const Tag, NewValue: String): Boolean;
 var
   S, L: Integer;
@@ -793,8 +605,6 @@ begin
   Result := SaveStringsToUTF8File(GetRenderResolutionRecordPath, Lines, False);
 end;
 
-{ Backs up game.xml (once), sets the display width, height and fullscreen mode, and records what
-  changed. Returns '' on success, otherwise the reason. Nothing is touched unless the edit is possible. }
 function ApplyRenderResolution(W, H: Integer): String;
 var
   Raw: AnsiString;
@@ -820,7 +630,6 @@ begin
   R.WrittenWidth := IntToStr(W);
   R.WrittenHeight := IntToStr(H);
   R.WrittenFullscreenMode := RenderWindowedMode;
-  { If game.xml still holds what an earlier run wrote, the originals stay the player's real settings. }
   HadOld := LoadRenderResolutionRecord(Old);
   CarryOver := HadOld and SameText(Old.GameXml, Path) and (Old.WrittenWidth = CurW) and
                (Old.WrittenHeight = CurH) and (Old.WrittenFullscreenMode = CurMode);
@@ -842,16 +651,12 @@ begin
     Result := RenderUnreadableMessage;
     Exit;
   end;
-  { Never overwrite an existing backup: it holds the settings from before the first edit ever. }
   if not FileExists(R.Backup) then
     if not FileCopy(Path, R.Backup, True) then
     begin
       Result := 'Could not back up ' + Path + ' to ' + R.Backup;
       Exit;
     end;
-  { The record goes first: if writing game.xml then fails, the record names values game.xml does not
-    hold and the uninstall leaves game.xml alone. The other way round, game.xml could be changed
-    with nothing recorded to undo it. }
   if not SaveRenderResolutionRecord(R) then
   begin
     Result := 'Could not record the Render Resolution change in ' + GetRenderResolutionRecordPath;
@@ -860,8 +665,6 @@ begin
   if not SaveStringToFile(Path, Raw, False) then
   begin
     Result := 'Could not write ' + Path;
-    { game.xml is as it was, so the record goes back to describing it: the earlier record (whose values
-      the uninstall may still restore), or none. }
     if HadOld then
       SaveRenderResolutionRecord(Old)
     else
@@ -869,20 +672,13 @@ begin
   end;
 end;
 
-{ Uninstall: undo the Render Resolution change, but only while it is still ours. Without
-  the Injector there is no window clamping (ADR-0014), so a headset-sized window would be left behind.
-  If game.xml's display width, height and fullscreen mode all still equal what the Installer wrote, the
-  recorded originals are written back; if the player changed any of them, game.xml is left alone. The
-  game.xml named in the record is used (the uninstaller does not get the /FS25VR_DOCUMENTS switch). The
-  game.xml backup is never touched. The record is deleted once handled. Failures are logged, never
-  shown: the rest of the uninstall must go on. }
 procedure RestoreRenderResolution;
 var
   R: TRenderResolutionRecord;
   Raw: AnsiString;
   CurW, CurH, CurMode: String;
 begin
-  if not LoadRenderResolutionRecord(R) then Exit;   { never set, nothing to undo }
+  if not LoadRenderResolutionRecord(R) then Exit;
 
   if not FileExists(R.GameXml) then
     Log('Render Resolution: ' + R.GameXml + ' is gone; nothing to restore.')
@@ -921,8 +717,6 @@ begin
   UpdateRenderControls;
 end;
 
-{ The optional "Render Resolution" page: unchecked, fields pre-filled from game.xml, disabled with a
-  message when game.xml is missing. A /FS25VR_RESOLUTION value pre-ticks and pre-fills it. }
 procedure InitializeRenderResolutionPage;
 var
   CurW, CurH, CurMode, Notice: String;
@@ -1003,7 +797,6 @@ begin
   UpdateRenderControls;
 end;
 
-{ Page validation: only checked values need to be valid. }
 function RenderPageNextOk(CurPageID: Integer): Boolean;
 var
   Ignored: Integer;
@@ -1017,9 +810,6 @@ begin
     end;
 end;
 
-{ Decides whether the Render Resolution is applied and with what values. Returns an error message,
-  or '' (RenderApply says whether to apply). Silent runs take /FS25VR_RESOLUTION; a missing game.xml
-  skips the step in a silent run and is never an error. }
 function PrepareRenderResolution: String;
 var
   Switch, CurW, CurH, CurMode: String;
@@ -1061,38 +851,25 @@ begin
   RenderHeight := H;
 end;
 
-{ ---- Windows' own crash dumps for the game (docs/adr/0039-...; the key and the record are described at the
-  top of this script) ---- }
-
 const
   CrashDumpsBaseKey = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps';
   CrashDumpsGameExe = 'FarmingSimulator2025Game.exe';
-  { What is written for the game's exe. DumpType 0 is a custom dump, whose contents CustomDumpFlags names (a
-    MINIDUMP_TYPE mask): thread information $1000, the memory the stacks point at $40 and the unloaded
-    modules $20, on top of the stacks and the module list every minidump holds. Those are the contents of
-    the Injector's own dump. No DumpFolder: Windows' default CrashDumps folder applies. }
   CrashDumpType = 0;
   CrashDumpFlags = $1060;
   CrashDumpCount = 3;
   CrashDumpsSkippedPerUserMessage =
     'Skipped the Windows crash dump setting: it needs an administrator install and this is a per-user run.';
-  { Leaves the setting alone: no key, no record (an existing key and record stay as they are). }
   NoCrashDumpsSwitch = 'FS25VR_NOCRASHDUMPS';
 
 function HasCommandLineSwitch(const Name: String): Boolean; forward;
 
 type
-  { What the Installer recorded about the key it made. ExeName is empty when there is no record. The Written
-    values are the numbers it wrote, as text. CreatedLocalDumpsKey is '1' when the LocalDumps key itself was
-    not there and the Installer's write created it (what Windows does with a LocalDumps key that has nothing
-    in it is not documented, so the uninstall takes it away again when it is empty: docs/adr/0039, item 8). }
   TCrashDumpRecord = record
     ExeName: String;
     WrittenDumpType, WrittenCustomDumpFlags, WrittenDumpCount: String;
     CreatedLocalDumpsKey: String;
   end;
 
-{ Where the key lives: the 64-bit view of HKEY_LOCAL_MACHINE, which is the one Windows Error Reporting reads. }
 function CrashDumpsRoot: Integer;
 begin
   Result := HKLM64;
@@ -1103,13 +880,11 @@ begin
   Result := CrashDumpsBaseKey + '\' + ExeName;
 end;
 
-{ A registry key name made from the exe name must not reach into a different key. }
 function IsPlainFileName(S: String): Boolean;
 begin
   Result := (S <> '') and (Pos('\', S) = 0) and (Pos('/', S) = 0);
 end;
 
-{ True when this run may write a machine-wide setting: only an administrative install can. }
 function CrashDumpsAllowed: Boolean;
 begin
   Result := IsAdminInstallMode;
@@ -1118,19 +893,13 @@ end;
 var
   CrashDumpsPage: TWizardPage;
   CrashDumpsCheck: TNewCheckBox;
-  { True when the wizard offers the checkbox: only in the administrative install mode, the only one that can
-    write the setting. A per-user run has no page and no checkbox. }
   CrashDumpsOffered: Boolean;
 
-{ The wizard's checkbox answers when it was offered and the player sees the wizard; a silent run is answered
-  by the command line alone. }
 function CrashDumpsAnsweredByWizard: Boolean;
 begin
   Result := CrashDumpsOffered and not WizardSilent;
 end;
 
-{ Whether the player wants the setting. In a wizard run it is the checkbox, which starts ticked and starts
-  unticked when /FS25VR_NOCRASHDUMPS is given; in a silent run it is yes unless that switch is given. }
 function WantCrashDumps: Boolean;
 begin
   if CrashDumpsAnsweredByWizard then
@@ -1152,9 +921,6 @@ const
     'again, and a setting you already had for the game is left alone. Untick the box and Setup changes nothing ' +
     'in Windows.';
 
-{ The optional "Crash Dumps" page: one checkbox, ticked, and what it does. /FS25VR_NOCRASHDUMPS unticks it, as
-  /FS25VR_RESOLUTION pre-ticks the Render Resolution page. Created only when this run can write the setting,
-  so a per-user run never sees it. }
 procedure InitializeCrashDumpsPage;
 var
   Explanation: TNewStaticText;
@@ -1184,9 +950,6 @@ begin
   Explanation.Caption := CrashDumpsExplanation;
 end;
 
-{ The exe file name the key is written for: the game's, unless the hidden test-only /FS25VR_GAMEEXE switch
-  replaces it (as /FS25VR_DOCUMENTS replaces the Documents folder), so the Installer test never touches the
-  key of the real game. }
 function GetCrashDumpExeName: String;
 begin
   Result := Trim(ExpandConstant('{param:FS25VR_GAMEEXE|}'));
@@ -1199,7 +962,6 @@ begin
   Result := ExpandConstant('{commonappdata}\FS25 VR\crash-dumps.ini');
 end;
 
-{ Usable from the uninstaller too. False when there is no record. }
 function LoadCrashDumpRecord(var R: TCrashDumpRecord): Boolean;
 var
   Lines: TArrayOfString;
@@ -1245,8 +1007,6 @@ begin
   Result := SaveStringsToUTF8File(GetCrashDumpRecordPath, Lines, False);
 end;
 
-{ True when the exe's key holds exactly what the record says the Installer wrote: the three DWORD values
-  and nothing else (no other value, no subkey). Any change by the player or another tool makes it theirs. }
 function CrashDumpKeyIsUnchanged(const R: TCrashDumpRecord): Boolean;
 var
   Key: String;
@@ -1263,7 +1023,6 @@ begin
   Result := True;
 end;
 
-{ True when the key is there and holds nothing: no value and no subkey. }
 function CrashDumpsKeyHoldsNothing(const Key: String): Boolean;
 var
   Names, SubKeys: TArrayOfString;
@@ -1273,9 +1032,6 @@ begin
             (GetArrayLength(Names) = 0) and (GetArrayLength(SubKeys) = 0);
 end;
 
-{ Turns on Windows' own crash dumps for the game. Called once the files are placed, in the administrative
-  install mode only. It never fails the install: whatever it cannot do is logged. The record goes first
-  and is deleted again if the key cannot be written, so a record never names a key that is not there. }
 procedure SetUpCrashDumps;
 var
   ExeName, Key: String;
@@ -1303,15 +1059,10 @@ begin
   end;
   Key := CrashDumpsKey(ExeName);
 
-  { The record an earlier run left for this exe, if there is one. }
   HaveOld := LoadCrashDumpRecord(Old);
   if HaveOld then
     HaveOld := SameText(Old.ExeName, ExeName);
 
-  { A key that is already there is left exactly as it is, and so is its record. It is ours when an earlier
-    run recorded it and it still holds what was written (an upgrade or a reinstall): it stays, with its
-    record. Otherwise it is the player's or another tool's, and a record of an earlier key of ours that
-    was changed since no longer describes anything of ours. }
   if RegKeyExists(CrashDumpsRoot, Key) then
   begin
     if HaveOld and CrashDumpKeyIsUnchanged(Old) then
@@ -1336,8 +1087,6 @@ begin
     R.CreatedLocalDumpsKey := '1'
   else if HaveOld and (Old.CreatedLocalDumpsKey = '1') and CrashDumpsKeyHoldsNothing(CrashDumpsBaseKey) then
   begin
-    { The game's key is gone, but LocalDumps is still the empty key an earlier run of this Installer created:
-      the new record carries that on, so the uninstall that follows takes LocalDumps away too. }
     R.CreatedLocalDumpsKey := '1';
     Log('Windows crash dump setting: HKLM\' + CrashDumpsBaseKey + ' is still the empty key an earlier install created; the record keeps that.');
   end
@@ -1362,16 +1111,12 @@ begin
   Log('Windows crash dump setting: created HKLM\' + Key + '.');
 end;
 
-{ Uninstall: remove the key, but only while it is still ours. It is when a record exists and the key still
-  holds exactly what the Installer wrote; otherwise it is the player's (or another tool's) and stays. The
-  record is deleted either way. The record names the exe (the uninstaller does not get the hidden
-  /FS25VR_GAMEEXE switch). Failures are logged, never shown: the rest of the uninstall must go on. }
 procedure RemoveCrashDumps;
 var
   R: TCrashDumpRecord;
   Key: String;
 begin
-  if not LoadCrashDumpRecord(R) then Exit;   { never set, nothing to undo }
+  if not LoadCrashDumpRecord(R) then Exit;
 
   Key := CrashDumpsKey(R.ExeName);
   if not IsPlainFileName(R.ExeName) then
@@ -1383,7 +1128,6 @@ begin
   else if RegDeleteKeyIncludingSubkeys(CrashDumpsRoot, Key) then
   begin
     Log('Windows crash dump setting: removed HKLM\' + Key + '.');
-    { The LocalDumps key this Installer's write created goes too, unless something else has gone into it. }
     if R.CreatedLocalDumpsKey = '1' then
       if RegDeleteKeyIfEmpty(CrashDumpsRoot, CrashDumpsBaseKey) then
         Log('Windows crash dump setting: removed HKLM\' + CrashDumpsBaseKey + ', which the install had created.')
@@ -1399,19 +1143,12 @@ end;
 
 const
   RenderResolutionFailedExitCode = 20;
-  { The files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted, and the new
-    Injector stays inactive while it is there. }
   EarlierInjectorLeftExitCode = 21;
 
 var
   RenderFailed: Boolean;
   EarlierInjectorLeft: Boolean;
 
-{ The Render Resolution is applied after the files are placed (PrepareToInstall has already checked
-  everything that can be checked), so a failure while placing files, such as a full disk, never leaves
-  game.xml edited for an install that was rolled back. A failure here comes too late to fail the install
-  (Abort does not stop Setup at ssPostInstall): the install is kept, the player is told, and Setup ends
-  with RenderResolutionFailedExitCode (GetCustomSetupExitCode) so scripts notice. }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Problem: String;
@@ -1419,7 +1156,6 @@ begin
   if CurStep = ssPostInstall then
   begin
     FilesPlaced := True;
-    { Only now that the new Injector is in place: a failed install keeps the earlier one working. }
     if not RemoveEarlierInjector(ExpandConstant('{app}')) then
     begin
       EarlierInjectorLeft := True;
@@ -1452,9 +1188,6 @@ begin
     Result := 0;
 end;
 
-{ A foreign version.dll was moved aside but the files were never placed (the install was cancelled, or
-  failed while placing files and was rolled back): no uninstaller is registered to put it back, so put
-  it back now. }
 procedure DeinitializeSetup;
 begin
   if (MovedInjectorGameDir <> '') and not FilesPlaced then
@@ -1477,13 +1210,6 @@ begin
   if Result then Result := RenderPageNextOk(CurPageID);
 end;
 
-{ Also covers silent installs, where there is no directory page. Everything that can refuse the install
-  runs first (game folder, game running, Render Resolution input and game.xml); only then is the player's
-  own version.dll moved aside, so a refusal never leaves it moved.
-  A refusal is returned, so a wizard run stops on the Preparing to Install page with the reason (Back
-  and Cancel stay available). A silent run must not wait on a message box, but for a returned reason
-  Inno shows one unless /SUPPRESSMSGBOXES is given; so a silent run logs the reason and raises Abort
-  instead, which ends Setup the same way Inno's own handling of a returned reason does after its box. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := GameFolderProblem(WizardDirValue);
@@ -1501,20 +1227,10 @@ begin
   end;
 end;
 
-{ Uninstall must not run over a live game either (it holds the Injector and rewrites game.xml on exit). }
 function InitializeUninstall: Boolean;
 begin
   Result := EnsureGameNotRunning(UninstallSilent);
 end;
-
-{ ---- Uninstalling through the Setup exe ----
-  Running Setup while FS25 VR is installed asks first (interactive runs only): upgrade or reinstall, uninstall,
-  or cancel. Uninstall starts the existing uninstaller with its normal windows and Setup ends. A silent run
-  never asks and goes on upgrading. /FS25VR_UNINSTALL runs the existing uninstaller unattended instead of
-  installing, waits until it has finished and ends with its exit code (1 when FS25 VR is not installed),
-  so scripts and CI can uninstall with the same exe they installed with. Both go through the uninstaller
-  Inno registered (the UninstallString of the Add/Remove Programs entry), so everything the uninstaller
-  does (the game-running check, the restores) happens exactly as when it is started from Windows Settings. }
 
 procedure ExitProcess(uExitCode: Cardinal);
   external 'ExitProcess@kernel32.dll stdcall';
@@ -1524,7 +1240,6 @@ const
   UninstallWaitMilliseconds = 60000;
   NotInstalledMessage = 'FS25 VR is not installed, so there is nothing to uninstall.';
 
-{ /Name or -Name on the command line (Inno's own param constant only finds the /Name=value form). }
 function HasCommandLineSwitch(const Name: String): Boolean;
 var
   I: Integer;
@@ -1535,8 +1250,6 @@ begin
       Result := True;
 end;
 
-{ True when Setup must never show a question. WizardSilent is not relied on alone because this runs in
-  InitializeSetup, before the wizard exists. }
 function IsUnattendedRun: Boolean;
 begin
   Result := WizardSilent or HasCommandLineSwitch('SILENT') or HasCommandLineSwitch('VERYSILENT');
@@ -1548,9 +1261,6 @@ begin
   Result := RegQueryStringValue(RootKey, UninstallKey, 'UninstallString', Value) and (Trim(Value) <> '');
 end;
 
-{ The uninstaller of an existing FS25 VR install, from Inno's Add/Remove Programs entry. Looks in the
-  machine and the current user hive, in the 64-bit and the 32-bit view of each. False (with a log line)
-  when there is no entry or the uninstaller it names is gone. }
 function FindExistingUninstaller(var Exe: String): Boolean;
 var
   Value: String;
@@ -1570,9 +1280,6 @@ begin
     Log('The uninstaller registered for FS25 VR is missing: ' + Exe);
 end;
 
-{ Runs the uninstaller, waits for it and returns its exit code (1 if it could not be started). Inno's
-  uninstaller hands the work to a temporary copy and exits when that copy removes the original, last of
-  all; so after a success wait until the original is really gone before reporting it. }
 function RunExistingUninstaller(const Exe, Params: String; ShowCmd: Integer): Integer;
 var
   Code, Waited: Integer;
@@ -1599,8 +1306,6 @@ begin
   end;
 end;
 
-{ /FS25VR_UNINSTALL: very silent (plain /SILENT when Setup itself was given /SILENT, which only adds a
-  progress window), never asking, never restarting. Returns the exit code Setup ends with. }
 function UninstallThroughSwitch: Integer;
 var
   Exe, Params: String;
@@ -1618,14 +1323,10 @@ begin
   Result := RunExistingUninstaller(Exe, Params + ' /SUPPRESSMSGBOXES /NORESTART', SW_HIDE);
 end;
 
-{ IDYES = upgrade or reinstall, IDNO = uninstall, IDCANCEL = cancel (also the window's close button).
-  Only called for interactive runs: /SUPPRESSMSGBOXES does nothing without /SILENT or /VERYSILENT. }
 function AskUpgradeOrUninstall: Integer;
 var
   Labels: TArrayOfString;
 begin
-  { Each label is the button text, a line break, then the note under it. (Built here because a line
-    that starts with "[" is read as a section header.) }
   SetArrayLength(Labels, 2);
   Labels[0] := 'Upgrade or reinstall' + #13#10 + 'Install this version over the existing one.';
   Labels[1] := 'Uninstall' + #13#10 + 'Remove FS25 VR from this computer.';
@@ -1642,8 +1343,6 @@ begin
   if HasCommandLineSwitch(UninstallSwitch) then
   begin
     ExitCode := UninstallThroughSwitch;
-    { Setup has no other way to end with the uninstaller's exit code. ExitProcess skips Setup's own
-      cleanup, so remove its temporary folder first. }
     DelTree(ExpandConstant('{tmp}'), True, True, True);
     ExitProcess(ExitCode);
     Result := False;
@@ -1654,7 +1353,6 @@ begin
   case AskUpgradeOrUninstall of
     IDNO:
       begin
-        { The player sees the uninstaller's own windows; Setup just ends normally afterwards. }
         RunExistingUninstaller(Exe, '', SW_SHOWNORMAL);
         Result := False;
       end;

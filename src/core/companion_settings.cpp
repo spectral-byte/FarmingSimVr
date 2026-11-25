@@ -11,12 +11,8 @@ namespace fs25vr {
 
 namespace {
 
-// FOLDERID_Documents, spelled out so the Injector needs neither knownfolders.h's definition (uuid.lib) nor shell32 at
-// load time.
 constexpr GUID kDocumentsFolderId = { 0xFDD39AD0, 0x238F, 0x46AF, { 0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7 } };
 
-// SHGetKnownFolderPath and CoTaskMemFree are looked up when they are needed, so the Injector, which the game loads early
-// as its version.dll, keeps shell32 and ole32 out of its import table. Both are loaded in the game process anyway.
 std::filesystem::path KnownDocumentsFolder() {
     using GetKnownFolderPathFn = HRESULT(WINAPI*)(const GUID&, DWORD, HANDLE, PWSTR*);
     using TaskMemFreeFn = void(WINAPI*)(LPVOID);
@@ -39,7 +35,7 @@ std::filesystem::path KnownDocumentsFolder() {
     return folder;
 }
 
-} // namespace
+}
 
 std::filesystem::path DefaultCompanionSettingsPath() {
     const std::filesystem::path documents = KnownDocumentsFolder();
@@ -50,7 +46,6 @@ std::filesystem::path DefaultCompanionSettingsPath() {
 std::optional<float> ReadCompanionSettingFloat(const std::filesystem::path& file, std::string_view name) {
     std::ifstream in(file, std::ios::binary);
     if (!in) return std::nullopt;
-    // The file holds a few dozen settings; anything this large is not one the Companion Mod wrote.
     constexpr std::streamsize kMaxBytes = 1 << 20;
     std::string text(static_cast<size_t>(kMaxBytes), '\0');
     in.read(text.data(), kMaxBytes);
@@ -76,4 +71,4 @@ std::optional<float> ReadCompanionSettingFloat(const std::filesystem::path& file
     return number;
 }
 
-} // namespace fs25vr
+}

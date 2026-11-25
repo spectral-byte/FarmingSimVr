@@ -1,11 +1,3 @@
-# Helpers for telling whether a PDB belongs to a DLL: the linker stamps both with the same GUID and age. The DLL
-# holds them in the CodeView record (RSDS) of its debug directory, the PDB in the PDB info stream (stream 1) of its
-# MSF container. Dot-source this file; it needs nothing but .NET. Used by package_release.ps1 and
-# check_release_symbols.ps1, so a release cannot carry symbols that do not open the Injector it ships.
-#
-# Only the MSF 7.00 container that MSVC's linker writes is understood. Any other file is an error that says so,
-# never a pass.
-
 function Read-FileBytes([IO.FileStream]$stream, [long]$offset, [int]$count) {
     $buffer = New-Object byte[] $count
     $null = $stream.Seek($offset, [IO.SeekOrigin]::Begin)
@@ -68,7 +60,6 @@ function Get-DllPdbIdentity([string]$dllPath) {
     } finally { $stream.Dispose() }
 }
 
-# The GUID (16 bytes, hex) and the age in the PDB's PDB info stream.
 function Get-PdbIdentity([string]$pdbPath) {
     $stream = [IO.File]::Open($pdbPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
@@ -82,8 +73,6 @@ function Get-PdbIdentity([string]$pdbPath) {
         $blockMapAddress = [BitConverter]::ToUInt32($super, 52)
         if ($blockSize -lt 512 -or ($blockSize -band ($blockSize - 1)) -ne 0) { throw "$pdbPath has an invalid block size $blockSize." }
 
-        # The directory lists, for every stream, its size and the blocks it lives in. The block map lists the
-        # directory's own blocks.
         $directoryBlockCount = [int][Math]::Ceiling($directoryBytes / [double]$blockSize)
         $blockMap = Read-FileBytes $stream ([long]$blockMapAddress * $blockSize) (4 * $directoryBlockCount)
         $directory = New-Object byte[] ($directoryBlockCount * $blockSize)
@@ -94,7 +83,6 @@ function Get-PdbIdentity([string]$pdbPath) {
         $streamCount = [BitConverter]::ToUInt32($directory, 0)
         if ($streamCount -lt 2) { throw "$pdbPath has no PDB info stream." }
         $sizes = for ($i = 0; $i -lt 2; $i++) { [BitConverter]::ToUInt32($directory, 4 + 4 * $i) }
-        # Stream 0 (the old directory) is skipped to reach the block list of stream 1; an empty one is 0xFFFFFFFF.
         $skipBlocks = if ($sizes[0] -eq [uint32]::MaxValue) { 0 } else { [int][Math]::Ceiling($sizes[0] / [double]$blockSize) }
         $firstBlockOfStream1 = [BitConverter]::ToUInt32($directory, 4 + 4 * $streamCount + 4 * $skipBlocks)
         if ($sizes[1] -lt 28) { throw "$pdbPath has a PDB info stream of only $($sizes[1]) bytes." }
@@ -106,7 +94,6 @@ function Get-PdbIdentity([string]$pdbPath) {
     } finally { $stream.Dispose() }
 }
 
-# Stops with an error that says how they differ unless the PDB is the one the DLL was linked with.
 function Assert-PdbBelongsToDll([string]$pdbPath, [string]$dllPath) {
     $wanted = Get-DllPdbIdentity $dllPath
     $found = Get-PdbIdentity $pdbPath

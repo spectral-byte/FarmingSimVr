@@ -1,12 +1,3 @@
-// Hand Tools, the spray can's feedback in the Tool Hand (ADR-0030), seen from outside: the real Companion Mod runs against the real
-// VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot, the
-// game's HandToolSprayCan, trees to mark, the mission's blinking warning). With the screen-centre icons not drawn, the can tells the
-// player three things another way, and a test asserts only what the player would feel or read: which haptic pulses reached the fake
-// Motion Controllers (a tick when the nozzle comes onto a tree, a light steady buzz while the can sprays) and which blinking
-// messages the game was asked to show (the marker type, when the can is taken in hand and each time it is changed). The marker types\n// are the game's (CROSS, ARROW, CIRCLE: a name and a title, an l10n key) and the texts those of a stub g_i18n.
-// Prior art: test_hand_tools_spray_can.cpp (the can in the hand, its reach and its trigger), test_hand_tools_haptics.cpp (pulses on
-// the fake Motion Controllers).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <algorithm>
@@ -16,11 +7,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers: the can's ray as the game's targeter takes it, and the blinking messages the Companion Mod asked for.
-//   canRay()               where the can sprays from and along (its visual node)
-//   plantTrunk(distance)   a trunk the nozzle meets `distance` metres along the ray, as _G.trunk
-//   messages()             the text of every blinking warning the game was asked for, in order, one per line
-//   messagesNaming(text)   how many of them contain `text`
 constexpr const char* kFeedbackHelpers = R"luau(
     function _G.canRay() return { StubHandTool.canRay(can) } end
     function _G.plantTrunk(distance)
@@ -41,21 +27,18 @@ constexpr const char* kFeedbackHelpers = R"luau(
     end
 )luau";
 
-// The hand held so that the can points level and well away from the way the head looks (down -Z).
 constexpr float kAimPitch = 1.4f;
 constexpr float kAimYaw = 1.2f;
 
 // Pulses stronger than this are not "light" (the lance's pressure is 0.35, the chainsaw's cut 0.6).
 constexpr float kLight = 0.5f;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsSprayCanFeedbackTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string stubs;
 
-    // The mod started with a player on foot who has the game's spray can class, the Virtual Gamepad on and the game clock set.
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         stubs = StubChunk("xml_settings") + SprayCanStubs();
@@ -73,7 +56,6 @@ protected:
         headset.SetHandGripPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw * side));
     }
 
-    // The can taken in hand and the Tool Hand `hand` picked up: the common start of the tests below.
     void StartWithTheCanIn(uint32_t hand, const char* canLua = "_G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can)") {
         ASSERT_NO_FATAL_FAILURE(Start());
         if (hand == kLeft) ASSERT_EQ(RunLuauChunk(L, "runCommand('vrToolHand', 'left')", "=toolHandLeft"), 0);
@@ -87,7 +69,6 @@ protected:
 
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
 
-    // The pulses so far to a hand, the strongest and the weakest of them. ForgetPulses starts counting afresh.
     size_t PulsesTo(int hand) const {
         size_t count = 0;
         for (const auto& pulse : headset.HapticPulses()) {
@@ -104,7 +85,6 @@ protected:
     }
     void ForgetPulses() { headset.runtime->controllers.hapticPulses.clear(); }
 
-    // The longest run of frames over the next `frames` frames in which the hand was not pulsed: a buzz that goes on has short ones.
     int LongestSilenceTo(int hand, int frames) {
         int longest = 0, current = 0;
         for (int i = 0; i < frames; ++i) {
@@ -124,9 +104,7 @@ protected:
     void ChangeTheMarkerType() { ASSERT_EQ(RunLuauChunk(L, "can:changeTreeMarkerType(nil, 1)", "=changeMarkerType"), 0); }
 };
 
-}  // namespace
-
-// ---- The tick: the nozzle comes onto a tree --------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheToolHandTicksOnceWhenTheNozzleComesOntoATreeNotWhileItStaysOnItAndAgainOnAnotherAndOnComingBack) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
@@ -171,7 +149,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, NoTickWhileTheToolHandIsUntr
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
     ForgetPulses();
 
-    // The head's ray is the game's again: a tree in front of the face, 1 m along it, is found by the game's targeter.
     headset.SetHandTracked(kRight, false);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}; StubHandTool.treeAt({ StubHandTool.originalGetLookRay(foot.player) }, 1.0, 0.15)", "=headTrunk"), 0);
@@ -190,15 +167,13 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, NoTickWhileTheToolHandIsUntr
 
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
     FRAMES(2);
-    AdvanceGameTime(3100);  // set down
+    AdvanceGameTime(3100);
     FRAMES(2);
     ForgetPulses();
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}; StubHandTool.treeAt({ StubHandTool.originalGetLookRay(foot.player) }, 1.1, 0.15)", "=setDownTrunk"), 0);
     FRAMES(5);
     EXPECT_EQ(PulsesTo(kRight), 0u) << "set down: the same";
 }
-
-// ---- The marker type message ----------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedInABlinkingMessageWhenTheCanIsTakenInHandAndEachTimeItIsChangedAndNotWhenNothingChanged) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
@@ -212,7 +187,7 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedInABlink
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
     EXPECT_EQ(MessagesNaming("Circle"), 1);
-    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());  // round to the first again
+    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
     EXPECT_EQ(MessagesNaming("Cross"), 2) << "round to the first: named again";
     FRAMES(30);
@@ -227,8 +202,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, AMarkerTypeWithoutANameOrATi
     EXPECT_EQ(MessagesNaming("Marker type: 2"), 1) << Messages();
 }
 
-// The title is an l10n key in the game's data ("$l10n_treeMarker_cross"): the player reads the game's text for it, not the key,
-// and the sentence is the Companion Mod's own text (modDesc.xml l10n), so that a translation reaches it.
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMessageIsTheCompanionModsTextAndTheTypeIsNamedByTheGamesTextForItsTitle) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
     EXPECT_EQ(MessagesNaming("Marker type: Cross"), 1) << "the title's text, not \"$l10n_treeMarker_cross\" or \"CROSS\", " << Messages();
@@ -242,19 +215,16 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMessageIsTheCompanionMods
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, ATitleThatIsAlreadyTextOrWithoutAnL10nTextIsStillNamedAndNeverAsAKey) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
-    // already the text (the game resolved it): shown as it is
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[2].title = 'Pfeil'", "=resolvedTitle"), 0);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
     EXPECT_EQ(MessagesNaming("Marker type: Pfeil"), 1) << Messages();
 
-    // a key with no text, a name that has one under the game's naming (treeMarker_<name>): that text
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[3].title = '$l10n_treeMarker_unknown'", "=unknownTitle"), 0);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
     EXPECT_EQ(MessagesNaming("Marker type: Circle"), 1) << Messages();
 
-    // a key with no text and a name with none: the name, never the key
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[1].title = '$l10n_treeMarker_unknown'; StubHandTool.markerTypes[1].name = 'SPIRAL'", "=unknownEverything"), 0);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
@@ -274,14 +244,13 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedAgainWhe
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
     ASSERT_EQ(MessagesNaming("Cross"), 1);
 
-    AdvanceGameTime(3100);  // set down
+    AdvanceGameTime(3100);
     FRAMES(2);
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(2);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
     EXPECT_EQ(MessagesNaming("Cross"), 2) << "taken into the tracked Tool Hand again: named again";
 
-    // A type changed while the can is out of the Tool Hand is named when it comes back in, once.
     headset.SetHandTracked(kRight, false);
     FRAMES(2);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
@@ -314,8 +283,6 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, NoMarkerTypeMessageWithHandT
     EXPECT_EQ(MessagesNaming("Marker type"), 0) << "another mod's tool names no marker type, " << Messages();
 }
 
-// ---- The buzz: the can sprays ---------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheToolHandBuzzesLightlyAndSteadilyWhileTheCanSpraysAndIsQuietBeforeAndAfter) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
     ASSERT_EQ(RunLuauChunk(L, "plantTrunk(0.4)", "=trunk"), 0);
@@ -333,7 +300,7 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheToolHandBuzzesLightlyAndS
     EXPECT_LE(StrongestTo(kRight), kLight) << "and a light one";
 
     headset.SetHandInputs(kRight, Trigger(0.0f));
-    FRAMES(60);  // the spray ends by itself
+    FRAMES(60);
     ASSERT_EQ(EvalLua(L, "tostring(can.spec_sprayCan.isSpraying)"), "false");
     ForgetPulses();
     FRAMES(20);

@@ -19,3 +19,5 @@ Accepted, amended: Oblique Frustum removed; symmetric FOV sized to cover the wid
 - Symmetrical field of view approximation with post-process shader distortion (rejected: causes geometric distortion and perspective shear during head motion).
 - Tan-angle offset extraction from OpenXR and native `setProjectionOffset` via VRBridge, applied per eye (originally selected as the mechanism; withdrawn when the Oblique Frustum was removed, because the submitted FOV never described the rendered frustum).
 - Aspect-matched symmetric FOV submitted to OpenXR with a centered engine projection (selected: submitted FOV and rendered frustum agree exactly). Originally the vertical FOV was the headset's vertical span, which left the outer and lower sides of asymmetric lenses short; it is now the widest side of the headset FOV.
+
+More decisions about this area, from the code comments: [ADR-0043](0043-stereo-view-decisions.md).

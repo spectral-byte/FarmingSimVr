@@ -1,5 +1,3 @@
-// The fixture the VRBridge collector and allocation tests (spec #245) share: a Luau state with VRBridge injected, closed
-// again after the test, and the way those tests reach a function in VRBridge's table.
 #pragma once
 
 #include <gtest/gtest.h>
@@ -8,8 +6,6 @@
 
 namespace fs25vr_test {
 
-// The most numbers any VRBridge function takes (reportCameraRecord), so a call with this many reaches every function's
-// work and not just its argument check.
 constexpr int kNumberArgs = 13;
 
 class VrBridgeInjectedTest : public ::testing::Test {
@@ -28,7 +24,6 @@ protected:
         if (L) lua_close(L);
     }
 
-    // Pushes VRBridge.<name>.
     void PushBridgeFunction(const char* name) {
         lua_getglobal(L, "VRBridge");
         lua_getfield(L, -1, name);
@@ -37,4 +32,4 @@ protected:
     }
 };
 
-} // namespace fs25vr_test
+}

@@ -1,11 +1,5 @@
 #pragma once
 
-// Shared fixture for tests that run the shipped Companion Mod (mods/FS25_VRCompanion/src) inside a
-// Luau state: log capture, chunk runner, mod loader, camera mock globals, the CompanionModTest
-// fixture and the time/frame helpers. Per-feature test files include this header and add their own
-// TEST_F(CompanionModTest, ...) cases. Everything is inline so any number of translation units can
-// include it.
-
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
 #include "fake_openxr_runtime.h"
@@ -17,9 +11,6 @@
 #include <vector>
 inline std::vector<std::string> s_capturedLogs;
 
-// A hook the core caught and logged (IsHookErrorLine) fails the test, unless the test called ExpectHookErrors() first: the core
-// protects every subsystem hook, so the log is the only place a hook that raises shows up. Checked as the line is printed, so a
-// test that clears s_capturedLogs midway cannot hide one.
 inline bool s_expectHookErrors = false;
 inline void ExpectHookErrors() { s_expectHookErrors = true; }
 
@@ -53,7 +44,6 @@ inline std::string ReadFile(const std::string& path) {
     return buffer.str();
 }
 
-// Loads the shipped module files in modDesc order (exactly as the engine does).
 inline int LoadCompanionModChecked(lua_State* L) {
     std::string err;
     int status = LoadCompanionMod(L, &err);
@@ -77,8 +67,6 @@ inline int RunLuauChunk(lua_State* L, const std::string& code, const char* chunk
     return status;
 }
 
-// Evaluates a Lua expression and returns tostring() of its value, e.g. EvalLua(L, "VRCompanion:getPointerHand()")
-// is "1" or "nil". Lets tests read mod state through its public surface without writing a chunk per check.
 inline std::string EvalLua(lua_State* L, const std::string& expression) {
     const std::string chunk = "_G.__evalResult = tostring(" + expression + ")";
     if (RunLuauChunk(L, chunk, "=eval") != 0) {
@@ -215,7 +203,6 @@ protected:
         L = luaL_newstate();
         luaL_openlibs(L);
 
-        // Override print with mock to capture logs
         lua_pushcclosure(L, &MockPrint, "print", 0);
         lua_setglobal(L, "print");
     }
@@ -227,19 +214,10 @@ protected:
         }
     }
 
-    // Puts the HUD at the depth its layouts are set for (HUD_LAYOUT_DEPTH, 1.8 m): drawn at layout size, with the 0.012
-    // disparity of the default IPD. Tests of HUD placement and disparity are written for it, not for the HUD Depth a new
-    // install starts at.
     void PlaceHudAtLayoutDepth() {
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH", "=placeHudAtLayoutDepth"), 0);
     }
 
-    // ---- Driving time and frames --------------------------------------------------------------
-    // The mod reads the game clock through VRCompanion:getCurrentTimeMs(), which is the global
-    // g_time (milliseconds) and falls back to the real clock when g_time is nil. g_time is not
-    // defined until a test calls SetGameTime/AdvanceGameTime, so tests that never touch it behave
-    // exactly as before. Tests that depend on time (the 3 s in-use window, debounces) set it and
-    // advance it by hand, so they never depend on wall-clock time.
     void SetGameTime(double ms) {
         gameTimeMs_ = ms;
         lua_pushnumber(L, ms);
@@ -263,7 +241,7 @@ protected:
             ADD_FAILURE() << "VRCompanion:update raised: " << (err ? err : "unknown error");
             lua_pop(L, 1);
         }
-        lua_pop(L, 1);  // VRCompanion
+        lua_pop(L, 1);
     }
     void RegisterTestSetFrameParity(fs25vr::VRBridge& bridge) {
         lua_getglobal(L, "VRBridge");
@@ -277,8 +255,6 @@ protected:
         }, "setFrameParity", 1);
         lua_setfield(L, -2, "setFrameParity");
 
-        // With an active OpenXR session a mode change is queued until the DXGI proxy latches it at a
-        // completed frame boundary. These tests have no proxy, so Luau latches it explicitly.
         lua_pushlightuserdata(L, &bridge);
         lua_pushcclosure(L, [](lua_State* state) -> int {
             auto* b = static_cast<fs25vr::VRBridge*>(lua_touserdata(state, lua_upvalueindex(1)));

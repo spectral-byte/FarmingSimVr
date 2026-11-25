@@ -16,30 +16,25 @@ namespace fs25vr {
 
 class OpenXrManager;
 
-inline constexpr UINT_PTR kMirrorWindowSubclassId = 0x56524653; // 'FSVR'
+inline constexpr UINT_PTR kMirrorWindowSubclassId = 0x56524653;
 
-// The game window's title while the Desktop Mirror Window is off: says so and names the command that restores it.
 inline constexpr const wchar_t* kDesktopMirrorOffTitle =
     L"FS25 VR - desktop mirror is off. Type vrDesktopMirror on in the console to restore it.";
 
 class MirrorWindowController {
 public:
-    // cursorPort is how the controller reaches the desktop's cursor and focus; null uses the real one.
     explicit MirrorWindowController(std::function<bool()> isVrActive = nullptr,
                                     std::shared_ptr<IDesktopCursorPort> cursorPort = nullptr);
     ~MirrorWindowController();
 
     IDesktopCursorPort& GetCursorPort() { return *m_cursorPort; }
 
-    // Active VR state predicate
     bool IsActive() const;
     void SetIsVrActiveCallback(std::function<bool()> callback) { m_isVrActive = std::move(callback); }
 
-    // Win32 Game HWND Lifecycle
     HWND GetGameHwnd() const { return m_gameHwnd; }
     void SetGameHwnd(HWND hWnd);
 
-    // Subclassing
     bool AttachWindowSubclass(HWND hWnd);
     bool DetachWindowSubclass();
     bool IsWindowSubclassed() const { return m_windowSubclassed; }
@@ -49,7 +44,6 @@ public:
     bool IsWindowClampDirty() const { return m_windowClampDirty; }
     void SetWindowClampDirty(bool dirty) { m_windowClampDirty = dirty; }
 
-    // Target render resolution decoupling
     uint32_t GetTargetRenderWidth() const { return m_targetRenderWidth; }
     uint32_t GetTargetRenderHeight() const { return m_targetRenderHeight; }
     void SetTargetRenderResolution(uint32_t width, uint32_t height) {
@@ -58,27 +52,19 @@ public:
     }
     void GetDecoupledTargetResolution(uint32_t& outWidth, uint32_t& outHeight, const OpenXrManager* openXrManager = nullptr) const;
 
-    // Monitor work area clamping calculations
     static RECT ComputeClampedMirrorWindowRect(const RECT& workArea, DWORD dwStyle, DWORD dwExStyle, bool hasMenu = false);
     static RECT ComputeClampedMirrorWindowRect(HWND hWnd);
     bool ApplyInitialWindowClamp(HWND hWnd);
     void EnforceClampedMirrorWindowDimensions(HWND hWnd);
 
-    // Coordinate transformations
     static bool ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY);
     bool ScaleVirtualCursorToPhysical(HWND hWnd, int screenX, int screenY, int& outPhysScreenX, int& outPhysScreenY) const;
     bool ConstrainVirtualClipRectToPhysical(HWND hWnd, const RECT* lpRect, RECT& outPhysClipRect) const;
 
-    // Whether the game window has focus: the foreground window is the game window or one of its children.
-    // The one answer wherever "the game window has focus" matters.
     bool IsGameWindowForeground() const;
 
-    // Menu cursor state update
     void UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager);
 
-    // Mouse Confinement: while the headset is in use and the game window has focus, the Desk Mouse is kept
-    // on the game picture (the window's client area in physical screen coordinates). The game's Present
-    // says once per frame whether it should hold, and if not why not (the reason is only logged).
     enum class MouseConfinementState {
         Holding,
         PassThroughMode,
@@ -88,12 +74,8 @@ public:
     };
     void UpdateMouseConfinement(MouseConfinementState state);
 
-    // The game's own ClipCursor call, as the hook receives it: remembers what the game asked for and puts
-    // it on the desktop, except that while Mouse Confinement holds the game's release becomes the picture.
     bool HandleGameClipCursor(const RECT* lpRect);
 
-    // Win32 Detours management. Detours are installed only while a live InjectorRuntime owns the
-    // controller, so the hooks can always find the controller that holds their originals.
     void SetOwnedByRuntime(bool owned) { m_ownedByRuntime = owned; }
     bool InstallDetours();
     void UninstallDetours();
@@ -102,17 +84,12 @@ public:
     bool IsDetourSetCursorPosInstalled() const { return m_detourSetCursorPos.IsInstalled(); }
     bool IsDetourClipCursorInstalled() const { return m_detourClipCursor.IsInstalled(); }
 
-    // Detour interceptors. The Win32 hooks act for the controller that installed them; the window
-    // subclass procedure acts for the controller recorded in its reference data.
     static LRESULT CALLBACK MirrorWindowSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     static BOOL WINAPI Intercept_GetClientRect(HWND hWnd, LPRECT lpRect);
     static BOOL WINAPI Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint);
     static BOOL WINAPI Intercept_SetCursorPos(int X, int Y);
     static BOOL WINAPI Intercept_ClipCursor(const RECT* lpRect);
 
-    // Game window title while the Desktop Mirror Window is off: keeps the window's current title and sets
-    // the off note; RestoreTitle puts the kept title back. Both are no-ops when there is nothing to do, and
-    // the controller restores the title itself in DetachAll.
     void ShowDesktopMirrorOffTitle();
     void RestoreTitle();
     bool IsDesktopMirrorOffTitleShown() const { return m_titleSwapped; }
@@ -122,19 +99,11 @@ public:
 private:
     bool GetPhysicalWindowMetrics(HWND hWnd, RECT& outPhysRect, POINT& outClientOrigin) const;
 
-    // The game picture: the game window's real client area in screen coordinates, whatever size the game
-    // is told (Resolution Decoupling). False when the window has no client area to hold the mouse to.
     bool GetGamePicture(RECT& outPicture) const;
-    // Mouse Confinement lets go: puts back what the game last asked for, but only while the clip on the
-    // desktop is still the picture it set itself.
     void StopHoldingMouse(const char* reason);
-    // What the game last asked ClipCursor for, moved to follow the window since; empty for a release.
     std::optional<RECT> GameClipOnScreen() const;
-    // Puts the picture on the desktop as the clip and remembers it as the one it set.
     bool SetPictureClip(const RECT& picture);
 
-    // The controller a Win32 hook acts for: the one in a live runtime that installed `detour`, else
-    // the current runtime's; null when no runtime is alive.
     static MirrorWindowController* ForHook(FunctionDetour MirrorWindowController::*detour);
 
     HWND m_gameHwnd = nullptr;
@@ -157,12 +126,6 @@ private:
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;
 
-    // Mouse Confinement. m_gameClip is what the game last asked ClipCursor for (empty: a release), in screen
-    // coordinates as of when it asked; m_gameClipOrigin is where the game picture's top left was then, so the
-    // clip can be put back where the window is now (GameClipOnScreen).
-    // m_holdingMouse is whether it holds now; m_setMousePicture is the picture it last put on the desktop as
-    // the clip (empty: it has set nothing that is still its to release).
-    // m_lastMouseRelease is the latest reason it was not holding, for the log line when it holds again.
     std::optional<RECT> m_gameClip;
     std::optional<POINT> m_gameClipOrigin;
     bool m_holdingMouse = false;
@@ -176,4 +139,4 @@ private:
     FunctionDetour m_detourClipCursor;
 };
 
-} // namespace fs25vr
+}

@@ -1,12 +1,3 @@
-// Animated Objects, the Pointer Ray working a door or gate on foot (ADR-0034, spec #180, ticket #181), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (the game's Animated Objects
-// and the engine's ray cast over the boxes of their parts in animated_object_test_support.h). The test enters and leaves the zone the way
-// the engine does (through the trigger callback), moves the fake Motion Controllers and pulls the trigger, and asserts what the game
-// would see: the end of the Pointer Ray that was drawn, and the runs of the toggle handler the prompt's own button runs. Never the mod's
-// own state. Prior art: test_object_grab_feedback.cpp (the ray drawn where the target is) and test_virtual_gamepad_cab_use.cpp (the
-// trigger and the Virtual Gamepad). The pad rules and the gates are in test_animated_objects_pointer.cpp, the game giving the mod the
-// wrong functions in test_animated_objects_wraps.cpp.
-
 #include "animated_object_test_support.h"
 #include <string>
 
@@ -15,9 +6,7 @@ namespace {
 using namespace hand_tools_test;
 using namespace animated_object_test;
 
-}  // namespace
-
-// ---- Selecting ---------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, InTheZoneThePointerRayOnAMovingPartSelectsItAndTheRayEndsWhereItHitsTheLeaf) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
@@ -63,8 +52,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ABarrierPlacedOnTheMapIsWorkedLikeABui
     EXPECT_EQ(Toggles("door"), 1);
 }
 
-// ---- Toggling ----------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadAnimatedObjectsTest, OnePullRunsTheToggleOnceASecondPullTurnsItBackAndAPullWhileItMovesTurnsItBack) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
@@ -89,8 +76,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, OnePullRunsTheToggleOnceASecondPullTur
     EXPECT_EQ(Toggles("door"), 3);
     EXPECT_EQ(EvalLua(L, "door.animation.direction"), "1") << "a pull while it moves turns it back";
 }
-
-// ---- The zone ------------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, OutsideItsZoneNothingIsSelectedAndAPullTogglesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
@@ -127,7 +112,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, AnotherNodeInTheZoneAndAnObjectDeleted
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, InTheZonesOfTwoTheOneTheRayIsOnIsTheOneToggledWhicheverIsNearer) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
-    // A nearer door to the side of the ray (world x 0.1 to 0.7, 0.65 m ahead of the fingertip), in a zone the player is in too.
     ASSERT_EQ(RunLuauChunk(L, "_G.nearDoor = StubAnimatedObject.door({ name = 'nearDoor', x = 0.4, y = -0.2, z = 1.0, hx = 0.3 })", "=nearDoor"), 0);
     EnterZone("door");
     EnterZone("nearDoor");
@@ -161,8 +145,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorBeyondTheRaysLengthIsNotSelected)
     EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 3.20") << "within the length it is the door the ray is on";
 }
 
-// ---- What can be worked ------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadAnimatedObjectsTest, AnObjectWhoseCanBeTriggeredCheckAnswersFalseIsNotSelectedUntilTheCheckAnswersTrue) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     ASSERT_EQ(RunLuauChunk(L, "door.canBeTriggered = false", "=shut"), 0);
@@ -192,8 +174,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, TheCheckIsAskedOfTheObjectItselfSoAnOw
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, AnObjectMovedByHoldingAButtonOrWithNoActionIsNeverSelected) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor("ok", false));
-    // Side by side along the world x axis, 2 m ahead, all in the player's zone: a door the button toggles (the control), one moved while a
-    // second button is held, one moved while the same button is held, and one with no action.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.control = StubAnimatedObject.door({ name = 'control', x = -1.2, y = -0.2, z = 2.0, hx = 0.3 })
         _G.negative = StubAnimatedObject.door({ name = 'negative', x = -0.4, y = -0.2, z = 2.0, hx = 0.3, negAction = 'ACTIVATE_HANDTOOL_2' })
@@ -227,8 +207,6 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, TheRayCastLeavesOutTheZonesTriggerShap
         << "the zone is made of trigger shapes and the player's own capsule is around the head";
     EXPECT_EQ(EvalLua(L, "string.format('%.3f', animatedCasts()[1].dz)"), "1.000") << "along the finger";
 }
-
-// ---- The game's own prompt ---------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, TheGamesPromptAndItsBoundButtonKeepWorkingAndAPullNeedsNeitherToBeShown) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());

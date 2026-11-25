@@ -13,9 +13,7 @@ using PFN_CreateDXGIFactory2 = HRESULT(WINAPI*)(UINT Flags, REFIID riid, void** 
 
 // The full path of the system's dxgi.dll (in the system directory), or empty if the system directory cannot be read.
 const std::wstring& SystemDxgiPath();
-// True when `module` is the system's dxgi.dll, not a dxgi.dll loaded from elsewhere (such as ReShade's in the game folder).
 bool IsSystemDxgiModule(HMODULE module);
-// True when `address` lies inside the system's dxgi.dll.
 bool IsInSystemDxgi(const void* address);
 
 class ISystemDxgi {
@@ -30,8 +28,6 @@ public:
     virtual PFN_CreateDXGIFactory2 GetCreateDXGIFactory2() = 0;
 };
 
-// The factory exports of the system's dxgi.dll. In the game they are hooked (DxgiExportHooks), and a call the proxy
-// makes through them while it handles a hooked call goes straight to the system.
 class SystemDxgi : public ISystemDxgi {
 public:
     SystemDxgi();
@@ -51,4 +47,4 @@ private:
     PFN_CreateDXGIFactory2 m_pfnCreateDXGIFactory2 = nullptr;
 };
 
-} // namespace fs25vr
+}

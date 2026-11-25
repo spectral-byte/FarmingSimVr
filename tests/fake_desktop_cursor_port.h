@@ -6,14 +6,8 @@
 
 namespace fs25vr {
 
-// A stand-in for the desktop: records the cursor clip and the cursor position the Mirror Window
-// Controller sets, and lets a test choose the foreground window and whether the cursor is showing.
-// A test that drives the Injector's cursor handling uses this, never the real user32: a test calling the
-// real ClipCursor would trap the developer's own mouse, and a test window is not reliably the
-// foreground window.
 class FakeDesktopCursorPort : public IDesktopCursorPort {
 public:
-    // What the test controls.
     HWND foreground = nullptr;
     bool cursorShowing = true;
     POINT cursor{ 0, 0 };
@@ -61,4 +55,4 @@ public:
     }
 };
 
-} // namespace fs25vr
+}

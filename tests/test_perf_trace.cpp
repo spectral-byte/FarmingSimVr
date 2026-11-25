@@ -20,7 +20,6 @@ namespace {
 
 constexpr int64_t kMs = 1000000;
 
-// A trace on a clock the test moves by hand, logging into a list.
 class PerfTraceTest : public ::testing::Test {
 protected:
     PerfTrace trace;
@@ -32,7 +31,6 @@ protected:
         trace.SetSink([this](const std::string& line) { lines.push_back(line); });
     }
 
-    // One engine frame every `frameMs`, for `frames` frames.
     void Frames(int frames, int64_t frameMs, bool stereo = true, bool dualPass = true) {
         for (int i = 0; i < frames; ++i) {
             nowNs += frameMs * kMs;
@@ -69,7 +67,7 @@ TEST(PerfTraceMathTest, TheCounterFrequencyIsTheSystemsAndIsQueriedOnce) {
 }
 
 TEST(PerfTraceMathTest, GpuTimestampsArePlacedOnTheCpuClockThroughTheCalibration) {
-    const uint64_t frequency = 1000000;  // 1 tick = 1 us
+    const uint64_t frequency = 1000000;
     EXPECT_EQ(fs25vr::GpuTicksToNanoseconds(2500, frequency), 2500000);
     EXPECT_EQ(fs25vr::GpuTicksToNanoseconds(10, 0), 0);
     // Calibrated at GPU tick 1000 = CPU 50 ms
@@ -135,15 +133,11 @@ TEST_F(PerfTraceTest, LogsOneLinePerSecondAndASummaryThenEndsByItself) {
     EXPECT_NE(summary.find("100.0 engine frames/s"), std::string::npos) << summary;
     EXPECT_EQ(lines.back(), summary);
 
-    // Off again: later frames add nothing
     const size_t count = lines.size();
     Frames(200, 10);
     EXPECT_EQ(lines.size(), count);
 }
 
-// A sink that waits for another thread's AddSample, as the motion vector pass's render thread would
-// while a line is being written. If the lock were still held while writing, that AddSample could not
-// finish until the sink returned, so the sink would time out waiting for it.
 TEST_F(PerfTraceTest, WritesToTheSinkOutsideItsLock) {
     int blocked = 0;
     int calls = 0;
@@ -158,11 +152,11 @@ TEST_F(PerfTraceTest, WritesToTheSinkOutsideItsLock) {
             *done = true;
         });
         for (int i = 0; i < 200 && !*done; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        if (!*done) ++blocked;  // returns, which lets the held lock go and the thread end
+        if (!*done) ++blocked;
     });
 
     trace.Start(2);
-    Frames(300, 7);  // two per-second lines, then the summary
+    Frames(300, 7);
     for (auto& t : others) t.join();
 
     EXPECT_FALSE(trace.IsActive());
@@ -182,10 +176,10 @@ TEST_F(PerfTraceTest, TheLastSecondIsNumberedAfterThePreviousOneWhenTheTraceEnds
 
 TEST_F(PerfTraceTest, NamesThePresentationTheFramesUsed) {
     trace.Start(10);
-    Frames(50, 10, /*stereo=*/true, /*dualPass=*/false);
-    Frames(50, 10, /*stereo=*/true, /*dualPass=*/false);
+    Frames(50, 10, true, false);
+    Frames(50, 10, true, false);
     EXPECT_NE(LineStartingWith("[PerfTrace] second 1").find("(AFR)"), std::string::npos);
-    Frames(100, 10, /*stereo=*/false, /*dualPass=*/false);
+    Frames(100, 10, false, false);
     EXPECT_NE(LineStartingWith("[PerfTrace] second 2").find("(no stereo frames: menu or 2D view)"), std::string::npos);
     trace.Stop();
     EXPECT_NE(LineStartingWith("[PerfTrace] Summary").find("(AFR)"), std::string::npos);
@@ -209,7 +203,7 @@ TEST_F(PerfTraceTest, CompanionModSectionsAddTheTimeFromBeginToEnd) {
     trace.Begin(PerfSection::LuaModUpdate);
     nowNs += 2 * kMs;
     trace.End(PerfSection::LuaModUpdate);
-    trace.End(PerfSection::LuaModUpdate);  // no Begin: nothing
+    trace.End(PerfSection::LuaModUpdate);
     trace.End(PerfSection::LuaModDraw);
     trace.Stop();
     const std::string summary = LineStartingWith("[PerfTrace] Summary");
@@ -230,14 +224,11 @@ TEST_F(PerfTraceTest, StartClampsTheLengthAndRestartsAFreshTrace) {
 }
 
 TEST_F(PerfTraceTest, NegativeDurationsCountAsZero) {
-    // The GPU queue lag can come out a little negative from calibration jitter
     trace.Start(10);
     trace.AddSample(PerfSection::GpuQueueLag, -kMs);
     trace.Stop();
     EXPECT_NE(LineStartingWith("[PerfTrace] Summary").find("| GPU queue lag 0.00/0.00/0.00 ms"), std::string::npos);
 }
-
-// ---- VRBridge -------------------------------------------------------------------------------------
 
 class PerfTraceBridgeTest : public ::testing::Test {
 protected:
@@ -278,7 +269,7 @@ TEST_F(PerfTraceBridgeTest, CompanionModStartsTimesAndStopsATraceThroughVRBridge
     EXPECT_NE(lines.back().find("for 3 s"), std::string::npos);
     Run("assert(VRBridge.isPerfTracing() == true)");
     Run("VRBridge.perfTraceBegin('modCamera'); VRBridge.perfTraceEnd('modCamera')");
-    Run("VRBridge.perfTraceBegin('frame'); VRBridge.perfTraceEnd('frame')");  // not a Companion Mod section
+    Run("VRBridge.perfTraceBegin('frame'); VRBridge.perfTraceEnd('frame')");
     Run("VRBridge.stopPerfTrace()");
     EXPECT_FALSE(PerfTrace::Instance().IsActive());
     EXPECT_NE(lines.back().find("| mod camera 1.00/1.00/1.00 ms"), std::string::npos) << lines.back();
@@ -290,4 +281,4 @@ TEST_F(PerfTraceBridgeTest, StartWithoutALengthTracesTheDefaultSeconds) {
     EXPECT_NE(lines.back().find("for 10 s"), std::string::npos) << lines.back();
 }
 
-} // namespace
+}

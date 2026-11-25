@@ -25,3 +25,5 @@ Accepted. Verified in the headset: the view keeps pitching when looking a quarte
 - Head rotation no longer depends on the engine's Euler convention.
 - With no `setQuaternion`, the mod falls back to `setRotation` with R = Ry * Rx * Rz angles. With no `getWorldQuaternion`, the head turns on the view's yaw alone. The engine has both, so only the test mocks use the fallbacks.
 - `updateMenuBackgroundCamera` is unchanged: it still adds the head's Euler angles to the angles it reads back from the camera behind a menu, so it can meet the same singularity there.
+
+More decisions about this area, from the code comments: [ADR-0043](0043-stereo-view-decisions.md).

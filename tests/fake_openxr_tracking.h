@@ -7,10 +7,6 @@
 
 namespace fs25vr {
 
-// Head and eye tracking model for fake OpenXR dispatches. Tests drive the head pose and the
-// per-eye FOVs through SetHeadPose()/SetEyeFov(); fakes forward CreateReferenceSpace(),
-// DestroySpace(), LocateSpace() and LocateViews() here so the OpenXrManager observes them
-// exactly as it would from a runtime, including Recenter() re-basing the local space.
 class FakeOpenXrTracking {
 public:
     // Raw location of the view space in the runtime's tracking origin.
@@ -52,8 +48,6 @@ public:
         if (pose.orientationTracked) head.locationFlags |= XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
     }
 
-    // The XrPose a HeadPose describes. Orientation may be given as a quaternion or as Euler angles
-    // (when the quaternion is identity).
     static XrPosef ToXrPose(const HeadPose& pose) {
         Quaternion orientation = pose.orientation;
         bool hasRotation = pose.rotation.pitch != 0.0f || pose.rotation.yaw != 0.0f || pose.rotation.roll != 0.0f;
@@ -73,9 +67,6 @@ public:
         out.position = { pose.position.x, pose.position.y, pose.position.z };
         return out;
     }
-    // Sets one eye's field of view. A runtime always reports both eyes, so an eye that was never
-    // set mirrors the first one set (left/right swapped and negated). Eyes sit at the head origin
-    // so the manager keeps its configured IPD.
     void SetEyeFov(uint32_t eyeIndex, const XrFovf& fov) {
         const uint32_t eye = eyeIndex >= 2 ? 0 : eyeIndex;
         if (EnsureViews()) {
@@ -96,8 +87,6 @@ public:
 
     void DestroySpace(XrSpace space) { referenceSpaces.erase(space); }
 
-    // Locates the head relative to baseSpace; a LOCAL base is re-based by its pose in the
-    // runtime's tracking origin.
     XrResult LocateSpace(XrSpace baseSpace, XrSpaceLocation* location) const {
         if (locateSpaceResult != XR_SUCCESS) return locateSpaceResult;
         if (!location) return XR_SUCCESS;
@@ -107,9 +96,6 @@ public:
         return XR_SUCCESS;
     }
 
-    // A pose given in the runtime's tracking origin, expressed in baseSpace. A LOCAL base is
-    // re-based by its pose (which is how Recenter() moves the origin); any other space leaves the
-    // pose in the tracking origin. Hands and the head share this so they always agree.
     XrPosef RebasePose(XrSpace baseSpace, const XrPosef& pose) const {
         auto it = referenceSpaces.find(baseSpace);
         if (it == referenceSpaces.end() || it->second.type != XR_REFERENCE_SPACE_TYPE_LOCAL) {
@@ -150,7 +136,6 @@ private:
         return OpenXrManager::RotateVectorByQuaternion(q, v);
     }
 
-    // Returns true when the views were just created.
     bool EnsureViews() {
         if (views.size() >= 2) return false;
         views.assign(2, XrView{ XR_TYPE_VIEW, nullptr });
@@ -161,4 +146,4 @@ private:
     }
 };
 
-} // namespace fs25vr
+}

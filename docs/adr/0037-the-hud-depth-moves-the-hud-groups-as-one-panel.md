@@ -26,3 +26,5 @@ Accepted.
 - **A separate command for HUD size and position, leaving the depth to disparity** (rejected: the player would have to match two settings by eye to get a HUD that looks further away, and `vrHudGroup` already sets each group's own size and place).
 - **Move the HUD Safe Area with the HUD Depth too** (rejected: the elements it places do not shrink, so at a far depth they would crowd the centre of the view).
 - **Scale the groups and their distance from the centre by the default depth over the HUD Depth, with the matching disparity (selected).** One setting moves the whole HUD the way a panel moves, and every cue says the same depth.
+
+More decisions about this area, from the code comments: [ADR-0044](0044-hud-and-dialog-decisions.md).

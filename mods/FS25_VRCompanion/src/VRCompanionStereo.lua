@@ -1,14 +1,7 @@
--- ====================================================================
--- FS25 VR Companion Mod: Stereo Subsystem
--- Manages stereoscopic camera projections, IPD eye offsetting, 6DOF head
--- pose resolution, dual-pass sub-pass sequencing, and 2D view toggling.
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
 VRCompanion.RENDERING_MODE_AFR = "AFR"
 VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS = "SequentialDualPass"
--- Default Stereo Presentation Mode (the single source of truth for this default)
 VRCompanion.DEFAULT_RENDERING_MODE = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
 if VRCompanion.renderingMode == nil then
     VRCompanion.renderingMode = VRCompanion.DEFAULT_RENDERING_MODE
@@ -21,7 +14,6 @@ end
 VRCompanion.subPassIndex = VRCompanion.subPassIndex or 0
 VRCompanion.accumulatedPass1Dt = VRCompanion.accumulatedPass1Dt or 0.0
 
--- VR View Mode Toggle Configuration
 VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS = 250
 if VRCompanion.toggleViewDebounceMs == nil then
     VRCompanion.toggleViewDebounceMs = VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS
@@ -47,7 +39,6 @@ local function rotateVectorByQuaternion(qx, qy, qz, qw, vx, vy, vz)
     return rx, ry, rz
 end
 
--- Hamilton product a * b: the rotation b followed by the rotation a
 local function multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw)
     return aw * bx + ax * bw + ay * bz - az * by,
         aw * by - ax * bz + ay * bw + az * bx,
@@ -55,17 +46,13 @@ local function multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw)
         aw * bw - ax * bx - ay * by - az * bz
 end
 
--- Quaternion of a head pose's Euler angles, composed R = Ry(yaw) * Rx(pitch) * Rz(roll) as
--- VRBridge derives them from the headset's orientation
 local function headPoseQuaternion(pitch, yaw, roll)
     local cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
     local cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
     local cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
-    -- Ry(yaw) * Rx(pitch), then * Rz(roll)
     return multiplyQuaternions(cy * sp, sy * cp, -sy * sp, cy * cp, 0, 0, sr, cr)
 end
 
--- The Euler angles of headPoseQuaternion, R = Ry(yaw) * Rx(pitch) * Rz(roll)
 local function headPoseEuler(qx, qy, qz, qw)
     local sinPitch = math.max(-1, math.min(1, 2 * (qw * qx - qy * qz)))
     return math.asin(sinPitch),
@@ -73,16 +60,10 @@ local function headPoseEuler(qx, qy, qz, qw)
         math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qx * qx + qz * qz))
 end
 
--- Quaternion of a turn by yaw about the up axis
 function VRCompanion:yawQuaternion(yaw)
     return 0, math.sin(yaw * 0.5), 0, math.cos(yaw * 0.5)
 end
 
--- Rotation of node in spaceNode's space as a quaternion, from the engine's world quaternions so
--- no Euler angles are read back. Euler angles read back from the engine are unreliable: each
--- convention has a singular orientation where they lose the pitch (with the yaw as the middle
--- angle, as the engine has it, a yaw of 90 degrees). nil when the engine can't report world
--- quaternions.
 function VRCompanion:getRotationInSpace(node, spaceNode)
     local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
     if type(getWorldQuaternionFn) ~= "function" then return nil end
@@ -94,9 +75,6 @@ function VRCompanion:getRotationInSpace(node, spaceNode)
     return multiplyQuaternions(-sx, -sy, -sz, sw, nx, ny, nz, nw)
 end
 
--- Sets node's local rotation from a quaternion. setQuaternion takes no Euler angles, so the
--- engine's convention and its singularity never come into it; Euler angles composed
--- R = Ry * Rx * Rz are only the fallback for an engine without it.
 function VRCompanion:setNodeQuaternion(node, qx, qy, qz, qw)
     local setQuaternionFn = setQuaternion or (_G and _G.setQuaternion)
     if type(setQuaternionFn) == "function" then
@@ -109,8 +87,6 @@ function VRCompanion:setNodeQuaternion(node, qx, qy, qz, qw)
     end
 end
 
--- The head pose's rotation composed onto a base rotation (bx, by, bz, bw): the pose's frame
--- turned by the base
 function VRCompanion:composeHeadRotation(pose, bx, by, bz, bw)
     local hx, hy, hz, hw = headPoseQuaternion(pose.pitch or 0, pose.yaw or 0, pose.roll or 0)
     return multiplyQuaternions(bx, by, bz, bw, hx, hy, hz, hw)
@@ -208,8 +184,6 @@ function VRCompanion:advanceSubPass()
     return self:setSubPassIndex(nextPass)
 end
 
--- The eye the current Sequential Dual-Pass sub-pass renders. The Injector alternates which eye
--- goes first between pairs, so the sub-pass index alone does not name the eye.
 function VRCompanion:getDualPassEye()
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil and type(bridge.getActiveEye) == "function" then
@@ -230,7 +204,6 @@ function VRCompanion:getStereoCameraNodes(activeCam)
         cam = self.activePlayerCamera
     end
 
-    -- Every game camera shares the Dual Eye Camera Nodes, seeded from the first one they replace
     local baseNode = nil
     if cam ~= nil then
         baseNode = (cam.firstPersonCamera ~= nil) and cam.firstPersonCamera or cam.cameraNode
@@ -243,15 +216,12 @@ function VRCompanion:getStereoCameraNodes(activeCam)
     return camLeft, camRight
 end
 
--- Whether node is a Dual Eye Camera Node: the current one, or one registered earlier and since
--- deleted with the vehicle it was linked under (the camera manager may still name it active)
 function VRCompanion:isDualEyeCameraNode(node)
     if node == nil or node == 0 then return false end
     return node == self.cameraNodeLeft or node == self.cameraNodeRight
         or (self.registeredEyeCameras ~= nil and self.registeredEyeCameras[node] == true)
 end
 
--- The camera manager's active camera, or nil when it can't say
 function VRCompanion:getManagerActiveCamera(camMgr)
     if camMgr == nil or type(camMgr.getActiveCamera) ~= "function" then return nil end
     local ok, node = pcall(camMgr.getActiveCamera, camMgr)
@@ -267,9 +237,6 @@ function VRCompanion:registerDualEyeCameraNode(camMgr, node)
     end
 end
 
--- Takes the Dual Eye Camera Nodes off the camera manager. A node deleted with its vehicle is only
--- forgotten: removing an unknown entity from the camera manager could make it activate a default
--- camera the mod would then mistake for the game's own.
 function VRCompanion:unregisterDualEyeCameraNodes()
     if self.registeredEyeCameras == nil then return end
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
@@ -283,8 +250,6 @@ function VRCompanion:unregisterDualEyeCameraNodes()
     self.registeredEyeCameras = nil
 end
 
--- The game's own camera: the camera manager's active camera, or the one a Dual Eye Camera Node
--- took the place of. Nil when the camera manager can't say.
 function VRCompanion:getGameCamera()
     local active = self:getManagerActiveCamera(g_cameraManager or (_G and _G.g_cameraManager))
     if self:isDualEyeCameraNode(active) then
@@ -295,18 +260,11 @@ end
 
 function VRCompanion:bindRenderingCamera(targetCam)
     if targetCam == nil then return end
-    -- During a Sequential Dual-Pass sub-pass the mission update owns the single bind
-    -- of the eye's camera; camera updates inside the sub-pass only position nodes.
     if self.deferRenderingCameraBind then return end
-    -- The game's camera manager renders only through cameras registered with it and silently
-    -- ignores any other, so a Dual Eye Camera Node is registered before it is bound. The global
-    -- setCamera is the game's deprecation wrapper (it warns and doesn't bind such a camera) and is
-    -- only the fallback when there is no camera manager.
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
     if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
         local active = self:getManagerActiveCamera(camMgr)
         if self:isDualEyeCameraNode(targetCam) then
-            -- Remember the game's camera the VR camera takes the place of
             if active ~= nil and not self:isDualEyeCameraNode(active) then
                 self.gameCameraNode = active
             end
@@ -327,10 +285,6 @@ function VRCompanion:bindRenderingCamera(targetCam)
     end
 end
 
--- Whether the game's own camera (getGameCamera) is the camera with node camNode (or altNode).
--- False while a game screen with a camera of its own (the shop, construction mode) is shown; the
--- mod then leaves rendering to the game. Without a camera manager to ask, the camera being updated
--- is assumed shown.
 function VRCompanion:isGameShowingCamera(camNode, altNode)
     local active = self:getGameCamera()
     if active == nil then return true end
@@ -347,7 +301,6 @@ end
 function VRCompanion:syncActiveEyeCamera(subPass)
     local curVeh = self:getControlledVehicle()
     if curVeh ~= nil then
-        -- The in-cab camera and every Outside Camera go through the vehicle camera path
         local cam = self:getVehicleActiveCamera(curVeh)
         if cam ~= nil then
             self:onVehicleCameraUpdate(cam, 0.0)
@@ -387,8 +340,6 @@ function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
         end
     end
 
-    -- Both eyes render through one camera node, moved to each eye in turn: temporal upscalers
-    -- (DLSS, FSR) drop their history whenever the rendering camera changes
     if self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
         if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
             self.cameraNodeLeft = self.cameraNodeRight
@@ -406,9 +357,6 @@ function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
 end
 
 function VRCompanion:ensureDualEyeCameraNodes(referenceCamNode)
-    -- The camera node linked under a vehicle is deleted with it (sold, reset): recreate it. The
-    -- deleted id stays in registeredEyeCameras so it is still recognised if the camera manager
-    -- names it active.
     local entityExistsFn = entityExists or (_G and _G.entityExists)
     if type(entityExistsFn) == "function" and self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0
         and not entityExistsFn(self.cameraNodeLeft) then
@@ -468,7 +416,6 @@ function VRCompanion:getIs2DViewActive()
     return self.is2DViewActive == true
 end
 
--- Records the mode and tells VRBridge; returns whether the mode changed
 local function store2DViewActive(self, newActive)
     local wasActive = (self.is2DViewActive == true)
     self.is2DViewActive = newActive
@@ -482,8 +429,6 @@ local function store2DViewActive(self, newActive)
     return true
 end
 
--- Map unload leaves 2D Floating Window Mode without the HUD Safe Area and the HUD state that returning to VR applies: the HUD's
--- own unload has already handed the game its full-screen anchors in the Full state.
 function VRCompanion:leave2DViewOnMapUnload()
     if store2DViewActive(self, false) then
         print("[FS25_VR] Left 2D Floating Window Mode for the map unload.")
@@ -571,7 +516,6 @@ function VRCompanion:restoreCameraProjectionsFor2D()
     local veh = self:getControlledVehicle()
     if veh ~= nil then
         local cam = self:getVehicleActiveCamera(veh)
-        -- An Outside Camera's own node never gets a VR projection, so there is nothing to restore
         if cam ~= nil and cam.isInside and cam.cameraNode ~= nil then
             self:applyCameraProjection(cam.cameraNode, 0)
         end
@@ -584,13 +528,6 @@ function VRCompanion:restoreCameraProjectionsFor2D()
     end
 end
 
--- The pass-through and head-tracking checks run several times per frame. While a
--- frame scope is open (VRCompanion:update and the mission update hook open one),
--- each check resolves once and later callers in that scope read the cached answer.
--- Scopes nest: the game runs VRCompanion:update inside the hooked mission update,
--- and the inner scope shares the outer one's cache. Outside a scope the checks
--- resolve on every call. The outermost scope opens and closes with a clean cache,
--- so a change is picked up no later than the next update.
 function VRCompanion:beginFrameChecks()
     local depth = self.frameCheckDepth or 0
     if depth == 0 then
@@ -613,7 +550,6 @@ function VRCompanion:clearFrameChecks()
     self.cachedHeadTrackingActive = nil
 end
 
--- Closes every open scope at once (the outermost scope ending, however it ended).
 function VRCompanion:resetFrameChecks()
     self.frameCheckDepth = 0
     self:clearFrameChecks()
@@ -694,11 +630,6 @@ function VRCompanion:setHeadTrackingEnabled(enabled)
     self.cachedHeadTrackingActive = nil
 end
 
--- Returns the valid eye projection from VRBridge, or false when none is available
--- (no bridge, 2D Floating Window Mode, or an invalid projection). While a sub-pass
--- scope is open (see beginEyeProjectionScope) the result for an eye is reused, so
--- one Sequential Dual-Pass sub-pass reads VRBridge once however many camera
--- updates it triggers.
 function VRCompanion:fetchEyeProjection(eyeIndex)
     if self.is2DViewActive then
         return false
@@ -711,8 +642,6 @@ function VRCompanion:fetchEyeProjection(eyeIndex)
 
     local proj = false
     if VRBridge and type(VRBridge.getEyeProjection) == "function" then
-        -- One reusable table per eye: VRBridge fills it in place instead of allocating, and the
-        -- cached projection of one eye is not overwritten by a fetch for the other.
         local scratch = self.eyeProjectionScratch
         if scratch == nil then
             scratch = {}
@@ -724,16 +653,12 @@ function VRCompanion:fetchEyeProjection(eyeIndex)
             scratch[eyeIndex] = target
         end
         local fetched = VRBridge.getEyeProjection(eyeIndex, target)
-        -- VRBridge only fills a table in place once it holds every field; until then it returns its own
-        -- table. Keep that one so later calls reuse it.
         if type(fetched) == "table" then scratch[eyeIndex] = fetched end
         if fetched and fetched.isValid then
             proj = fetched
-            -- The horizontal FOV the eyes are rendered with, for the HUD's depth (computeConvergenceDisparity)
             if type(fetched.fovX) == "number" then self.renderedFovX = fetched.fovX end
         end
     end
-    -- Only a valid projection is reused, so one that becomes valid mid sub-pass is picked up.
     if cache ~= nil and cache.active and proj then
         cache.eye = eyeIndex
         cache.proj = proj
@@ -766,7 +691,6 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex, proj)
         return
     end
 
-    -- Cache initial camera projection parameters for clean restoration on map unload or 2D mode
     if self.origCamSettings == nil then
         self.origCamSettings = {}
     end
@@ -799,8 +723,6 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex, proj)
         return
     end
 
-    -- A caller applying one eye's projection to several nodes fetches it once and passes it in.
-    -- false means "already fetched, nothing usable"; nil means "fetch it now".
     if proj == nil then
         proj = self:fetchEyeProjection(eyeIndex or 0)
     end
@@ -808,15 +730,10 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex, proj)
         return
     end
 
-    -- Update camera vertical Field of View to match VR headset display optics
     if type(setFovY) == "function" and proj.fovY ~= nil and proj.fovY > 0 then
         setFovY(camNode, proj.fovY)
     end
 
-    -- In both AFR and Sequential Dual-Pass modes: keep the camera centered on the optical axis (0, 0) to guarantee
-    -- parallel rays at infinity and natural binocular convergence without cross-eyed disparity shear, matching
-    -- OpenXrManager::SubmitFramePair's aspect-ratio matched symmetric FOV (ADR-0005). The eye's tan offsets in
-    -- proj stay published by VRBridge but are not applied.
     if type(setProjectionOffset) == "function" then
         setProjectionOffset(camNode, 0, 0)
     end
@@ -877,7 +794,6 @@ end
 function VRCompanion:getResolvedHeadPose()
     local pose = nil
     local bridge = VRBridge or (_G and _G.VRBridge)
-    -- Reuse one pose table across frames: VRBridge fills it in place instead of allocating.
     if bridge ~= nil and type(bridge.getHeadPose) == "function" then
         local scratch = self.headPoseScratch
         if scratch == nil then
@@ -885,13 +801,11 @@ function VRCompanion:getResolvedHeadPose()
             self.headPoseScratch = scratch
         end
         pose = bridge.getHeadPose(scratch)
-        -- See fetchEyeProjection: adopt the table VRBridge returns so later reads fill it in place.
         if type(pose) == "table" then
             self.headPoseScratch = pose
         end
     end
 
-    -- Fallback to native engine TrackIR functions if VRBridge is not providing a valid pose
     if (not pose or not pose.isValid) and type(isHeadTrackingAvailable) == "function" and isHeadTrackingAvailable() then
         local tx, ty, tz = 0, 0, 0
         if type(getHeadTrackingTranslation) == "function" then
@@ -902,9 +816,6 @@ function VRCompanion:getResolvedHeadPose()
             pitch, yaw, roll = getHeadTrackingRotation()
         end
         if pitch ~= nil then
-            -- A separate reusable table: writing TrackIR values (which carry no quaternion) into
-            -- the VRBridge table would leave it incomplete, and VRBridge would then allocate a
-            -- fresh one on every call instead of filling it in place.
             pose = self.trackIrPoseScratch
             if pose == nil then
                 pose = {}
@@ -944,8 +855,6 @@ function VRCompanion:getActiveEyeIndex(afrFallback)
     return 0
 end
 
--- Copies one lens setting (field of view, near or far clip) from referenceCamNode to eyeNode when
--- it differs
 local function copyLensSetting(getFn, setFn, eyeNode, referenceCamNode)
     if type(getFn) ~= "function" or type(setFn) ~= "function" then return end
     local ok, value = pcall(getFn, referenceCamNode)
@@ -956,9 +865,6 @@ local function copyLensSetting(getFn, setFn, eyeNode, referenceCamNode)
     end
 end
 
--- Gives an eye camera the lens of the engine camera it renders in place of: its near and far
--- clip planes, and its field of view for when no VR projection replaces it. The Dual Eye Camera
--- Nodes are shared by every camera path, and each engine camera has its own lens.
 function VRCompanion:matchEngineCameraLens(eyeNode, referenceCamNode)
     if referenceCamNode == nil or referenceCamNode == 0 or eyeNode == referenceCamNode then return end
     copyLensSetting(getFovY or (_G and _G.getFovY), setFovY or (_G and _G.setFovY), eyeNode, referenceCamNode)
@@ -966,16 +872,6 @@ function VRCompanion:matchEngineCameraLens(eyeNode, referenceCamNode)
     copyLensSetting(getFarClip or (_G and _G.getFarClip), setFarClip or (_G and _G.setFarClip), eyeNode, referenceCamNode)
 end
 
--- Final step of a head-tracked camera frame, shared by every camera path: links the Dual Eye
--- Camera Nodes and the Cyclopean Audio Listener Node under parentNode, places the listener at the
--- centre of the head and the active eye at the eye position, gives that eye the lens of
--- referenceCamNode, applies its projection and binds it for rendering, for
--- whichever Stereo Presentation Mode is active. All transforms are in parentNode's space and
--- share one rotation, the quaternion (qx, qy, qz, qw). referenceCamNode is the engine camera
--- the eye renders in place of: it seeds node creation, lends its lens and is the mono fallback target when no left eye node exists. stereoRequested (the
--- bridge's requiresAfrFallback: the mod renders the eyes itself) asks for the eyeIndex eye; it is
--- still overridden to mono, left eye, while a GUI menu or 2D Floating Window Mode is shown.
--- Allocates nothing.
 function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         headX, headY, headZ, eyeX, eyeY, eyeZ, qx, qy, qz, qw, eyeIndex, eyeProj, stereoRequested)
     local getParentFn = getParent or (_G and _G.getParent)
@@ -1006,8 +902,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         if type(setAudioListenerFn) == "function" then
             setAudioListenerFn(self.cyclopeanAudioListenerNode)
         end
-        -- The Virtual Hands and the Pointer Ray follow the head for this rendered frame (a frame may be rendered with no
-        -- update before it).
         self:placeVirtualHandsForRender()
         self:placePointerRayForRender()
     end
@@ -1027,7 +921,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             self:setNodeQuaternion(activeEyeCam, qx, qy, qz, qw)
             self:bindRenderingCamera(activeEyeCam)
             self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            -- Sequential Dual-Pass traces once per sub-pass instead (finishSubPass)
             if self:getRenderingMode() ~= self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
                 self:traceEyeFrame(eyeIndex, activeEyeCam, nil)
             end
@@ -1035,7 +928,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
     else
         local targetNode = self.cameraNodeLeft or referenceCamNode
         if targetNode ~= nil and targetNode ~= 0 then
-            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
             local leftProj = nil
             if eyeIndex == 0 then leftProj = eyeProj end
             self:matchEngineCameraLens(targetNode, referenceCamNode)
@@ -1049,20 +941,8 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
     end
 end
 
--- Below this horizontal length of the engine camera's unit look direction (about 6 degrees from
--- vertical) the camera's up direction is blended into the Outside Camera's base heading.
 VRCompanion.OUTSIDE_CAMERA_VERTICAL_BLEND = 0.1
 
--- World heading of an Outside Camera's level base: the engine camera's world look direction
--- projected onto the horizontal plane. Near vertical that projection shrinks to nothing and flips
--- as the camera crosses straight down, so the camera's up direction is blended in there: for a
--- camera looking down it points the way the camera would look if levelled (for one looking up,
--- the opposite way). The blend fades out continuously, so the heading stays continuous through
--- straight down and straight up. A camera pitched past vertical (turned over) is the exception:
--- its look heading and its levelled heading point opposite ways, so the blended vector passes
--- through zero about 5 degrees past vertical and the heading flips by 180 degrees there. Any rule
--- that follows the look heading away from vertical has to turn that half circle somewhere.
--- Returns nil when no heading can be derived.
 function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
     local lx, ly, lz = localDirectionToWorldFn(camNode, 0, 0, -1)
     if lx == nil or ly == nil or lz == nil then return nil end
@@ -1082,18 +962,12 @@ function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldF
     return math.atan2(-fx, -fz)
 end
 
--- Leaves the view to the engine: renders through the engine's own camera again when an eye camera
--- was bound in its place (activeRenderingCamera is the camera bindRenderingCamera last bound).
--- Binding changes no transform of the engine's nodes.
 function VRCompanion:renderThroughEngineCamera(camNode)
     if self.activeRenderingCamera ~= nil and self.activeRenderingCamera ~= camNode then
         self:bindRenderingCamera(camNode)
     end
 end
 
--- Head tracking lost: shows exactly what the engine camera sees (its world position and rotation)
--- rather than eyes frozen where tracking dropped. Placing the eyes there, instead of binding the
--- engine camera, also holds when a Sequential Dual-Pass sub-pass binds its eye camera at the end.
 function VRCompanion:showEngineCameraView(camNode, eyeIndex, eyeProj, stereoRequested)
     local getRootNodeFn = getRootNode or (_G and _G.getRootNode)
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
@@ -1111,8 +985,6 @@ function VRCompanion:showEngineCameraView(camNode, eyeIndex, eyeProj, stereoRequ
     self:placeAndBindEyes(camNode, rootNode, x, y, z, x, y, z, qx, qy, qz, qw, eyeIndex, eyeProj, stereoRequested)
 end
 
--- Renders through the game's own camera again and takes the Dual Eye Camera Nodes off the camera
--- manager, so the engine isn't left on one of them, e.g. when the mod unloads.
 function VRCompanion:restoreGameActiveCamera()
     local gameCamera = self:getGameCamera()
     if gameCamera ~= nil then
@@ -1122,14 +994,8 @@ function VRCompanion:restoreGameActiveCamera()
     self.gameCameraNode = nil
 end
 
--- Outside Camera: any camera of the controlled vehicle other than its in-cab camera. Runs after
--- the engine's own camera update, so orbit, zoom and collision pull-in are already applied. The
--- engine's camera nodes are only read: the view renders through the Dual Eye Camera Nodes placed
--- in world space on a level base (the engine camera's position and horizontal heading, zero pitch
--- and roll), with the head pose composited on top.
 function VRCompanion:onOutsideCameraUpdate(cam)
     local camNode = cam.cameraNode
-    -- 2D Floating Window Mode and GUI menus show the engine's camera as-is
     if self.is2DViewActive or self:isMenuQuadShown() then
         self:renderThroughEngineCamera(camNode)
         return
@@ -1144,7 +1010,6 @@ function VRCompanion:onOutsideCameraUpdate(cam)
         return
     end
     local rootNode = getRootNodeFn()
-    -- The shared step renders through, and writes, its reference node when no eye node exists
     self:ensureDualEyeCameraNodes(camNode)
     if rootNode == nil or rootNode == 0 or self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
         self:renderThroughEngineCamera(camNode)
@@ -1162,7 +1027,6 @@ function VRCompanion:onOutsideCameraUpdate(cam)
         self:showEngineCameraView(camNode, eyeIndex, eyeProj, afrFallback)
         return
     end
-    -- No derivable heading (a degenerate engine transform) keeps the last one rather than snapping
     local heading = self:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
         or self.outsideCameraHeading or 0
     self.outsideCameraHeading = heading
@@ -1170,7 +1034,6 @@ function VRCompanion:onOutsideCameraUpdate(cam)
     local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
     local offX, offY, offZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
 
-    -- The head pose goes on a level base node turned only by the heading
     local baseNode = self:placeOutsideCameraBase(rootNode, baseX, baseY, baseZ, heading)
     if baseNode == nil then
         self:showEngineCameraView(camNode, eyeIndex, eyeProj, afrFallback)
@@ -1181,8 +1044,6 @@ function VRCompanion:onOutsideCameraUpdate(cam)
         qx, qy, qz, qw, eyeIndex, eyeProj, afrFallback)
 end
 
--- Places the Outside Camera's level base, a transform group under the world root owned by the
--- mod, at (x, y, z) turned only by heading. Nil when the engine can't create or place it.
 function VRCompanion:placeOutsideCameraBase(rootNode, x, y, z, heading)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
     local setRotationFn = setRotation or (_G and _G.setRotation)
@@ -1243,8 +1104,6 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     end
 
-    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely and show the
-    -- game's own camera. VehicleCamera.update handles standard 2D mouse and thumbstick rotation.
     if self.is2DViewActive then
         self:renderThroughEngineCamera(cam.cameraNode)
         return
@@ -1278,10 +1137,8 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         camParent = getParentFn(cam.cameraNode)
     end
 
-    -- Look yaw offset relative to neutral forward orientation (cam.rotY - cam.origRotY)
     local lookYaw = self:getVehicleLookYaw(cam) or 0
 
-    -- Auto-construct headTrackingNode matching VehicleCamera:loadFromXML if missing
     if cam.headTrackingNode == nil and type(createTransformGroupFn) == "function" then
         local posNode = cam.cameraPositionNode or cam.cameraNode
         local pNode = (posNode and type(getParentFn) == "function") and getParentFn(posNode) or 0
@@ -1313,7 +1170,6 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     end
 
-    -- Update camera tracking node orientation with mouse/controller look yaw so head pose is composited cleanly on top.
     local targetHeadRotY = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw) or ((cam.origRotY or math.pi) + lookYaw)
     if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
         local nodeRotY = self:updateVehicleCameraTrackingNode(cam)
@@ -1322,10 +1178,6 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     end
 
-    -- Where the head rests in the cab, and the rotation the head pose turns on, both in
-    -- camParent's space (the same step the Recenter Action realigns to). Composed as
-    -- quaternions: Euler angles read back from the engine lose the head's pitch when it looks a
-    -- quarter turn to the side.
     local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, 0)
     local baseQx, baseQy, baseQz, baseQw = rest.qx, rest.qy, rest.qz, rest.qw
     local cabTransX, cabTransY, cabTransZ = self:cabPointFromHead(rest, camParent, eyeTx, eyeTy, eyeTz)
@@ -1375,8 +1227,6 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local eyeProj = self:fetchEyeProjection(eyeIndex)
     self:applyCameraProjection(activeCamNode, eyeIndex, eyeProj)
 
-    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely and show the
-    -- game's own camera. Standard on-foot camera rotation is driven via mouse/thumbstick.
     if self.is2DViewActive then
         self:renderThroughEngineCamera(activeCamNode)
         return
@@ -1426,8 +1276,6 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
 
     local finalTx, finalTy, finalTz = eyeTx, eyeTy, eyeTz
     local finalMidTx, finalMidTy, finalMidTz = tx, ty, tz
-    -- The rotation the head pose turns on, in camParent's space: the head tracking node's, else a
-    -- half turn to face forward. Composed as quaternions, as in the cab.
     local baseQx, baseQy, baseQz, baseQw = nil, nil, nil, nil
 
     if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
@@ -1519,7 +1367,6 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
     end
 
     if self.is2DViewActive then
-        -- In 2D Floating Window Mode: 2D mouse/thumbstick controls both pitch and yaw.
         local curPitch = 0
         if cam.pitchNode ~= nil and type(getRotation) == "function" then
             curPitch, _, _ = getRotation(cam.pitchNode)
@@ -1539,8 +1386,6 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
             setRotation(cam.yawNode, 0, cameraYaw, 0)
         end
     else
-        -- In VR mode: keep neck level (pitch=0, roll=0); mouse/stick only turns body yaw.
-        -- Head pitch and roll are tracked by the HMD and applied during onPlayerCameraUpdate.
         if type(cam.setRotation) == "function" then
             cam:setRotation(0, cameraYaw, 0)
         end
@@ -1552,7 +1397,6 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
         return
     end
 
-    -- An Outside Camera behind a menu is left to the engine: its nodes are never written
     local curVeh = self:getControlledVehicle()
     if curVeh ~= nil then
         local vehCam = self:getVehicleActiveCamera(curVeh)
@@ -1572,7 +1416,6 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
     if camNode == nil or camNode == 0 then
         return
     end
-    -- A Dual Eye Camera Node is already head tracked by its camera path
     if camNode == self.cameraNodeLeft or camNode == self.cameraNodeRight then
         return
     end
@@ -1581,7 +1424,6 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
         self.menuCameraOffsets = {}
     end
 
-    -- Retrieve head pose from VRBridge or TrackIR
     local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
         return
@@ -1594,7 +1436,6 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
     local yaw = pose.yaw or 0
     local roll = pose.roll or 0
 
-    -- One record per camera node, allocated on first use and updated in place afterwards
     local lastOffset = self.menuCameraOffsets[camNode]
     if lastOffset == nil then
         lastOffset = { tx = 0, ty = 0, tz = 0, rx = 0, ry = 0, rz = 0 }
@@ -1613,7 +1454,6 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
         if ok and rx ~= nil then curRx, curRy, curRz = rx, ry, rz end
     end
 
-    -- Subtract previous VR offset to recover underlying base transform (preserving mouse/controller orbit deltas)
     local baseX = curX - lastOffset.tx
     local baseY = curY - lastOffset.ty
     local baseZ = curZ - lastOffset.tz
@@ -1676,23 +1516,9 @@ function VRCompanion:restoreMenuBackgroundCamera()
     end
 end
 
--- ---- Stereo in the subsystem registry ---------------------------------------------------------------------------------------
--- Map load: the Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made, after the core polled the GUI and read
--- settings.xml. Neither uses them: the poll only reads the GUI (the menu camera it restores on a closing menu is the game's, and
--- there is no menu to close yet), loadConfiguration reads settings.xml and sends the Stereo Presentation Mode and the HUD layout
--- (setRenderingMode, configureHudSafeArea) and touches no node, no camera setting and no action event. The nodes are made from
--- fixed defaults, which no setting changes.
--- No update hook: the game's menu camera follows the head while the menu quad is shown from a direct call of the core's update
--- (updateMenuBackgroundCamera, right after the GUI poll: the camera is written before the hooks the core installs next and the
--- vehicle transition, which may move it, and its offsets are relative to what is there). Map unload: the nodes go and the cameras
--- are put back. Unload runs after the core's teardown (VRBridge.onMapUnload included) and after the HUD's and Input's (they are
--- registered after this file, so they unload first); the 2D Floating Window Mode goes last, leaving the HUD as the HUD's unload
--- left it. Why each of these orders holds or does not matter is in the core's deleteMap.
 local function deleteDualEyeNodes(self)
     local deleteFn = delete or (_G and _G.delete)
     local entityExistsFn = entityExists or (_G and _G.entityExists)
-    -- Nodes linked under a vehicle are already gone: the game deletes its vehicles first, and
-    -- deleting an unknown entity logs a script error even inside pcall
     local function deleteIfExists(node)
         if node == nil or node == 0 then return end
         if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
@@ -1700,7 +1526,6 @@ local function deleteDualEyeNodes(self)
     end
     if type(deleteFn) == "function" then
         deleteIfExists(self.cameraNodeLeft)
-        -- Both eyes share one camera node unless something set them apart
         if self.cameraNodeRight ~= self.cameraNodeLeft then
             deleteIfExists(self.cameraNodeRight)
         end
@@ -1713,7 +1538,6 @@ local function deleteDualEyeNodes(self)
     self.cyclopeanAudioListenerNode = nil
 end
 
--- Puts the FOV and projection offset every camera had back
 local function restoreOriginalCameraSettings(self)
     if self.origCamSettings == nil then return end
     for camNode, orig in pairs(self.origCamSettings) do
@@ -1733,9 +1557,6 @@ local function restoreOriginalCameraSettings(self)
     self.origCamSettings = {}
 end
 
--- Map unload runs after the HUD's (the HUD registers after Stereo), as it did before the registry, so unloading behaves as it did. The
--- nodes go before the camera settings are restored, which skips cameras that no longer exist. 2D Floating Window Mode is left
--- last, without applying the HUD again, so the full-screen HUD the HUD's unload left stays (see the core's deleteMap).
 VRCompanion:registerSubsystem("stereo", {
     mapLoad = function(self)
         self:initDualEyeCameraNodes()

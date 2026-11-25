@@ -1,41 +1,3 @@
--- Animated Objects (ADR-0034)
--- StubAnimatedObject.install(variant)   defines the globals the game has: AnimatedObject (the class: triggerCallback, getCanBeTriggered,
---   setDirection, raiseActive), AnimatedMapObject (a subclass that defines none of its own, like the game's, for a barrier placed on the
---   map), AnimatedObjectActivatable (getIsActivatable, onAnimationInputToggle, updateActionEventTexts), FSCareerMissionInfo and
---   g_currentMission.missionInfo:isa, g_currentMission.activatableObjectsSystem (addActivatable / removeActivatable keep
---   StubAnimatedObject.activatables), CollisionFlag / CollisionMask, and the engine's raycastClosest.
---   variant   how the game is in this "game version": nil / "ok", "triggerCallbackMissing" (a game update renamed triggerCallback, which
---   the engine calls by the new name), "triggerCallbackReshaped" (it takes no parameters but self: the engine's arguments are read from
---   StubAnimatedObject.pending), "toggleMissing" (onAnimationInputToggle renamed), "toggleReshaped" (it takes no parameters at all),
---   "canBeTriggeredMissing" (getCanBeTriggered renamed), "canBeTriggeredReshaped" (it takes no parameters at all).
---
--- StubAnimatedObject.door(options) -> object   an Animated Object with its zone (a trigger node) and one moving part, a box at the
---   world position x, y, z with the half extents hx, hy, hz (defaults: a leaf 1 m wide, 1 m high and 10 cm thick).
---   options: name, x, y, z, hx, hy, hz, map (an AnimatedMapObject, not an AnimatedObject), canBeTriggered (false: the check answers no),
---   farmCheck (the object has an own getCanBeTriggered, like PlaceableAnimatedObjects, that also asks object.farmAllowed),
---   negAction (a second action: the object moves while a button is held), sameAction (one action for both directions: the same),
---   noAction (no action at all: no prompt), collisionChild (the box is on a child of the part's node, as a shape below a transform
---   group is), parts (a list of { x, y, z, hx, hy, hz } instead of the one part).
---   object.controls = { posAction, negAction, posActionText, negActionText }, object.animation = { parts = { { node } }, time, direction
---   (0 stopped, 1 opening, -1 closing), duration }, object.activatable, object.triggerNode, object.isEnabled, object.isDeleted.
--- StubAnimatedObject.enterZone(object) / leaveZone(object)   the local player enters or leaves the zone: the engine calls the trigger
---   callback, by the name the game has it, with the zone's trigger node and the local player's root node.
---   StubAnimatedObject.otherEnters(object)   another node enters, which the callback does not count.
--- StubAnimatedObject.inZone(object)   the game put the object's activatable in its system (the prompt can show it).
--- StubAnimatedObject.wall(name, x, y, z, hx, hy, hz) -> node   a box of the world the ray cast hits and no Animated Object owns.
--- StubAnimatedObject.showPrompt(object) / pressButton(object)   the game's prompt: it registers the toggle handler on the bound button
---   (controls.posActionEventId is set from then on) and the button calls what was registered.
--- StubAnimatedObject.toggles   every run of the toggle handler, { object, direction }, in order; toggleCount(object)
--- StubAnimatedObject.advance(object, fraction)   the animation moves by that part of its duration in its direction, and stops (direction
---   0, as the game's server sets it) at either end. setDirection decides a stopped door's direction by its time, as the game's does.
--- StubAnimatedObject.originalTriggerCallback   the game's trigger callback as the stub made it (the class has it unless a wrap replaced it).
--- StubAnimatedObject.castSeesLooseObjects   (default true) the raycastClosest also hits the loose objects of the hands stubs
---   (StubHandTool.looseObjectList, spheres), as the engine reports any rigid body: an object in front of a door hides the door from it.
--- StubAnimatedObject.casts   every raycastClosest call, { x, y, z, dx, dy, dz, maxDistance, mask }.
--- StubAnimatedObject.delete(object)   the object is deleted with no leave event for the zone.
--- StubAnimatedObject.textCalls   the prompt texts set, { eventId }; setting one for an event that is not registered raises, as the game's
---   input binding does for a nil id.
-
     StubAnimatedObject = {}
     local S = StubAnimatedObject
 
@@ -62,7 +24,6 @@
         local AnimatedObject = {}
         AnimatedObject.__index = AnimatedObject
         _G.AnimatedObject = AnimatedObject
-        -- The subclass the game makes map objects of: it defines no trigger callback or check of its own.
         local AnimatedMapObject = setmetatable({}, { __index = AnimatedObject })
         AnimatedMapObject.__index = AnimatedMapObject
         _G.AnimatedMapObject = AnimatedMapObject
@@ -71,7 +32,6 @@
         _G.AnimatedObjectActivatable = Activatable
         S.classes = { AnimatedObject = AnimatedObject, AnimatedMapObject = AnimatedMapObject, Activatable = Activatable }
 
-        -- AnimatedObject.lua:730 -- the three conditions, then the activatable goes in or out of the system
         local function triggerCallback(self, triggerId, otherId, onEnter, onLeave, onStay)
             if g_currentMission.missionInfo:isa(FSCareerMissionInfo) then
                 if onEnter or onLeave then
@@ -98,9 +58,8 @@
             AnimatedObject.triggerCallback = triggerCallback
         end
         function AnimatedObject:raiseActive() S.raised = S.raised + 1 end
-        S.originalTriggerCallback = AnimatedObject.triggerCallback  -- what the game has, for a test to see that it is handed back as found
+        S.originalTriggerCallback = AnimatedObject.triggerCallback
 
-        -- the game's check (opening hours and the like; its body is stripped from the SDK): a test flips object.canBeTriggered
         local function canBeTriggered(self) return self.canBeTriggered ~= false end
         if variant == "canBeTriggeredMissing" then
             AnimatedObject.getIsTriggerable = canBeTriggered
@@ -111,14 +70,12 @@
             AnimatedObject.getCanBeTriggered = canBeTriggered
         end
 
-        -- setDirection decides a stopped door's direction by its time (the handler passes 0 * -1 then)
         function AnimatedObject:setDirection(direction)
             local animation = self.animation
             if direction == 0 then direction = animation.time >= 0.5 and -1 or 1 end
             animation.direction = direction
         end
 
-        -- AnimatedObjectActivatable.lua
         function Activatable:getIsActivatable()
             return self.animatedObject[S.canName](self.animatedObject) == true and self.animatedObject.isEnabled ~= false
         end
@@ -143,13 +100,11 @@
                 S.setActionEventText(controls.posActionEventId, controls.posActionText)
             end
         end
-        -- g_inputBinding:setActionEventText: raises for an event that is not registered
         function S.setActionEventText(eventId, text)
             if eventId == nil then error("setActionEventText: no action event") end
             table.insert(S.textCalls, { eventId = eventId, text = text })
         end
 
-        -- the engine's raycastClosest over the boxes: the closest box the ray enters from outside within maxDistance. The direction is unit.
         _G.raycastClosest = function(x, y, z, dx, dy, dz, maxDistance, callbackName, target, mask)
             table.insert(S.casts, { x = x, y = y, z = z, dx = dx, dy = dy, dz = dz, maxDistance = maxDistance, mask = mask })
             local best, bestNode = nil, nil
@@ -175,8 +130,6 @@
                     end
                 end
             end
-            -- the loose objects of the hands stubs are rigid bodies too, and the engine's cast reports them (a pallet in front of a door
-            -- hides the door from it) unless a test turns that off to leave the choice to the nearer-wins rule alone
             if S.castSeesLooseObjects and StubHandTool and StubHandTool.castAtLooseObjects then
                 S.looseHit = S.looseHit or {}
                 local loose = StubHandTool.castAtLooseObjects(S.looseHit, x, y, z, dx, dy, dz, 0, maxDistance)
@@ -204,7 +157,7 @@
         local name = options.name or ("door" .. doors)
         local class = options.map and S.classes.AnimatedMapObject or S.classes.AnimatedObject
         local object = setmetatable({ saveId = name, isEnabled = true, canBeTriggered = options.canBeTriggered ~= false }, class)
-        if options.noSaveId then object.saveId = nil end  -- a building's door has none, only the nodes of its i3d
+        if options.noSaveId then object.saveId = nil end
         object.controls = { posAction = "ACTIVATE_HANDTOOL", negAction = options.negAction, posActionText = "Open", negActionText = "Close" }
         if options.noAction then object.controls.posAction = nil end
         if options.sameAction then object.controls.negAction = object.controls.posAction end
@@ -236,7 +189,6 @@
         if player.rootNode == nil then player.rootNode = (_G.foot and _G.foot.parent) or StubScene.newNode("playerRoot", 0) end
         return player.rootNode
     end
-    -- the engine calls the callback by name, on the object (through its class)
     local function callTrigger(object, otherId, onEnter, onLeave)
         S.pending = { object.triggerNode, otherId, onEnter, onLeave, false }
         object[S.callbackName](object, object.triggerNode, otherId, onEnter, onLeave, false)

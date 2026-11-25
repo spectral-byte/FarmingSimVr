@@ -1,9 +1,3 @@
-// Animated Objects, the wrapped game function, the game in other versions and the diagnostics (ADR-0034, spec #180, ticket #181), seen from
-// outside: the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs
-// (animated_object_test_support.h) in the "game versions" the stub can be in. A function the module relies on that is missing or has another
-// shape turns the support off with ONE warning, and the game's prompts work as they do without the mod; unloading the map hands the game's
-// class back exactly as found. Prior art: test_object_grab_wraps.cpp and test_pointer_ray.cpp (Interactive Control missing or mismatched).
-
 #include "animated_object_test_support.h"
 #include <string>
 
@@ -14,8 +8,6 @@ using namespace animated_object_test;
 
 class VirtualGamepadAnimatedObjectsWrapsTest : public VirtualGamepadAnimatedObjectsTest {
 protected:
-    // The game is in a version where something is missing or reshaped: the module warns once, selects nothing, toggles nothing, and the
-    // game's own prompt and its bound button work.
     void ExpectTheSupportGivesUpWith(const char* variant) {
         SCOPED_TRACE(variant);
         ASSERT_NO_FATAL_FAILURE(StartWithDoor(variant));
@@ -37,9 +29,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Giving up -------------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ATriggerCallbackThatIsMissingTurnsTheSupportOffWithOneWarning) {
     ExpectTheSupportGivesUpWith("triggerCallbackMissing");
@@ -66,7 +56,7 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ACanBeTriggeredCheckThatIsReshape
 }
 
 TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, AGameWithoutAnimatedObjectsAtAllWarnsOnceAndLeavesTheRestAlone) {
-    ASSERT_NO_FATAL_FAILURE(Start());  // no Animated Objects in this game
+    ASSERT_NO_FATAL_FAILURE(Start());
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(3);
     EXPECT_EQ(Warnings(), 1);
@@ -87,8 +77,6 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, NoWarningWhileNoMotionControllerI
     EXPECT_EQ(Warnings(), 0) << "with Motion Controllers off the support is never looked at";
 }
 
-// ---- Unloading the map -----------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, UnloadingTheMapHandsTheGamesClassBackExactlyAsFound) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     ASSERT_EQ(EvalLua(L, "tostring(AnimatedObject.triggerCallback == StubAnimatedObject.originalTriggerCallback)"), "false")
@@ -103,7 +91,6 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, UnloadingTheMapHandsTheGamesClass
               "true") << "the other functions were never touched";
     EXPECT_EQ(Warnings(), 0);
 
-    // The player walks into a zone after the unload: the game's callback is all there is.
     EnterZone();
     EXPECT_EQ(EvalLua(L, "tostring(StubAnimatedObject.inZone(door))"), "true");
 }
@@ -118,8 +105,6 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, AWrapSomethingElseAddedOnTopIsLef
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMap"), 0);
     EXPECT_EQ(EvalLua(L, "tostring(AnimatedObject.triggerCallback == theirs)"), "true") << "another mod's wrap is not undone under it";
 }
-
-// ---- The diagnostics ---------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ThePointerDiagnosticsCarryOneLineForAnimatedObjects) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
@@ -157,10 +142,7 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ThePointerDiagnosticsSayTheSuppor
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Animated Objects support: gave up (see the warning in the log)"), std::string::npos);
 }
 
-// ---- The warning's exact words ---------------------------------------------------------------------------------------------------
-
 namespace {
-// How many of the game's log lines are exactly `line`.
 int ExactLogLines(const std::string& line) {
     int count = 0;
     for (const auto& logged : s_capturedLogs) {
@@ -173,7 +155,7 @@ std::string AnimatedObjectsWarning(const std::string& problem) {
     return "[FS25_VR] [Warning] Animated Objects support disabled: " + problem
         + ". Motion Controllers cannot work doors and gates; the game's prompts are unchanged.";
 }
-}  // namespace
+}
 
 TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheWarningSaysWhichFunctionIsMissing) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor("triggerCallbackMissing"));

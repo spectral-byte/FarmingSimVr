@@ -1,19 +1,3 @@
--- Scene graph
--- Nodes are plain tables. Euler angles use the engine convention R = Ry * Rx * Rz.
---
---   StubScene.newNode(name, parent, x, y, z, rx, ry, rz) -> node id   (parent 0 = world root)
---   StubScene.worldPosition(node) -> x, y, z      StubScene.worldDirection(node, x, y, z) -> x, y, z
---   The engine's localToWorld(node, x, y, z) and worldToLocal(node, x, y, z) carry a point between a node's space and the world.
---   StubScene.cab(options) -> { vehicle, cam, cameraNode, headTrackingNode, parent }
---       options: x, y, z, yaw  = the cab's pose in the world (default 0, 0, 0, 0)
---     A vehicle in the cab view: camParent -> cameraNode, headTrackingNode (1.5 m up, turned by pi like
---     the game's cab cameras). g_currentMission.controlledVehicle is the vehicle and
---     StubScene.updateCamera() runs VRCompanion:onVehicleCameraUpdate for it.
---   StubScene.outside(options) -> { cam, cameraNode }   an Outside Camera of the controlled vehicle at the world
---       pose x, y, z, yaw (the engine only reads it); StubScene.updateCamera() runs onVehicleCameraUpdate
---   StubScene.onFoot(options) -> { parent, yawNode, firstPersonCamera }   (a player on foot)
---       options: x, y, z, yaw. StubScene.updateCamera() then runs onPlayerCameraUpdate.
-
     StubScene = {}
     local nodes = {}
     StubScene.nodes = nodes

@@ -1,36 +1,20 @@
--- ====================================================================
--- FS25 VR Companion Mod: Core Subsystem
--- Manages map lifecycle (loadMap, deleteMap, update), GUI visibility polling,
--- camera/vehicle discovery, speed limit dt=0 guards, and mission loop hooks.
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
 
--- The release this Companion Mod is: the <version> of modDesc.xml, which a test pins this constant to. The Injector is released
--- with it, so the two are the same number; the handshake passes it to the Injector, and a map load compares it with the
--- Injector's (see VRCompanion:describeVersionMismatch). Not read from the game's mod manager, so nothing depends on an engine API.
 VRCompanion.VERSION = "1.2.0.0"
 
--- Every Injector up to release 1.2 reported this fixed text as its version, whatever release it was.
 VRCompanion.LEGACY_INJECTOR_VERSION = "1.0.0"
 
--- How long the version warning blinks, in milliseconds: long enough to read in the headset.
 VRCompanion.VERSION_WARNING_MS = 8000
 
--- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
--- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
 VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
 
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
 VRCompanion.frameTicks = VRCompanion.frameTicks or 0
 VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
--- The menu quad is shown (presentation); see VRCompanion:isMenuQuadShown
 VRCompanion.isMenuVisible = (VRCompanion.isMenuVisible ~= nil) and VRCompanion.isMenuVisible or false
--- A menu takes the input; see VRCompanion:doesMenuTakeInput
 VRCompanion.menuTakesInput = (VRCompanion.menuTakesInput ~= nil) and VRCompanion.menuTakesInput or false
--- A Stereo Dialog is what is showing instead of the menu quad (ADR-0032); see VRCompanion:isStereoDialogShowing
 VRCompanion.stereoDialogShowing = (VRCompanion.stereoDialogShowing ~= nil) and VRCompanion.stereoDialogShowing or false
 VRCompanion.guiVisibilityInitialized = (VRCompanion.guiVisibilityInitialized ~= nil) and VRCompanion.guiVisibilityInitialized or false
 VRCompanion.vehicleCameraHooked = (VRCompanion.vehicleCameraHooked ~= nil) and VRCompanion.vehicleCameraHooked or false
@@ -41,25 +25,14 @@ VRCompanion.vehicleSpeedHooked = (VRCompanion.vehicleSpeedHooked ~= nil) and VRC
 VRCompanion.stereoToggled = (VRCompanion.stereoToggled ~= nil) and VRCompanion.stereoToggled or false
 VRCompanion.inMissionUpdate = (VRCompanion.inMissionUpdate ~= nil) and VRCompanion.inMissionUpdate or false
 
--- An engine global by name, or nil when the game does not have it: the engine's functions and tables are read through
--- this, so that one that is missing is a nil to test for and not an error. Virtual Hands and Wheel Grab alias it as
--- their local `engine`; this file loads before both.
 function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
--- ---- Who aims the look ray ----------------------------------------------------------------------------------
--- The game's Player:getLookRay is wrapped once, as the shared wrap "lookRay" of VRCompanionGameWraps.lua, for as long as a
--- subsystem that aims holds the wrap (Hand Tools and Object Grab each hold it, so that one giving up leaves the other aiming). The wrap asks each subsystem
--- that can aim, in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem
--- registers by name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for
--- that player (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand
--- points).
 VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
 
 local lookRayAimers = {}
 
--- Registers (or replaces) the aimer of a subsystem named in LOOK_RAY_AIMER_ORDER. Returns whether it was taken.
 function VRCompanion:registerLookRayAimer(name, aimer)
     if type(aimer) ~= "function" then return false end
     for _, known in ipairs(VRCompanion.LOOK_RAY_AIMER_ORDER) do
@@ -71,8 +44,6 @@ function VRCompanion:registerLookRayAimer(name, aimer)
     return false
 end
 
--- The ray the first aiming subsystem answers for `player`, or nil (the game's own ray). An aimer that raises is not aiming: it is
--- logged once, by name, with its error, and the next one is asked.
 local aimersLoggedAsRaising = {}
 
 function VRCompanion:getAimedLookRay(player)
@@ -90,75 +61,10 @@ function VRCompanion:getAimedLookRay(player)
     return nil
 end
 
--- ---- The subsystem registry ---------------------------------------------------------------------------------------
--- A subsystem (a feature in its own file: Desktop Mirror, Hand Tools, ...) registers itself by name when its file loads, with the
--- hooks it needs, and the core runs them. Adding a subsystem is its file plus a line in modDesc.xml, not an edit of the core's lists.
---
---   VRCompanion:registerSubsystem(name, {
---       mapLoad         = function(self) end,        -- map load: apply the saved setting, wrap the game's classes, ...
---       mapUnload       = function(self) end,        -- map unload: undo what mapLoad did
---       update          = function(self, dt) end,    -- every update
---       updateEarly     = function(self, dt) end,    -- every update, before the core polls the GUI (see below); rarely needed
---       saveSettings    = function(self, xmlFile, xml) end,   -- saveConfiguration: write its settings with xml.setBool / setFloat /
---                                                             -- setString / setInt (the engine's setters, any may be nil)
---       loadSettings    = function(self, xmlFile, xml) end,   -- loadConfiguration: read them back with xml.has / getBool / getFloat
---                                                             -- / getString / getInt; a key that is missing keeps the current value
---       consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
---   })
---
--- A subsystem owns its settings' keys in settings.xml; the settings code (VRCompanionConfig.lua) opens the file, writes and reads
--- the core's own settings (HUD Safe Area, HUD Groups and their visibility, the Controls group's expanded state, HUD Depth, the HUD
--- load alert, the Recenter Action mode, Stereo Presentation Mode, HUD state, Snap Turn angle, the DLSS near planes) and runs the
--- hooks, but names no subsystem. A load hook only stores the value; sending it to VRBridge is its mapLoad's job (every load hook
--- does only that). A subsystem that wraps a game function does it through the shared wrap helper (VRCompanionGameWraps.lua), which
--- the registry does not call: the subsystem wraps from its own hooks (mapLoad, or its update for a class that appears later) and
--- lifts its wraps in its mapUnload.
---
--- Every field but the name is optional; `self` is the Companion Mod the run point was called on (hooks are called as methods, with
--- plain functions, so a hook that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and
--- keeps its place. A bad name, a hook that is not a function and a console command without a name, a description or a method
--- raise when the file loads, not when the map does.
---
--- Order. Map-load and update hooks run in registration order, which is modDesc.xml order; map-unload hooks run in reverse. Where
--- two subsystems need an order, their file order gives it and the registration says so in a comment. The core's own steps come
--- first and are not hooks: the handshake with VRBridge, the engine's stereo and head tracking toggles, the camera and mission
--- hooks and loadConfiguration. The run points in the core are:
---   loadMap   runSubsystemMapLoad        after the handshake and loadConfiguration, so a hook sends VRBridge the setting its load
---                                        hook stored; before the DLSS near plane is sent (neither reads what the other writes,
---                                        see loadMap) and before the HUD load alert, which names the HUD state the HUD's hook set
---   loadMap   addSubsystemConsoleCommands   with the console commands, after the core's own list
---   update    runSubsystemUpdateEarly    right before the core polls the GUI visibility (pollGuiVisibility), so a hook that has to
---                                        change what the poll sees (the fish catch answers its dialog, which must be gone when the
---                                        poll looks) runs here, in registration order; for hooks that truly need it, not a default
---   update    runSubsystemUpdate         after the core's own update steps, so a hook sees this update's GUI poll and vehicle
---                                        transition; before applyDlssNearClip, which reads only the controlled vehicle and its
---                                        camera, which no update hook changes
---   deleteMap runSubsystemMapUnload      the last step of the map unload, after the core's own teardown: removes a subsystem's
---                                        console commands, then runs its mapUnload, subsystems in reverse order
---   saveConfiguration runSubsystemSaveSettings   after the core's HUD settings, before the Stereo Presentation Mode, the HUD
---                                        state, the Snap Turn angle and the DLSS near planes, in registration order
---   loadConfiguration runSubsystemLoadSettings   at the same place in the load (after the HUD Groups, before the Snap Turn angle,
---                                        the DLSS near planes, the HUD state and the Stereo Presentation Mode), in registration
---                                        order. Every load hook stores only its own fields, so none needs another's to have run
---                                        first; one that does says so in a comment at its registration
--- Three steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
--- (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace), the menu's
--- background camera (right after the GUI poll) and the Input subsystem's check of the VR action events (before the vehicle
--- transition, see updateActionEvents in VRCompanionInput.lua).
---
--- A hook that raises is caught: it is logged once per subsystem and hook, as
---   [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload|saveSettings|loadSettings> hook raised: <error>
--- and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
--- raise in a hook, the Motion Controllers' update included, does not reach the caller of update or of loadMap; the log line is
--- how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
--- is kept for the life of the Lua state and is not cleared at map unload (a hook that raised on one map is not logged again on
--- the next: the same fault every time is one line, not one per map; test_subsystem_registry.cpp pins it).
-local subsystems = {}                -- { name = <string>, hooks = <table> } in registration order
--- The subsystems with an updateEarly / update hook, in registration order, as { name = <string>, hook = <function> }: built when a
--- subsystem registers, so that an update loops over the few that update and not over every subsystem (it runs every frame)
+local subsystems = {}
 local updateEarlyHooks = {}
 local updateHooks = {}
-local hooksLoggedAsRaising = {}      -- "<name>/<hook>" -> true
+local hooksLoggedAsRaising = {}
 
 local function checkConsoleCommands(name, commands)
     if commands == nil then return end
@@ -236,8 +142,6 @@ function VRCompanion:runSubsystemMapLoad()
     end
 end
 
--- The settings run points (saveConfiguration and loadConfiguration in VRCompanionConfig.lua call them with the open settings file
--- and the engine's XML setters or getters), in registration order
 function VRCompanion:runSubsystemSaveSettings(xmlFile, setters)
     for _, subsystem in ipairs(subsystems) do
         runSubsystemHook(self, subsystem, "saveSettings", xmlFile, setters)
@@ -259,7 +163,6 @@ function VRCompanion:addSubsystemConsoleCommands()
     end
 end
 
--- The two update run points run every frame: plain loops over the flat lists, no allocation
 function VRCompanion:runSubsystemUpdateEarly(dt)
     for i = 1, #updateEarlyHooks do
         local entry = updateEarlyHooks[i]
@@ -287,7 +190,6 @@ function VRCompanion:runSubsystemMapUnload()
         runSubsystemHook(self, subsystem, "mapUnload")
     end
 end
--- Every console command the core registers on map load: map load adds them and map unload removes them, both from this one list.
 VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
     { name = "vrHudGroup", description = "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", method = "consoleCommandSetHudGroup" },
@@ -318,17 +220,12 @@ VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudGroupShow", description = "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", method = "consoleCommandHudGroupShow" },
 }
 
--- What the version mismatch warning calls the Injector, or nil when it is the same release as this Companion Mod (or reports
--- none, which no release does). An Injector that reports the fixed text of the releases up to 1.2 is older(): the number would
--- say nothing; any other is version(injectorVersion).
 local function mismatchedInjector(self, injectorVersion, older, version)
     if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
     if injectorVersion == self.LEGACY_INJECTOR_VERSION then return older() end
     return version(injectorVersion)
 end
 
--- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release, else the sentence for
--- log.txt (in English).
 function VRCompanion:describeVersionMismatch(injectorVersion)
     local injectorText = mismatchedInjector(self, injectorVersion,
         function() return "an older version" end,
@@ -338,8 +235,6 @@ function VRCompanion:describeVersionMismatch(injectorVersion)
         self.VERSION, injectorText)
 end
 
--- The same warning as the player reads it on the screen: in the game's language, "FS25 VR: " and the sentence in English otherwise.
--- log.txt keeps the English sentence (describeVersionMismatch).
 function VRCompanion:describeVersionMismatchOnScreen(injectorVersion)
     local injectorText = mismatchedInjector(self, injectorVersion,
         function() return VRCompanion.getLocalisedText("vrVersion_injectorOlder", "an older version") end,
@@ -353,18 +248,13 @@ end
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
 
-    -- Proactively trigger native detour in case loadMap executes before any camera update
     if VRBridge == nil and type(isHeadTrackingAvailable) == "function" then
         pcall(isHeadTrackingAvailable)
     end
 
-    -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false). A core step, not a Stereo
-    -- hook, so that it tells VRBridge before the handshake below. Leaving the 2D view resets the Injector's sub-pass index and
-    -- frame parity when it changes its state, and the handshake aligns both to 0 again, so the first frame starts aligned.
     self:set2DViewActive(false)
     self:resetToggleViewDebounce()
 
-    -- 1. Perform native-to-Luau handshake via VRBridge
     local versionWarning = nil
     local versionWarningOnScreen = nil
     if VRBridge ~= nil then
@@ -374,15 +264,11 @@ function VRCompanion:loadMap(name)
             ready = VRBridge.isReady()
         end
 
-        -- The first argument is the optional rendering mode, left to the Injector. The second is this mod's version: an Injector
-        -- from before it existed ignores it.
         local handshakeResult = nil
         if type(VRBridge.handshake) == "function" then
             handshakeResult = VRBridge.handshake(nil, self.VERSION)
         end
 
-        -- Both versions go to log.txt on every load, matching or not; a mismatch is a warning there and on the screen
-        -- (shown at the end of the load, so that the HUD notice does not replace it)
         local injectorVersion = type(handshakeResult) == "table" and handshakeResult.version or VRBridge.version
         print(string.format("[FS25_VR] Versions: Companion Mod %s, Injector %s.", self.VERSION, tostring(injectorVersion)))
         versionWarning = self:describeVersionMismatch(injectorVersion)
@@ -394,7 +280,6 @@ function VRCompanion:loadMap(name)
         if handshakeResult and handshakeResult.success == true then
             self.handshakeComplete = true
 
-            -- Query and synchronize native rendering mode state
             local nativeMode = handshakeResult.renderingMode
             if nativeMode == nil and type(VRBridge.getRenderingMode) == "function" then
                 nativeMode = VRBridge.getRenderingMode()
@@ -422,7 +307,6 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] VRBridge not detected. Running in standard 2D Pass-Through Mode.")
     end
 
-    -- 2. Invoke engine undocumented stereo rendering toggles
     if type(setStereoRendering) == "function" then
         setStereoRendering(true)
         self.stereoToggled = true
@@ -431,19 +315,16 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] Engine stereo rendering toggle 'setStereoRendering' not found in Luau environment.")
     end
 
-    -- 3. Report the stereo requirement (a fixed verdict of the Injector, ADR-0017)
     if VRBridge ~= nil then
         print(string.format("[FS25_VR] Stereo presentation: AFR fallback required: %s.",
             tostring(self:requiresAfrFallback())))
     end
 
-    -- 3b. Ensure engine head tracking setting is enabled
     if g_gameSettings ~= nil and type(g_gameSettings.setValue) == "function" and GameSettings ~= nil and GameSettings.SETTING ~= nil and GameSettings.SETTING.IS_HEAD_TRACKING_ENABLED ~= nil then
         pcall(function() g_gameSettings:setValue(GameSettings.SETTING.IS_HEAD_TRACKING_ENABLED, true) end)
         print("[FS25_VR] Confirmed game setting IS_HEAD_TRACKING_ENABLED is active.")
     end
 
-    -- 4. Hook camera and HUD systems for 6DOF tracking and selective telemetry filtering
     self:hookVehicleCamera()
     self:hookPlayerCamera()
     self:hookEnterable()
@@ -451,36 +332,16 @@ function VRCompanion:loadMap(name)
     self:hookHud()
     self:hookMissionUpdate()
 
-    -- (The Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made by the Stereo subsystem, and the VR action events
-    -- are registered by the Input subsystem, in their mapLoad hooks below, after the GUI poll and loadConfiguration. Neither of
-    -- those needs them: the poll reads the GUI and tells VRBridge, and on a map that has just loaded it restores no menu camera
-    -- and applies no HUD state (no menu was shown before); loadConfiguration reads settings.xml, sends the Stereo Presentation
-    -- Mode to VRBridge (setRenderingMode, which touches no node), works out the HUD anchors (configureHudSafeArea, fields only)
-    -- and, on a first run, writes the file. None of them reads an eye node, the listener, the camera settings Stereo saves
-    -- (origCamSettings) or an action event id, and the nodes are made from defaults no setting changes.)
-
-    -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
     self.menuTakesInput = false
     self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
-    -- 7. Read the settings (the HUD Safe Area, the HUD Groups and the saved HUD state are applied by the HUD's mapLoad hook)
     self:loadConfiguration()
-    -- 7-. The registered subsystems load. They come after the handshake above and after the settings are read: Desktop Mirror,
-    -- FOV Overscan, Menu Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe
-    -- Area and the HUD state the player last chose. The DLSS near plane below may come before or after them: the HUD hook writes
-    -- the HUD (its displays, the anchors, hudState) and asks VRBridge for nothing, and the near plane reads the camera mode (the
-    -- controlled vehicle and its camera) and the near plane settings, so neither reads what the other writes. The re-wraps of Hand
-    -- Tools, Object Grab, Wheel Grab and the Animated Objects trigger callback run here too: they wrap game classes the HUD, the
-    -- near plane and the console commands do not call into at map load. The HUD load alert below comes after them, because it
-    -- names the HUD state the HUD hook set.
     self:runSubsystemMapLoad()
-    -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
 
-    -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
         for _, command in ipairs(self.CORE_CONSOLE_COMMANDS) do
             addConsoleCommand(command.name, command.description, command.method, self)
@@ -499,7 +360,6 @@ function VRCompanion:loadMap(name)
         end
     end
 
-    -- 10. The Injector is of another release: say so after the HUD notice, so that one does not replace it. Nothing else changes.
     if versionWarning ~= nil then
         local mission = g_currentMission or _G.g_currentMission
         if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
@@ -520,8 +380,6 @@ function VRCompanion:pollGuiVisibility()
         end
     end
 
-    -- A visible GUI takes the input. It also shows the menu quad, unless it is a Stereo Dialog, which stays in the
-    -- stereoscopic view. In 2D Floating Window Mode the presentation is already the quad, so a Stereo Dialog is any other menu.
     local wasStereoDialogShowing = self.stereoDialogShowing == true
     self.stereoDialogShowing = isGuiVisible and not self.is2DViewActive and self:findStereoDialog(gui) ~= nil
     local menuQuadShown = isGuiVisible and not self.stereoDialogShowing
@@ -555,7 +413,6 @@ function VRCompanion:pollGuiVisibility()
             end
         end
     end
-    -- A Stereo Dialog does not switch the presentation, so it is told apart from the menu quad in the log.
     if self.stereoDialogShowing and not wasStereoDialogShowing then
         print("[FS25_VR] In-game GUI Stereo Dialog opened; kept the stereoscopic view, the menu takes the input.")
     elseif wasStereoDialogShowing and not self.stereoDialogShowing then
@@ -564,19 +421,10 @@ function VRCompanion:pollGuiVisibility()
     return isGuiVisible
 end
 
--- The Stereo Dialogs (ADR-0032): the game dialogs that stay in the stereoscopic view instead of getting the menu quad, by the
--- name the game gives the dialog in g_gui.currentDialogName. A dialog joins this list only after it is tested in the headset;
--- one that is not on it gets the quad. Measured in the game (ticket #143): the fish catch dialog (Highlands Fishing DLC) is
--- "FishDialog", a yes/no dialog whose buttons are answered by the gamepad's MENU_ACCEPT (SELL) and MENU_BACK (RELEASE).
 VRCompanion.STEREO_DIALOGS = {
     FishDialog = true,
 }
 
--- The Stereo Dialog that is the only thing the game shows, as the dialog's root element (g_gui.dialogs[1], whose `target` is
--- its controller object and whose buttons and position later tickets work on), or nil. A dialog opened over a screen (the pause
--- menu sets g_gui.currentGuiName; a dialog does not) or over another dialog is not alone, and anything that cannot be read as
--- a lone listed dialog counts as a menu, so that the player is never left in stereo with a GUI they cannot use.
--- The GUI fields read in one protected call. Defined once, so that polling a menu every update makes no closure.
 local function readLoneStereoDialog(gui)
     local screen = gui.currentGuiName
     if screen ~= nil and screen ~= "" then return nil end
@@ -594,14 +442,6 @@ function VRCompanion:findStereoDialog(gui)
     return ok and root or nil
 end
 
--- A visible game GUI means two different things, and every reader asks for the one it needs:
---   isMenuQuadShown()  - the presentation: the menu quad is what the player sees (VRBridge is told so, the
---                        stereo pipeline and HUD convergence stand down, the menu background camera runs, the
---                        head is not placed in the world, the Virtual Hands are off)
---   doesMenuTakeInput() - the input: a menu has the controls (locomotion, Snap Turn and Wheel Grab are refused,
---                        the menu buttons and the Virtual Gamepad go to the menu)
--- pollGuiVisibility sets both together. The quad is the field isMenuVisible (the name VRBridge uses for it); a
--- shown quad always takes the input, so doesMenuTakeInput also holds while it is shown.
 function VRCompanion:isMenuQuadShown()
     return self.isMenuVisible == true
 end
@@ -610,9 +450,6 @@ function VRCompanion:doesMenuTakeInput()
     return self.menuTakesInput == true or self.isMenuVisible == true
 end
 
--- A Stereo Dialog is showing in the stereoscopic view: a menu takes the input but the quad is not shown. The dialog is answered
--- with the gamepad's own menu buttons through the Virtual Gamepad, so the Companion Mod's quad menu (the Pointer Ray, the grip
--- and lower face button as back, the thumbstick scroll) and the Virtual Gamepad's taking of every input are not engaged.
 function VRCompanion:isStereoDialogShowing()
     return self.stereoDialogShowing == true
 end
@@ -671,8 +508,6 @@ function VRCompanion:getVehicleActiveCamera(veh)
     return nil
 end
 
--- The camera mode the DLSS near plane is configured per: a vehicle's inside camera (cab), any other
--- vehicle camera (outside), or the player camera (on foot).
 function VRCompanion:getDlssNearClipMode()
     local veh = self:getControlledVehicle()
     if veh == nil then return self.DLSS_NEAR_CLIP_ON_FOOT end
@@ -681,24 +516,18 @@ function VRCompanion:getDlssNearClipMode()
     return self.DLSS_NEAR_CLIP_OUTSIDE
 end
 
--- The near plane in metres (0 = auto) configured for the camera the player is looking through.
 function VRCompanion:getDlssNearClipForCurrentCamera()
     local cab, outside, onFoot = self.dlssNearClipCab, self.dlssNearClipOutside, self.dlssNearClipOnFoot
-    -- One value for every mode needs no camera lookup
     if cab ~= nil and cab == outside and outside == onFoot then return cab end
     local mode = self:getDlssNearClipMode()
     return self[self.DLSS_NEAR_CLIP_FIELDS[mode]] or self.DEFAULT_DLSS_NEAR_CLIPS[mode]
 end
 
--- Sends the current camera's near plane to the Injector when it differs from the one last sent, so
--- entering or leaving a vehicle or switching its camera takes effect on the next update. force resends
--- it anyway. Returns the bridge's result when it sends, otherwise false.
 function VRCompanion:applyDlssNearClip(force)
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge == nil or type(bridge.setDlssNearClip) ~= "function" then return false end
     local meters = self:getDlssNearClipForCurrentCamera()
     if not force and self.appliedDlssNearClip == meters then return false end
-    -- Recorded even when the bridge has no NGX interceptor, so that is not retried every frame
     self.appliedDlssNearClip = meters
     return bridge.setDlssNearClip(meters) == true
 end
@@ -744,9 +573,6 @@ function VRCompanion:hookEnterable()
     end
 end
 
--- Wraps target.updateVehicleSpeed with the dt=0 guard. Vehicle instances keep their
--- original in a weak-keyed table so a vehicle that is gone can be collected; classes are
--- kept strongly (they live as long as the game).
 function VRCompanion:hookTableSpeed(target, label)
     if target == nil or type(target.updateVehicleSpeed) ~= "function" then
         return
@@ -771,9 +597,6 @@ function VRCompanion:hookTableSpeed(target, label)
     end
 end
 
--- Installs the dt=0 guards on the named classes, the mission's vehicles and Ferry.
--- scanGlobals additionally walks every global table for classes with updateVehicleSpeed,
--- which only the map load install does: it is too slow to repeat during play.
 function VRCompanion:installVehicleSpeedGuards(scanGlobals)
     if self.origVehicleSpeedFuncs == nil then
         self.origVehicleSpeedFuncs = setmetatable({}, { __mode = "k" })
@@ -794,7 +617,6 @@ function VRCompanion:installVehicleSpeedGuards(scanGlobals)
         end
     end
 
-    -- Scan active vehicles in g_currentMission
     local mission = g_currentMission or (_G and _G.g_currentMission)
     if mission ~= nil and mission.vehicles ~= nil then
         for _, veh in pairs(mission.vehicles) do
@@ -817,16 +639,13 @@ function VRCompanion:installVehicleSpeedGuards(scanGlobals)
     end
 
     self.vehicleSpeedHooked = true
-    -- Recorded here so the install from loadMap also restarts the slow retry cadence.
     self.lastVehicleSpeedHookTick = self.frameTicks or 0
 end
 
--- Map load install: also finds custom vehicle classes among the globals.
 function VRCompanion:hookVehicleSpeed()
     self:installVehicleSpeedGuards(true)
 end
 
--- Retry cadence and vehicle transitions: named classes and the mission's vehicles only.
 function VRCompanion:refreshVehicleSpeedGuards()
     self:installVehicleSpeedGuards(false)
 end
@@ -897,8 +716,6 @@ end
 
 local traceback = (debug ~= nil) and debug.traceback or nil
 
--- Appends the traceback from where an error was raised, so rethrowing it from the
--- outermost frame-check scope does not hide its origin.
 local function withRaiseTraceback(err)
     if traceback ~= nil and type(err) == "string" then
         return traceback(err, 2)
@@ -906,15 +723,11 @@ local function withRaiseTraceback(err)
     return err
 end
 
--- Closes a nested frame-check scope after a normal return. An error skips this; the
--- outermost scope then closes every scope opened inside it.
 local function endNestedFrameChecks(self, ...)
     self:endFrameChecks()
     return ...
 end
 
--- Closes the outermost frame-check scope however the call ended, then passes on its
--- results or rethrows its error, so an error never leaves a scope open.
 local function endOutermostFrameChecks(self, ok, ...)
     self:resetFrameChecks()
     if not ok then
@@ -924,9 +737,6 @@ local function endOutermostFrameChecks(self, ok, ...)
     return ...
 end
 
--- Runs fn(self, ...) inside a frame-check scope. Only the outermost scope runs fn
--- protected, so the game's own mission update is not wrapped twice when the game
--- runs VRCompanion:update inside it.
 local function runWithFrameChecks(self, fn, ...)
     local outermost = (self.frameCheckDepth or 0) == 0
     self:beginFrameChecks()
@@ -943,7 +753,6 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return runWithFrameChecks(self, self.runMissionUpdate, missionSelf, dt, origUpdateFn, ...)
 end
 
--- Clears the running mark after the game's update returned, and passes on its results.
 local function endAfrGameUpdate(self, ...)
     self.inMissionUpdate = false
     return ...
@@ -961,9 +770,6 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         self.deferRenderingCameraBind = false
         self:endEyeProjectionScope()
         self:releaseDualPassPhysicsPause()
-        -- The game's update runs marked as running, so a second wrapper further down the
-        -- class chain passes straight through and the mod's update logic runs once. An error
-        -- skips the clear here; the outermost frame-check scope clears it.
         self.inMissionUpdate = true
         if self.perfTracing then
             self:perfTraceBegin("gameUpdate")
@@ -978,13 +784,8 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     local subPass = self:getSubPassIndex() % 2
-    -- Sub-pass 0 advances the simulation and sub-pass 1 replays it frozen; which eye each
-    -- sub-pass renders alternates between pairs (see getDualPassEye).
     local eye = self:getDualPassEye()
 
-    -- One eye projection fetch and one rendering camera bind per sub-pass: camera
-    -- updates inside the sub-pass share the cached projection and leave the bind to
-    -- the single bindRenderingCamera call at the end.
     self:beginEyeProjectionScope()
     self.deferRenderingCameraBind = true
 
@@ -992,7 +793,6 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     local targetCam = (eye == 1) and camRight or camLeft
 
     if subPass == 1 then
-        -- Sub-Pass 1: Freeze simulation at timestamp T.
         self.accumulatedPass1Dt = (self.accumulatedPass1Dt or 0.0) + rawDt
         if self.accumulatedPass1Dt > 200.0 then
             self.accumulatedPass1Dt = 200.0
@@ -1002,28 +802,23 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
             self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, eye)
         end
 
-        -- Synchronize the eye's camera transforms without running engine simulation
         self:finishSubPass(subPass, eye, targetCam, rawDt)
         self:updateHudConvergence(0.0)
-        -- The engine's physics runs natively whatever dt the update gets (VRCompanionDualPassPhysics.lua)
         self:applyDualPassPhysicsPause(subPass, rawDt)
 
         return nil
     end
 
-    -- Sub-Pass 0 (Left Eye): Advance simulation with accumulated delta time.
     local effectiveDt = rawDt + (self.accumulatedPass1Dt or 0.0)
     self.accumulatedPass1Dt = 0.0
     if effectiveDt > 200.0 then
         effectiveDt = 200.0
     end
 
-    -- Update camera projection for active eye
     if targetCam ~= nil then
         self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, eye)
     end
 
-    -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
     self.inMissionUpdate = true
     if self.perfTracing then self:perfTraceBegin("gameUpdate") end
     local ok, res = pcall(origUpdateFn, missionSelf, effectiveDt, ...)
@@ -1045,8 +840,6 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return res
 end
 
--- Runs one camera step of a sub-pass; an error is logged instead of escaping, so the
--- sub-pass still ends with its single camera bind and closes its projection scope.
 function VRCompanion:runSubPassStep(subPass, fn, ...)
     local ok, err = pcall(fn, self, ...)
     if not ok and self.lastMissionUpdateError ~= tostring(err) then
@@ -1056,7 +849,6 @@ function VRCompanion:runSubPassStep(subPass, fn, ...)
 end
 
 function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam, frameDt)
-    -- The eye sync's camera update records whether the game is showing the camera it tracks
     self.trackedCameraShown = nil
     self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
     self.deferRenderingCameraBind = false
@@ -1068,10 +860,6 @@ function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam, frameDt)
     self:endEyeProjectionScope()
 end
 
--- Tells the Injector which camera this sub-pass rendered with: the bound eye camera's world
--- transform and projection, keyed by the eye (the sub-pass index alone does not name it under Eye
--- Order Alternation). The Injector stamps it with its rendered-frame counter. Any missing engine
--- query skips the report, which the Injector then treats as a frame without a camera record.
 function VRCompanion:reportEyeCamera(eyeIndex, camNode)
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge == nil or type(bridge.reportCameraRecord) ~= "function" then return false end
@@ -1105,11 +893,6 @@ function VRCompanion:reportEyeCamera(eyeIndex, camNode)
         offsetX or 0, offsetY or 0)
 end
 
--- Alternate Frame Rendering renders one eye per frame, bound by the camera updates rather than a
--- sub-pass. Reports that eye's camera like a sub-pass does, so the Injector's motion vector correction
--- can re-aim the engine's vectors at the same eye's camera two frames back. Sequential Dual-Pass
--- reports from its mission update instead, so this stays silent there. An engine query failure costs a
--- missing record, never the camera update.
 function VRCompanion:reportAfrEyeCamera(eyeIndex, camNode)
     if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then return false end
     local ok, reported = pcall(self.reportEyeCamera, self, eyeIndex, camNode)
@@ -1176,10 +959,8 @@ end
 
 function VRCompanion:runUpdate(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
-    -- `vrPerfTrace`: the Injector ends a trace by itself
     if self.perfTracing then self:refreshPerfTracing() end
 
-    -- Synchronize 2D view active state with native VRBridge if changed externally
     if VRBridge ~= nil and type(VRBridge.getIs2DViewActive) == "function" then
         local bridge2D = VRBridge.getIs2DViewActive()
         if bridge2D ~= nil and bridge2D ~= self.is2DViewActive then
@@ -1187,10 +968,8 @@ function VRCompanion:runUpdate(dt)
         end
     end
 
-    -- The registered subsystems that update before the poll (the fish catch answers its dialog, so that it is gone when the poll looks)
     self:runSubsystemUpdateEarly(dt)
 
-    -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
     if self:isMenuQuadShown() then
@@ -1215,8 +994,6 @@ function VRCompanion:runUpdate(dt)
     if self.guiDrawHook == nil then
         self:hookGuiDraw()
     end
-    -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
-    -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
     local speedHookRetryDue = self.vehicleSpeedHooked
         and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
     if not self.vehicleSpeedHooked then
@@ -1225,35 +1002,26 @@ function VRCompanion:runUpdate(dt)
         self:refreshVehicleSpeedGuards()
     end
 
-    -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
-    -- (A direct call, not an update hook: its errors reach the caller of update, which the tests rely on)
     self:updateHudConvergence(dt)
 
-    -- Keep in-engine action events active across context transitions, and register them all again after a binding change
-    -- (Input; before the vehicle transition below, which registers them again on its own)
     self:updateActionEvents()
 
-    -- Check for vehicle transitions (entering/exiting/switching vehicle)
     local curVehicle = self:getControlledVehicle()
     if self.lastControlledVehicle ~= curVehicle then
         local oldVeh = self.lastControlledVehicle
         self.lastControlledVehicle = curVehicle
-        -- A new vehicle may have just been spawned/entered: re-run the guard install.
         self:refreshVehicleSpeedGuards()
         self:onVehicleTransition(oldVeh, curVehicle)
     end
 
-    -- The registered subsystems update, after the core's own steps above
     self:runSubsystemUpdate(dt)
 
-    -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
     self:applyDlssNearClip(false)
 end
 
 function VRCompanion:deleteMap()
     print("[FS25_VR] Unloading Companion Mod from map.")
 
-    -- Hand rendering back to the game's active camera before the Dual Eye Camera Nodes go away
     self.deferRenderingCameraBind = false
     self:restoreGameActiveCamera()
 
@@ -1263,7 +1031,6 @@ function VRCompanion:deleteMap()
         self.stereoToggled = false
     end
 
-    -- Unhook hooked camera functions cleanly to prevent accumulating wrapper layers
     if self.origVehicleCameraUpdate ~= nil and VehicleCamera ~= nil then
         VehicleCamera.update = self.origVehicleCameraUpdate
         self.origVehicleCameraUpdate = nil
@@ -1297,14 +1064,11 @@ function VRCompanion:deleteMap()
         self.origEnterableSetActiveCameraIndex = nil
     end
 
-    -- Unhook HUD display hooks cleanly
     self:unhookHud()
     self:unhookGuiDraw()
 
-    -- Unhook mission update loop cleanly
     self:unhookMissionUpdate()
 
-    -- Unhook vehicle speed guards cleanly
     self:unhookVehicleSpeed()
 
     self.inMissionUpdate = false
@@ -1337,39 +1101,12 @@ function VRCompanion:deleteMap()
     self.passThroughMode = nil
     self.headTrackingEnabled = true
 
-    -- (Stereo deletes its nodes and puts the cameras and the 2D view back, the HUD goes back to the full screen, Input lets go of
-    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. The registry runs
-    -- them after the core's teardown above and, in reverse file order, after the subsystems registered later. What that order
-    -- has to give:
-    --  * The HUD unloads before Stereo (it registers after it). The order is kept because it is the order of the unload before
-    --    the registry, where the HUD went back to the full screen before Stereo left 2D Floating Window Mode, so that unloading
-    --    behaves as it did (the HUD's unload reads whether that mode is on). Stereo's mapUnload leaves the mode last of all,
-    --    with leave2DViewOnMapUnload rather than set2DViewActive: returning to VR would apply the HUD Safe Area and the HUD
-    --    state again after the HUD went back to the full screen, and leave the game's HUD anchors at the Safe Area.
-    --  * Within Stereo's mapUnload the nodes go before the camera settings are restored; the restore skips every camera that no
-    --    longer exists (entityExists), the eye nodes among them.
-    --  * Hand Tools unload before the Virtual Hands (they register after them): a tool hangs below a hand.
-    --  * Stereo's nodes go after VRBridge.onMapUnload, which does not matter: the Injector never sees a node; onMapUnload resets
-    --    only the Injector's own state (src/luau/vr_bridge.cpp, Lua_OnMapUnload), and Stereo only touches the scene.
-    --  * Nothing in the core's teardown needs what the hooks free: the eye nodes and the listener are read by the camera and hand
-    --    placement of an update (Stereo, Locomotion, Motion Controllers, Virtual Hands), never by a reset; the action event ids
-    --    are read by Input alone; the rotation states by the camera hooks, which are lifted at the top of this function.
-    --  * Nothing the four do reaches a wrap another subsystem's reset lifts: the HUD's displays, the message center, the cameras'
-    --    FOV and projection and the game's menu camera are not among the classes the subsystems wrap (Player.getLookRay,
-    --    HandTool, Drivable's steering, the animated objects' trigger callback, the attachable candidates, Interactive Control's
-    --    class).
-    --  * The other resets (Perf Trace, Fish Catch, Dual Pass Physics, the Motion Controllers' group) are described where the
-    --    Motion Controllers register; they touch only their own state, a wrap, the Injector's pad, cursor and trace, or the
-    --    hands' nodes.)
-
-    -- Remove console commands
     if removeConsoleCommand ~= nil then
         for _, command in ipairs(self.CORE_CONSOLE_COMMANDS) do
             removeConsoleCommand(command.name)
         end
     end
 
-    -- The registered subsystems unload, in reverse order, last of the map unload
     self:runSubsystemMapUnload()
 
 end

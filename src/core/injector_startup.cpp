@@ -16,7 +16,6 @@ namespace fs25vr {
 
 namespace {
 
-// The DLL load notification of ntdll (documented, but not declared in the Windows SDK headers).
 constexpr ULONG kDllNotificationReasonLoaded = 1;
 
 struct DllLoadedNotificationData {
@@ -31,9 +30,6 @@ using DllNotificationCallback = VOID(CALLBACK*)(ULONG reason, const DllLoadedNot
 using LdrRegisterDllNotificationFn = LONG(NTAPI*)(ULONG flags, DllNotificationCallback callback, PVOID context, PVOID* cookie);
 using LdrUnregisterDllNotificationFn = LONG(NTAPI*)(PVOID cookie);
 
-// Passes each caught factory call to the process's InjectorRuntime, which is created by the first one. The first call
-// also prepares the crash dump, before the runtime starts: a crash while it initializes OpenXR is the likeliest one.
-// Here and not in the proxy, since this runs once per process however many proxies the tests create.
 class RuntimeFactoryEntry final : public IDxgiFactoryEntry {
 public:
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory) override {
@@ -68,7 +64,6 @@ std::string ModulePath(HMODULE module) {
     return Narrow(path, static_cast<int>(length));
 }
 
-// Hooks the system's dxgi.dll, kept loaded from then on so the patched code never goes away under the hooks.
 void HookSystemDxgi(HMODULE systemDxgi, const char* when) {
     HMODULE pinned = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -87,7 +82,6 @@ bool IsSystemDxgiPath(const UNICODE_STRING* name) {
                                 static_cast<int>(expected.size()), TRUE) == CSTR_EQUAL;
 }
 
-// Runs with the loader lock held, after the module is mapped and before its own initialization.
 VOID CALLBACK OnDllNotification(ULONG reason, const DllLoadedNotificationData* data, PVOID) {
     if (reason != kDllNotificationReasonLoaded || !data || g_exportHooks.IsInstalled()) return;
     if (!IsSystemDxgiPath(data->FullDllName)) return;
@@ -99,19 +93,17 @@ FARPROC NtdllFunction(const char* name) {
     return ntdll ? GetProcAddress(ntdll, name) : nullptr;
 }
 
-} // namespace
+}
 
 bool IsFs25VrModule(HMODULE module) {
     if (!module) return false;
-    HRSRC info = FindResourceW(module, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(16));  // VS_VERSION_INFO, RT_VERSION
+    HRSRC info = FindResourceW(module, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(16));
     if (!info) return false;
     HGLOBAL loaded = LoadResource(module, info);
     const auto* data = loaded ? static_cast<const BYTE*>(LockResource(loaded)) : nullptr;
     const DWORD size = SizeofResource(module, info);
     if (!data || size == 0) return false;
 
-    // A String entry of the version resource: header, the key with its terminating null, padding to 32 bits, then
-    // the value. The resource itself starts 32-bit aligned.
     static constexpr wchar_t kKey[] = L"ProductName";
     static constexpr wchar_t kValue[] = L"FS25 VR";
     for (size_t offset = 0; offset + sizeof(kKey) <= size; offset += sizeof(wchar_t)) {
@@ -137,7 +129,6 @@ void StartInjector() {
         return;
     }
 
-    // From DllMain, where it is loader-lock safe: it loads no library and installs no hook.
     InstallCrashReporter();
 
     HMODULE systemDxgi = nullptr;
@@ -148,8 +139,6 @@ void StartInjector() {
         return;
     }
 
-    // Not loaded yet: the game's dxgi.dll is another one (ReShade's, for one), which loads the system's when the
-    // game first calls it.
     auto registerNotification = reinterpret_cast<LdrRegisterDllNotificationFn>(NtdllFunction("LdrRegisterDllNotification"));
     if (!registerNotification || registerNotification(0, &OnDllNotification, nullptr, &g_notificationCookie) < 0) {
         g_notificationCookie = nullptr;
@@ -176,4 +165,4 @@ void StopInjector() {
     g_exportHooks.Uninstall();
 }
 
-} // namespace fs25vr
+}

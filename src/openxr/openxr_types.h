@@ -23,14 +23,6 @@ struct HeadPose {
           isValid(valid), positionTracked(posTracked), orientationTracked(oriTracked) {}
 };
 
-// One hand's Motion Controller state as the Companion Mod sees it (VRBridge.getHandState).
-// Hand ids: 0 = left, 1 = right. `aim` is the aim pose in the head pose's convention: the same
-// reference space (the Recenter-aware local space) and the same predicted display time as the
-// head pose. `gripPose` is the grip pose (where a Virtual Hand is drawn) in the same convention, with
-// its own `gripTracked` flag: it is located separately from the aim pose, so either can be untracked
-// while the other is tracked (for example when the runtime refuses the grip pose, or can not locate it).
-// When no input is delivered at all (no input focus, a failed sync) the hand reports tracked = false,
-// a default aim pose, gripTracked = false, a default grip pose and zeroed inputs.
 struct HandState {
     bool tracked = false;
     HeadPose aim;
@@ -45,9 +37,6 @@ struct HandState {
     bool buttonUpper = false;   // upper face button: Touch Y (left) / B (right), Index B
     bool menu = false;          // menu button (Touch left only; Index has none)
 };
-// Where a Motion Controller's ray lands on the floating menu / 2D Floating Window Mode panel.
-// u runs left to right and v top to bottom, both 0..1 (the drawn cursor's convention, which is not
-// the game's GUI convention: the GUI's y runs bottom to top). A miss has hit = false and zeros.
 struct PanelHit {
     bool hit = false;
     float u = 0.0f;
@@ -55,8 +44,6 @@ struct PanelHit {
     float distance = 0.0f;  // metres along the ray
 };
 
-// The drawn menu cursor placed by the Pointer Ray instead of the desk mouse (ADR-0009). While active,
-// the cursor layer is drawn at (u, v) in PanelHit coordinates and the Win32 cursor is ignored.
 struct PointerCursorOverride {
     bool active = false;
     float u = 0.0f;
@@ -83,4 +70,4 @@ struct MenuCursorState {
     float size = kDefaultCursorSize;
 };
 
-} // namespace fs25vr
+}

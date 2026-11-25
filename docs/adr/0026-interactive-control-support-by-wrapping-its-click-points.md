@@ -22,3 +22,5 @@ Proposed.
 ## Consequences
 - An Interactive Control update that renames or reshapes the wrapped functions turns the wrap off, with a warning in the log, until the Companion Mod is updated. It must never break Interactive Control or the game.
 - The functions the wrap depends on are pinned down by a test against a stub of Interactive Control's Click Point class. That keeps the dependency visible and catches a change on our side.
+
+More decisions about this area, from the code comments: [ADR-0046](0046-motion-controller-and-pointer-decisions.md).

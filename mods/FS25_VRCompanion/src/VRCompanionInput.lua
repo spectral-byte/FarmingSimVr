@@ -1,15 +1,5 @@
--- ====================================================================
--- FS25 VR Companion Mod: Input Subsystem
--- Manages in-engine action events and console commands. All key and
--- gamepad bindings come from modDesc.xml via g_inputBinding, so players
--- rebind them in the game's Controls menu.
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
--- The input context the VR actions belong in: the vehicle's while controlling one, otherwise the player's on foot.
--- registerActionEvent adds to the context that is current, and at map load that is the loading screen's menu context,
--- which gameplay never uses: events registered there exist in g_inputBinding.events but never fire.
 function VRCompanion:getActionEventsContextName()
     if self:getControlledVehicle() ~= nil then
         return (Vehicle ~= nil and Vehicle.INPUT_CONTEXT_NAME) or "VEHICLE"
@@ -17,9 +7,6 @@ function VRCompanion:getActionEventsContextName()
     return (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
 end
 
--- The VR action events, one row each: the field holding the registered event id, the input action, the handler
--- (named, so it is looked up on VRCompanion when registering), the i18n text key and its fallback text, and the
--- field remembering that the event was logged this map. Adding an event means adding a row.
 VRCompanion.ACTION_EVENTS = {
     { idField = "hudToggleActionEventId", action = "VR_HUD_TOGGLE", handler = "onHudToggleAction",
         textKey = "input_VR_HUD_TOGGLE", fallbackText = "Toggle VR HUD Mode", loggedField = "hudToggleLoggedOnce" },
@@ -41,8 +28,6 @@ function VRCompanion:registerActionEvents(force)
         return
     end
 
-    -- Events in another context than the gameplay one (the menu context at map load, or the vehicle's after getting
-    -- out) move to it: they still exist there, so the check below alone would never notice.
     local contextName = self:getActionEventsContextName()
     local canPickContext = type(inputBinding.beginActionEventsModification) == "function"
         and type(inputBinding.endActionEventsModification) == "function"
@@ -50,11 +35,8 @@ function VRCompanion:registerActionEvents(force)
         force = true
     end
 
-    -- FS25 keys `events` by the event id registerActionEvent returns; `actionEvents`
-    -- is keyed by action name, so it must not be used for id lookups.
     local actionEvents = inputBinding.events
     if actionEvents == nil and not self.missingInputEventsLogged then
-        -- Without it the periodic check cannot see registered events and re-registers them every time.
         print("[FS25_VR] [Warning] g_inputBinding.events is missing; action events will be re-registered on every check.")
         self.missingInputEventsLogged = true
     end
@@ -75,7 +57,6 @@ function VRCompanion:registerActionEvents(force)
         self:registerActionEventsInContext(inputBinding, force, active)
         return
     end
-    -- A forced registration takes the old events out first, so a context never holds two of an action
     if force and self.actionEventsContextName ~= nil and type(inputBinding.removeActionEvent) == "function" then
         pcall(function()
             inputBinding:beginActionEventsModification(self.actionEventsContextName)
@@ -85,7 +66,6 @@ function VRCompanion:registerActionEvents(force)
             inputBinding:endActionEventsModification()
         end)
     end
-    -- Register into the gameplay context without switching to it, as PlayerInputComponent does from the UI context
     inputBinding:beginActionEventsModification(contextName)
     local ok, err = pcall(self.registerActionEventsInContext, self, inputBinding, force, active)
     inputBinding:endActionEventsModification()
@@ -96,10 +76,6 @@ function VRCompanion:registerActionEvents(force)
     end
 end
 
--- The game ties an action event to its action's bindings when the event is registered, so a binding changed in the
--- Controls screen only reaches an event registered after the change: Snap Turn kept firing from the right stick after
--- the player had moved it to smooth look. The game's own owners of events (the on-foot player, an entered vehicle)
--- register theirs again on MessageType.INPUT_BINDINGS_CHANGED; the VR events do the same, forced, at the next update.
 function VRCompanion:subscribeToInputBindingChanges()
     local messageCenter = g_messageCenter or _G.g_messageCenter
     local messageTypes = MessageType or _G.MessageType
@@ -127,7 +103,6 @@ function VRCompanion:onInputBindingsChanged()
     self.inputBindingsChanged = true
 end
 
--- Registers the VR action events that are not active (all of them when forced) in the context being registered into.
 function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
     for _, row in ipairs(self.ACTION_EVENTS) do
         if force or active[row.idField] ~= true then
@@ -159,7 +134,6 @@ function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
     end
 end
 
--- Usage text for vrHudSafeArea: the syntax followed by the current margins
 function VRCompanion:getHudSafeAreaUsage()
     return string.format("Usage: vrHudSafeArea <horizontal> <vertical>\n  margins %.2f to %.2f (horizontal) and %.2f to %.2f (vertical) from the screen edges, keeping warnings, notifications and other mods' HUDs inside the lens\n  current: horizontal=%.2f, vertical=%.2f",
         self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_HORIZONTAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_VERTICAL,
@@ -167,7 +141,6 @@ function VRCompanion:getHudSafeAreaUsage()
         self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
 end
 
--- A usable number: tonumber's nil for text and NaN are both rejected
 local function isNumber(v) return v ~= nil and v == v end
 
 function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
@@ -178,7 +151,6 @@ function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
     end
 
     self:configureHudSafeArea(horizontal, vertical)
-    -- 2D Floating Window Mode keeps the full-screen anchors; the Safe Area applies on returning to VR
     if not self.is2DViewActive then
         self:applyHudSafeArea()
     end
@@ -195,7 +167,6 @@ function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
         self.hudSafeAreaHorizontal, self.hudSafeAreaVertical)
 end
 
--- Usage text for vrHudGroup: the syntax followed by every group's current margins and scale
 function VRCompanion:getHudGroupUsage()
     local lines = {
         "Usage: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]",
@@ -223,7 +194,6 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
     end
 
     local layout = self:setHudGroupLayout(groupName, horizontal, vertical, scale)
-    -- 2D Floating Window Mode keeps the engine's layout; the margins apply on returning to VR
     if not self.is2DViewActive then
         self:repositionAllHudDisplays()
     end
@@ -232,7 +202,6 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            -- The group as the player typed it in the command
             mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_groupLayoutSet",
                 "VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)",
                 groupName, layout.marginX, layout.marginY, layout.scale), 2500)
@@ -248,7 +217,6 @@ function VRCompanion:consoleCommandSetHudState(stateStr)
         return "Usage: vrHudState <0=Hidden | 1=Streamlined | 2=Full>"
     end
     self:setHudState(st)
-    -- The next map starts in the state the player last chose
     self.persistedHudState = st
     self:saveConfiguration()
     local stateName = self.HUD_STATE_NAMES[st] or tostring(st)
@@ -502,7 +470,6 @@ end
 
 local DLSS_NEAR_CLIP_MODE_NAMES = { cab = "cab", outside = "outside camera", onFoot = "on foot" }
 
--- Metres from a console argument: a number >= 0, or "auto" (any case) for 0. nil when it is neither.
 local function parseDlssNearClip(arg)
     local meters = tonumber(arg)
     if meters == nil and type(arg) == "string" and string.lower(arg) == "auto" then
@@ -526,8 +493,6 @@ function VRCompanion:describeDlssNearClips()
         describeDlssNearClip(self.dlssNearClipOnFoot))
 end
 
--- Saves the near planes just set and sends the current camera's to the Injector; appends a note to
--- text when the bridge cannot take it.
 function VRCompanion:commitDlssNearClips(text)
     self:saveConfiguration()
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -630,12 +595,6 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
 
--- Keeps the VR action events registered: across context transitions (the vehicle's context and the player's on foot), every 30
--- ticks or when one is missing, and all of them again after a binding change. The core's update calls it between the HUD
--- convergence and the vehicle transition. The transition registers the events again, forced, so on the frame the vehicle changes
--- the game sees this check's registration and then the transition's, which takes out what came before. Called after the
--- transition, the check would find every event active and register nothing: the events end up the same, with one registration
--- on that frame instead of two.
 function VRCompanion:updateActionEvents()
     local bindingsChanged = self.inputBindingsChanged == true
     if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
@@ -644,12 +603,6 @@ function VRCompanion:updateActionEvents()
     end
 end
 
--- ---- Input in the subsystem registry ----------------------------------------------------------------------------------------
--- Map load: the VR actions (Recenter, HUD Toggle, ...) are registered with the game, and again whenever the player changes a binding.
--- This runs after the core read settings.xml. Registering reads the input context of the vehicle being controlled and the
--- game's text, and reading the settings touches no action event, so neither needs the other first. No update hook: the check
--- of the events (updateActionEvents, above) is a step of the core's update. Map unload: Input lets go of the binding-change
--- message and forgets the event ids.
 VRCompanion:registerSubsystem("input", {
     mapLoad = function(self)
         self:registerActionEvents(true)

@@ -1,15 +1,3 @@
-// Wheel Grab, the hands win over other steering (spec #89, ticket #93, ADR-0027), seen from outside: while a hand holds
-// the Steering Wheel, every steering call another device makes (the keyboard, a gamepad, a Wheel Peripheral, the game's
-// own phone tilt steering) is dropped before it reaches the vehicle, Wheel Grab's own calls reach it, and everything
-// passes again as soon as the hand lets go. The Companion Mod runs for real against the real VRBridge over
-// FakeTrackedHeadset; the vehicle is the stub of companion_mod_stubs.h (StubSteer) that, like the game, COPIES
-// Drivable.setSteeringInput onto the vehicle, so a wrap that only replaced the class function too late would not reach
-// it. Every assertion is on the steering calls that reached the vehicle, the function the vehicle ends up with and the
-// log, never on the mod's own state. Prior art: test_wheel_grab.cpp (#90) and Interactive Control's wrap of the Click
-// Point functions (test_interactive_control_auto_on.cpp).
-//
-// The cab geometry is the one of test_wheel_grab.cpp: a hand "at the rim" is 0.18 m from the Steering Wheel's axis.
-
 #include "wheel_grab_test_support.h"
 #include <string>
 
@@ -22,9 +10,6 @@ constexpr const char* kKeyboardValue = "0.77";
 constexpr const char* kGamepadValue = "0.66";
 constexpr const char* kPhoneTiltValue = "0.55";
 
-// The game before the Companion Mod loads, as it is in the game: the Drivable class is there when the mod's files load.
-// `variant` is a StubSteer.install variant ("ok", "missing", "reshaped"); `equipOptions` are more StubSteer.equip
-// options, e.g. "copyOfOriginal = true" for a vehicle whose copy was taken before the class was wrapped.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& variant = "ok", const std::string& equipOptions = "") {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
@@ -40,7 +25,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& variant
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
 }
 
-// How many steering calls with this value reached the vehicle (so far, or since the record was last cleared).
 int CallsWithValue(lua_State* L, const std::string& value) {
     return static_cast<int>(Number(L, "(function() local n = 0 for _, call in ipairs(StubSteer.calls) do "
                                       "if math.abs(call.value - " + value + ") < 1e-9 then n = n + 1 end end return n end)()"));
@@ -54,17 +38,14 @@ void ClearCalls(lua_State* L) {
     EXPECT_EQ(RunLuauChunk(L, "StubSteer.calls = {}", "=clearCalls"), 0);
 }
 
-// All three other devices steer, once each.
 void OtherDevicesSteer(lua_State* L) {
     EXPECT_EQ(RunLuauChunk(L, (std::string("StubSteer.keyboard(cab.vehicle, ") + kKeyboardValue + ")\n" +
                                "StubSteer.gamepad(cab.vehicle, " + kGamepadValue + ")\n" +
-                               // the game's own phone tilt steering and the HUD slider use the Wheel Peripheral's category too
                                "StubSteer.wheelPeripheral(cab.vehicle, " + kPhoneTiltValue + ")\n").c_str(), "=otherDevices"), 0);
 }
 
-} // namespace
+}
 
-// The Steering Wheel held and turned a little, so Wheel Grab is steering.
 #define HOLD_THE_WHEEL() \
     do { \
         GRAB(kRight, RimPoint(L, kRimRadius, 0.0)); \
@@ -81,9 +62,6 @@ void OtherDevicesSteer(lua_State* L) {
     } while (0)
 
 
-// The whole story of the acceptance criteria for a vehicle set up with `equipOptions`: other devices steer before the
-// grab, are dropped while the Steering Wheel is held (Wheel Grab's own call reaches the vehicle all the same) and steer
-// again after it is let go.
 #define HANDS_WIN_WHILE_HELD(equipOptions) \
     do { \
         FakeTrackedHeadset headset; \
@@ -115,13 +93,10 @@ void OtherDevicesSteer(lua_State* L) {
     } while (0)
 
 TEST_F(CompanionModTest, WhileTheSteeringWheelIsHeldOtherDevicesCallsAreDroppedAndWheelGrabsPassUntilItIsLetGo) {
-    // The Companion Mod wrapped the class at file load, before the game copied the function onto the vehicle.
     HANDS_WIN_WHILE_HELD("");
 }
 
 TEST_F(CompanionModTest, TheVehicleHoldingTheOriginalFunctionItCopiedIsWrappedTooWhileTheSteeringWheelIsHeld) {
-    // The game's copy on the vehicle was taken before anything wrapped the class, so only a wrap of the vehicle's own
-    // function reaches the calls of the other devices.
     HANDS_WIN_WHILE_HELD("copyOfOriginal = true");
 }
 
@@ -130,7 +105,6 @@ TEST_F(CompanionModTest, CallsPassThroughUnchangedWithNothingHeld) {
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     SetGameTime(10000);
-    // A hand at the rim with the grip not squeezed holds nothing.
     BRING_HAND(kRight, RimPoint(L, kRimRadius, 0.0));
     ASSERT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false");
 
@@ -173,7 +147,7 @@ TEST_F(CompanionModTest, SwitchingWheelGrabOffWhileHoldingLetsOtherDevicesSteerA
 
     EvalLua(L, "runCommand('vrWheelGrab', 'off')");
     ClearCalls(L);
-    OtherDevicesSteer(L);  // before the next update: the setting alone lifts the wrap
+    OtherDevicesSteer(L);
 
     EXPECT_EQ(CallsThatReachedTheVehicle(L), 3);
 }
@@ -190,7 +164,6 @@ TEST_F(CompanionModTest, LettingGoGivesTheVehicleBackItsOwnFunctionAndNeverUndoe
     LET_GO_OF_THE_WHEEL();
     EXPECT_EQ(EvalLua(L, isOriginal), "true") << "the vehicle's own copy is back after letting go";
 
-    // Another mod wraps the vehicle's function while the Steering Wheel is held; letting go leaves that wrap alone.
     HOLD_THE_WHEEL();
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local inner = cab.vehicle.setSteeringInput
@@ -236,8 +209,6 @@ TEST_F(CompanionModTest, UnloadingTheMapTakesTheWrapOffTheClassAndTheVehicle) {
     EXPECT_EQ(EvalLua(L, "cab.vehicle.setSteeringInput == StubSteer.original"), "true") << "and so has the vehicle";
 }
 
-// A game whose steering function is not what the wrap expects: Wheel Grab is unavailable, the log says so once and
-// the other devices go on steering.
 #define WHEEL_GRAB_GIVES_UP_WHEN_STEERING_INPUT_IS(variant) \
     do { \
         FakeTrackedHeadset headset; \
@@ -269,7 +240,6 @@ TEST_F(CompanionModTest, WithSetSteeringInputReshapedWheelGrabIsUnavailableWarns
     WHEEL_GRAB_GIVES_UP_WHEN_STEERING_INPUT_IS("reshaped");
 }
 
-// The warning's exact words: what is wrong with which function, and that the other devices are unchanged.
 namespace {
 int ExactLogLines(const std::string& line) {
     int count = 0;
@@ -283,7 +253,7 @@ std::string WheelGrabWarning(const std::string& problem) {
     return "[FS25_VR] [Warning] Wheel Grab disabled: " + problem
         + ". Steering from the keyboard, a gamepad or a Wheel Peripheral is unchanged.";
 }
-}  // namespace
+}
 
 TEST_F(CompanionModTest, TheWheelGrabWarningSaysTheClassSteeringFunctionIsMissing) {
     FakeTrackedHeadset headset;
@@ -325,9 +295,6 @@ TEST_F(CompanionModTest, TheWheelGrabWarningOfAGameWithoutDrivableSaysSo) {
     EXPECT_EQ(ExactLogLines(WheelGrabWarning("Drivable is missing")), 1);
 }
 
-// A game whose steering function does not work the way Wheel Grab calls it: the call raises. Whether the engine can tell
-// the function's shape or not, Wheel Grab then gives up exactly as for a missing function, once the call has failed on
-// three updates in a row (WHEEL_GRAB_STEERING_FAILURES_BEFORE_GIVING_UP).
 TEST_F(CompanionModTest, WhenWheelGrabsOwnSteeringCallKeepsRaisingWheelGrabGivesUpWithOneWarningAndOtherDevicesStillSteer) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

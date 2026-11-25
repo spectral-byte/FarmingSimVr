@@ -30,3 +30,5 @@ Accepted, amended: the global VR HUD inset and UI scale (item 1) are replaced by
 - Native D3D12 multi-target separation for an OpenXR Quad HUD overlay (rejected: GIANTS Engine 10 does not support independent UI render targets in Luau; intercepting multithreaded render worker draw lists introduces high risk of device removal crashes and descriptor leaks).
 - Permanent always-on full HUD (rejected: occupies excessive visual field in VR, causes visual fatigue, and obscures in-cab mirrors and field visibility).
 - In-Engine VR Inset, IPD-scaled Convergence Parity, and Three-Stage Latching Toggle (selected: native GIANTS Engine UI compatibility, zero D3D12 performance penalty, true stereoscopic depth at ~1.8m, and user control over immersion and telemetry).
+
+More decisions about this area, from the code comments: [ADR-0044](0044-hud-and-dialog-decisions.md).

@@ -23,3 +23,5 @@ Proposed.
 - The Companion Mod has to know which Animated Objects the player stands in the zone of. The game only tracks the activatable it shows, so the mod follows the zones itself.
 - An Animated Object whose moving parts have no collision cannot be pointed at. Its prompt still works.
 - A game update that renames the toggle or the trigger check switches the pointing off for Animated Objects, and their prompts keep working.
+
+More decisions about this area, from the code comments: [ADR-0052](0052-animated-object-and-manual-attach-decisions.md).

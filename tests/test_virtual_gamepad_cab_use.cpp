@@ -1,18 +1,3 @@
-// The Virtual Gamepad while the Companion Mod uses a Motion Controller input in the world (ADR-0028, spec #98, ticket
-// #101), seen from outside: the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, in a cab
-// whose vehicle steers the way the game's does (StubSteer) and has the stand-in for the Interactive Control mod (StubIC)
-// with a Click Point straight ahead of each hand (companion_mod_stubs.h). The test moves the fake Motion Controllers
-// and reads what the game would read from XInput (the answers the hooks route the game's calls to) next to what
-// Interactive Control executed and whether a hand holds the Steering Wheel. Two uses are covered:
-//   - the Pointer Hand's trigger while the Pointer Ray is on a Click Point: it clicks it and reads released on the pad
-//   - the grip of a hand holding the Steering Wheel: it steers and reads released on the pad
-// and in both the held-input rule: an input already held on the pad when the use would begin keeps its binding until it
-// is let go, and the use does not act on it. Prior art: test_wheel_grab_pointer.cpp and test_virtual_gamepad.cpp.
-//
-// The cab is at the world origin facing +Z with the head at the tracking space origin (see wheel_grab_test_support.h).
-
-// What the game does each frame before the Companion Mod's update, besides the camera update and the vehicle's own
-// update: Interactive Control's update of its Click Points.
 #define WHEEL_GRAB_PRE_FRAME_EXTRA_LUA "if StubIC.tick then StubIC.tick() end"
 
 #include "wheel_grab_test_support.h"
@@ -34,8 +19,6 @@ protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
 
-    // The mod started in a steerable cab with Interactive Control's stand-in and a Click Point straight ahead of each
-    // hand, and the Virtual Gamepad on.
     void StartWithPadOn() {
         ASSERT_TRUE(bridge.Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -65,7 +48,6 @@ protected:
         FRAMES(3);
     }
 
-    // The hand lifted and aimed at nothing (no Click Point lies that way), so it is the Pointer Hand without a Click Point.
     void PointAtNothing(uint32_t hand) {
         const float side = hand == kRight ? 0.3f : -0.3f;
         headset.SetHandPointing(hand, HandAt(side - 0.1f, 1.0f, -0.3f));
@@ -74,7 +56,6 @@ protected:
         FRAMES(3);
     }
 
-    // What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
     XINPUT_GAMEPAD Pad() {
         XINPUT_STATE state{};
         EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
@@ -84,7 +65,7 @@ protected:
     std::string Executed() { return EvalLua(L, "table.concat(StubIC.executed, ',')"); }
 };
 
-} // namespace
+}
 
 TEST_F(VirtualGamepadCabUseTest, ThePointerHandsTriggerClicksTheClickPointItIsOnAndReadsReleasedOnThePad) {
     StartWithPadOn();
@@ -117,7 +98,6 @@ TEST_F(VirtualGamepadCabUseTest, TheOtherHandsTriggerAndATriggerWithNoClickPoint
     headset.SetHandInputs(kLeft, Trigger(0.0f));
     FRAMES(1);
 
-    // The Pointer Hand aimed at nothing: its trigger is a binding's like any other.
     PointAtNothing(kRight);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "nil");
     ASSERT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
@@ -131,11 +111,11 @@ TEST_F(VirtualGamepadCabUseTest, ATriggerHeldWhenTheRayLandsOnAClickPointKeepsIt
     StartWithPadOn();
     ASSERT_FALSE(HasFatalFailure());
     PointAtNothing(kRight);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for throttle
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
-    PointAtOwnClickPoint(kRight);  // the ray lands on a Click Point with the trigger still down
+    PointAtOwnClickPoint(kRight);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "rightPoint");
     FRAMES(3);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
@@ -185,7 +165,6 @@ TEST_F(VirtualGamepadCabUseTest, TheGripOfAHandHoldingTheSteeringWheelReadsRelea
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "false");
     headset.SetHandInputs(kRight, Grip(1.0f));
     FRAMES(1);
-    // Squeezed again at the rim it holds again (the hand is still there).
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true");
     EXPECT_EQ(Pad().wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0);
 }
@@ -194,7 +173,7 @@ TEST_F(VirtualGamepadCabUseTest, AGripHeldWhenTheHandReachesTheRimKeepsItsBindin
     StartWithPadOn();
     ASSERT_FALSE(HasFatalFailure());
 
-    headset.SetHandInputs(kRight, Grip(1.0f));  // squeezed away from the Steering Wheel, for a binding
+    headset.SetHandInputs(kRight, Grip(1.0f));
     FRAMES(1);
     ASSERT_NE(Pad().wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0);
 
@@ -225,8 +204,6 @@ TEST_F(VirtualGamepadCabUseTest, TheStatusCommandListsTheClickAndTheGripItIsUsin
     EXPECT_NE(status.find("left grip"), std::string::npos) << status;
 }
 
-// A Stereo Dialog (spec #142, story 10): the dialog is answered with the pad's buttons, so the Pointer Ray does not select
-// Click Points behind it and a pull of the trigger is not also a click.
 TEST_F(VirtualGamepadCabUseTest, WhileAStereoDialogShowsThePointerRayHitsNoClickPointAndTheTriggerClicksNothing) {
     StartWithPadOn();
     ASSERT_FALSE(HasFatalFailure());

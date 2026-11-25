@@ -1,14 +1,3 @@
-// Hand Tools, the horse brush (ADR-0030), seen from outside: the real Companion Mod runs against the real VRBridge over
-// FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot, the game's
-// HandToolHorseBrush with its update, its animal lookup, its input help and its clean events, an animal target type in the targeter,
-// animals with farm access). A test moves the fake Motion Controllers and the game clock, drives frames the way the game would and
-// asserts what the player or the game would see: where the brush is, the ray the targeter cast, which clean events were sent, what the
-// input help offers, what XInput answers for the Tool Hand's trigger, which haptic pulses reached the fake Motion Controllers, what the
-// game's draw rendered and the warning lines in the log. Never the mod's own state.
-// Prior art: test_hand_tools_spray_can.cpp (a tool in the hand whose reach starts behind it), test_hand_tools_chainsaw.cpp (a handler
-// kept on the specialization class only, class wraps with install variants), test_hand_tools_draw.cpp (the draw wrap),
-// test_hand_tools_spray_can_feedback.cpp (pulses on the fake Motion Controllers).
-
 #include "hand_tools_test_support.h"
 #include "input/virtual_gamepad.h"
 #include <algorithm>
@@ -18,17 +7,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers: where the brush is and what the targeter did, as the game would know it. Each ray is { x, y, z, dirX, dirY, dirZ } in
-// the world.
-//   isWhereTheGamePutsIt(tool)   the tool is below the camera's pitch node at the game's placement
-//   isInTheHand(tool, which)     the tool hangs below the Virtual Hand
-//   bristleRay()                 where the bristles are and the way they point (the brush node and its -Y axis)
-//   headRay()                    the first person camera: the ray the game casts without a Hand Tool
-//   targeterRay()                what the targeter cast in the last game frame
-//   sameRay(a, b), apart(a, b)   the two rays are the same / metres between where they start
-//   plantAnimal(ray, distance)   an animal the ray meets `distance` metres along it, as _G.animal; any animal planted before goes
-//   found()                      the node of the animal the brush's targeter found in the last game frame, nil for none
-//   cleaned()                    how much dirt the planted animal has lost
 constexpr const char* kHorseBrushHelpers = R"luau(
     function _G.isWhereTheGamePutsIt(tool)
         if getParent(tool.rootNode) ~= foot.cam.pitchNode then return false end
@@ -57,23 +35,18 @@ constexpr const char* kHorseBrushHelpers = R"luau(
     function _G.cleaned() return 50 - animal.cluster.dirt end
 )luau";
 
-// The hand held so that the bristles point level (the grip frame's fingers, which the brush points along) and well away from the way the
-// head looks (down -Z).
 constexpr float kAimPitch = 1.4f;
 constexpr float kAimYaw = 1.2f;
 
 // Pulses stronger than this are not "light" (the lance's pressure is 0.35, the chainsaw's cut 0.6).
 constexpr float kLight = 0.5f;
 
-// The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsHorseBrushTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
     std::string stubs;
 
-    // The mod started with a player on foot who has the game's horse brush class (its use handler and animal lookup as the variants
-    // say), the Virtual Gamepad on and the game clock set (the in-use timeout is on it).
     void Start(const char* handler = "ok", const char* lookup = "ok") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         stubs = StubChunk("xml_settings") + HorseBrushStubs(handler, lookup);
@@ -85,7 +58,6 @@ protected:
         SetGameTime(10000);
     }
 
-    // The brush held on foot with the right Motion Controller picked up and a few frames run: the common start of the tests below.
     void StartWithTheBrushInTheRightHand() {
         ASSERT_NO_FATAL_FAILURE(Start());
         ASSERT_NO_FATAL_FAILURE(HoldHorseBrush(L));
@@ -95,7 +67,6 @@ protected:
         ASSERT_EQ(EvalLua(L, "isInTheHand(brush, 'right')"), "true") << Dump();
     }
 
-    // Both the aim and the grip pose of the hand set (the Virtual Hand follows the grip pose), turned as kAimPitch and kAimYaw say.
     void AimTheHand(uint32_t hand, float x, float y, float z) {
         headset.SetHandPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
         headset.SetHandGripPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
@@ -105,7 +76,6 @@ protected:
     std::string WhereTheGamePutsIt() { return EvalLua(L, "isWhereTheGamePutsIt(brush)"); }
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
 
-    // The pulses so far to a hand and the strongest of them. ForgetPulses starts counting afresh.
     size_t PulsesTo(int hand) const {
         size_t count = 0;
         for (const auto& pulse : headset.HapticPulses()) {
@@ -122,7 +92,6 @@ protected:
     }
     void ForgetPulses() { headset.runtime->controllers.hapticPulses.clear(); }
 
-    // The longest run of frames over the next `frames` frames in which the hand was not pulsed: a buzz that goes on has short ones.
     int LongestSilenceTo(int hand, int frames) {
         int longest = 0, current = 0;
         for (int i = 0; i < frames; ++i) {
@@ -138,9 +107,7 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Placement ------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheBrushHeldOnFootHangsBelowTheRightVirtualHandAndFollowsItAcrossFramesAndARenderWithNoUpdate) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
@@ -158,7 +125,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheBrushHeldOnFootHangsBelowTheRig
             "the brush stayed where it was in the hand")
     )luau", "=follows"), 0);
 
-    // The second eye of an alternate frame render: the player moved and the camera followed, but no update ran.
     ASSERT_EQ(RunLuauChunk(L, "_G.brushBefore = { getWorldTranslation(brush.rootNode) }", "=brushBefore"), 0);
     ASSERT_EQ(RunLuauChunk(L, "setTranslation(foot.parent, 0.12, 0, 0.05); StubScene.updateCamera()", "=moveWithoutUpdate"), 0);
     EXPECT_EQ(RunLuauChunk(L, R"luau(
@@ -171,7 +137,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheBrushHeldOnFootHangsBelowTheRig
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheBrushIsWhereTheGamePutsItWhileTheToolHandIsSetDownOrUntrackedAndBackInTheHandWhenItIsUsedAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
 
-    // Set down: the Motion Controller lies still for longer than the in-use timeout.
     AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_EQ(WhereTheGamePutsIt(), "true") << "set down: the game's own attachToolToCamera put the brush in front of the view";
@@ -199,8 +164,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheLeftHandChosenAsTheToolHand
     EXPECT_EQ(InTheHand("left"), "true") << "the other hand being picked up does not take it";
     EXPECT_EQ(InTheHand("right"), "false");
 }
-
-// ---- The look ray and the reach ---------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheBrushInTheToolHandTheTargetersRayRunsAlongTheBristlesStartingHalfAMetreBehindThemAndFollowsTheHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
@@ -240,13 +203,11 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, WhileTheToolHandIsSetDownOrUntrack
     FRAMES(2);
     EXPECT_NEAR(Number(L, "apart(targeterRay(), bristleRay())"), 0.5, 1e-3) << "tracked again: the bristles' ray";
 
-    AdvanceGameTime(3100);  // set down
+    AdvanceGameTime(3100);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "set down: the head's ray";
 }
-// ---- The touching cap and the trigger: clean while the bristles are on the animal and the trigger is held -------------------------
 
-// The fixture's helpers for the clean events the game sent, the input help and the pad.
 #define HORSE_BRUSH_HELPERS() \
     auto events = [&]() { return static_cast<int>(Number(L, "#StubHandTool.cleanEvents")); }; \
     auto help = [&]() { return EvalLua(L, "StubHandTool.inputHelp(brush)"); }; \
@@ -340,7 +301,7 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, MovingTheBrushOffTheAnimalWithTheT
     FRAMES(kASecond);
     ASSERT_GE(events(), 1);
 
-    AimTheHand(kRight, 0.25f, 1.20f, -0.30f);  // a metre up: the bristles pass over the animal
+    AimTheHand(kRight, 0.25f, 1.20f, -0.30f);
     FRAMES(2);
     const int atMoveOff = events();
     EXPECT_EQ(help(), "") << "off the animal: no cleaning is offered";
@@ -368,7 +329,7 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, SettingTheHandDownWhileCleaningSto
     FRAMES(kASecond);
     EXPECT_EQ(events(), atSetDown);
 
-    headset.SetHandInputs(kRight, Trigger(0.0f));  // let go while the hand is away
+    headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
     headset.SetHandTracked(kRight, true);
     FRAMES(kASecond);
@@ -403,7 +364,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, PuttingTheBrushAwayOrTurningHandTo
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "tostring(brush.spec_horseBrush.isCleaning)"), "false") << "the brush put away while cleaning";
 }
-// ---- The trigger on the Virtual Gamepad ---------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheToolHandsTriggerReadsReleasedOnXInputWhileItHoldsTheBrushAndTheOtherHandsTriggerStillReachesThePad) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
@@ -422,14 +382,12 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheToolHandsTriggerReadsReleasedOn
     EXPECT_EQ(pad().bRightTrigger, 0);
 }
 
-// The held-input rule of every Virtual Gamepad use: an input already held when the use would begin keeps its binding until it is let
-// go, and the use does not act on it.
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, ATriggerAlreadyHeldWhenTheBrushComesIntoTheHandKeepsItsBindingAndCleansNothingUntilLetGoAndPulledAgain) {
     ASSERT_NO_FATAL_FAILURE(Start());
     HORSE_BRUSH_HELPERS();
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
-    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for a binding, with no Hand Tool in the player's hands
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(pad().bRightTrigger, 255);
 
@@ -449,7 +407,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, ATriggerAlreadyHeldWhenTheBrushCom
     EXPECT_EQ(pad().bRightTrigger, 0) << "and is not a binding";
 }
 
-// The game's own binding (X on a pad, the mouse, the keyboard) calls the same handler, off the class.
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheGamesOwnUseToolBindingStillCleansWhileTheBrushIsInTheToolHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
     HORSE_BRUSH_HELPERS();
@@ -466,7 +423,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheGamesOwnUseToolBindingStillClea
     EXPECT_EQ(events(), atRelease);
 }
 
-// The Tool Hand does not stay "in use" holding a tool (a hand lying still for 3 s is set down); a held-still pull must not drop the brush.
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, AHeldStillTriggerDoesNotDropTheBrushAndAfterLettingGoTheHandIsSetDownAsAlways) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.1)", "=animal"), 0);
@@ -486,8 +442,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, AHeldStillTriggerDoesNotDropTheBru
     EXPECT_EQ(EvalLua(L, "tostring(brush.spec_horseBrush.isCleaning)"), "false");
 }
 
-// ---- The Pointer Hand ------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, InTheWorldTheToolHandHoldingTheBrushIsNeverThePointerHandAndInAMenuEitherHandCanPoint) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
     auto pointerHand = [&]() { return EvalLua(L, "VRCompanion:getPointerHand()"); };
@@ -506,8 +460,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, InTheWorldTheToolHandHoldingTheBru
     FRAMES(2);
     EXPECT_EQ(pointerHand(), "1") << "in a menu a pull on the right hand points with it, as ever";
 }
-
-// ---- Haptics ---------------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheToolHandBuzzesLightlyAndSteadilyWhileTheBrushCleansAnAnimalAndOnlyThen) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
@@ -573,8 +525,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheBuzzEndsWhenTheHandLosesTrackin
     EXPECT_EQ(PulsesTo(kRight), 0u) << "Hand Tools off: nothing is added to the game";
 }
 
-// ---- Nothing is drawn at the centre of the view ------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, NothingIsDrawnInTheTrackedToolHandAndTheGamesCrosshairsComeBackUntrackedSetDownOrWithHandToolsOrMotionControllersOff) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
     auto draws = [&]() {
@@ -614,8 +564,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, NothingIsDrawnInTheTrackedToolHand
     FRAMES(2);
     EXPECT_NE(draws(), "") << "Motion Controllers off: as the game draws it";
 }
-
-// ---- Nothing changes when the brush is not in a tracked Tool Hand ---------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithVrHandToolsOffTheBrushTheRayTheReachAndTheTriggerAreTheGamesAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
@@ -660,12 +608,10 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, AnotherModsToolIsPlacedAndAimedByT
     EXPECT_EQ(Number(L, "#StubHandTool.useCalls"), 0.0);
 }
 
-// Multiplayer: the game attaches a Hand Tool of every player in the session through the same function, and asks the same animal
-// lookup for every brush. Only the local player's brush goes into the Tool Hand and is capped.
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, AnotherPlayersBrushIsNeverTakenIntoTheToolHandAndItsAnimalLookupIsNotCapped) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
     HORSE_BRUSH_HELPERS();
-    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.4)", "=outOfTouch"), 0);  // the local player's brush: found by the targeter, out of touch
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.4)", "=outOfTouch"), 0);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
         _G.remote = setmetatable({ isOwner = false, farmId = 1, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
@@ -702,8 +648,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheLanceInHandTheGamesAnimalLo
 
     EXPECT_EQ(EvalLua(L, "tostring(HandToolHorseBrush.getHusbandryAndClusterFromNode(foot.player, animal.node) == animal.husbandry)"), "true");
 }
-
-// ---- A game update that renames or reshapes what the brush relies on --------------------------------------------------------------
 
 #define EXPECT_THE_GAMES_BEHAVIOUR_AND_ONE_WARNING_NAMING(functionName) \
     do { \
@@ -756,8 +700,6 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, AGameUpdateThatReshapesTheLookupLi
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
     EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(brush)"), "defaultCrosshair") << "and the draw is the game's";
 }
-
-// ---- Tuning and diagnostics -------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsHorseBrushTest, VrHandToolOffsetHorseBrushMovesTheBrushInTheHandAndResetPutsItBack) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());

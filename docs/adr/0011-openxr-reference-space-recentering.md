@@ -33,3 +33,5 @@ Accepted
 - **Artificial projection layer pose offset in `SubmitFramePair`** (rejected: causes compositor timewarp reprojection artifacts and visual swimming during head rotations).
 - **CPU transformation solely on GIANTS Engine camera nodes in Luau** (rejected: leaves OpenXR floating menu quad, mouse layer, and compositor out of sync with recentered coordinates).
 - **OpenXR reference space recreation with `poseInReferenceSpace`** (selected: native OpenXR standard compliance, zero reprojection swimming, automatic 360-degree stereoscopic view preservation, level horizon guarantee).
+
+More decisions about this area, from the code comments: [ADR-0045](0045-actions-locomotion-and-seat-decisions.md), [ADR-0056](0056-openxr-decisions.md).

@@ -14,14 +14,13 @@ CameraRecord MakeRecord(uint32_t eye, double x, double y = 0.0, double z = 0.0) 
     r.position[0] = x;
     r.position[1] = y;
     r.position[2] = z;
-    r.orientation[3] = 1.0; // identity
+    r.orientation[3] = 1.0;
     r.fovY = 1.5f;
     r.nearClip = 0.15f;
     r.farClip = 2000.0f;
     return r;
 }
 
-// Quaternion for a rotation of angle radians about +Y.
 void SetYaw(CameraRecord& r, double angle) {
     r.orientation[0] = 0.0;
     r.orientation[1] = std::sin(angle / 2.0);
@@ -29,13 +28,12 @@ void SetYaw(CameraRecord& r, double angle) {
     r.orientation[3] = std::cos(angle / 2.0);
 }
 
-// Plays one stereo frame: the given eye reports its camera, then the Present advances the counter.
 void PlayFrame(CameraRecordStore& store, uint32_t eye, double x) {
     ASSERT_TRUE(store.Report(MakeRecord(eye, x)));
     store.AdvanceFrame();
 }
 
-} // namespace
+}
 
 TEST(CameraRecordStoreTest, ReportedRecordIsStampedWithTheCurrentRenderedFrame) {
     CameraRecordStore store;
@@ -68,7 +66,6 @@ TEST(CameraRecordStoreTest, AFrameWithNoRecordResolvesAsMissingNotAsAStaleRecord
     PlayFrame(store, 0, 0.0);
     PlayFrame(store, 1, 1.0);
 
-    // Frame 2 reports nothing (loading screen, menu).
     auto resolved = store.Resolve(0);
     EXPECT_FALSE(resolved.current.has_value());
     ASSERT_TRUE(resolved.previousFrame.has_value());
@@ -92,9 +89,9 @@ TEST(CameraRecordStoreTest, AnotherEyesRecordInTheCurrentFrameIsNotTheCurrentCam
 
 TEST(CameraRecordStoreTest, ResolvesOtherEyePreviousFrameAndSameEyeRecordsInAnAlternatingSequence) {
     CameraRecordStore store;
-    PlayFrame(store, 0, 0.0);  // frame 0: L
-    PlayFrame(store, 1, 0.064); // frame 1: R
-    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5))); // frame 2: L, head moved
+    PlayFrame(store, 0, 0.0);
+    PlayFrame(store, 1, 0.064);
+    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5)));
 
     auto resolved = store.Resolve(0);
     ASSERT_TRUE(resolved.current.has_value());
@@ -116,10 +113,10 @@ TEST(CameraRecordStoreTest, SameEyeRecordTooOldToBeTheLastRenderedOfThatEyeIsMis
 
 TEST(CameraRecordStoreTest, SameEyeRecordIsMissingWhenTheRealPreviousSameEyeFrameHadNoRecord) {
     CameraRecordStore store;
-    PlayFrame(store, 0, 0.0); // frame 0: L
-    PlayFrame(store, 1, 0.0); // frame 1: R
-    store.AdvanceFrame();     // frame 2: the left eye rendered but reported nothing
-    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5))); // frame 3: L; the L record at frame 0 is not its previous render
+    PlayFrame(store, 0, 0.0);
+    PlayFrame(store, 1, 0.0);
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5)));
 
     auto resolved = store.Resolve(0);
     ASSERT_TRUE(resolved.current.has_value());
@@ -129,9 +126,9 @@ TEST(CameraRecordStoreTest, SameEyeRecordIsMissingWhenTheRealPreviousSameEyeFram
 
 TEST(CameraRecordStoreTest, SameEyeRecordTwoFramesBackIsMissingWhenTheFrameBetweenHasNoRecord) {
     CameraRecordStore store;
-    PlayFrame(store, 0, 0.0); // frame 0: L
-    store.AdvanceFrame();     // frame 1: no record (could have been L)
-    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5))); // frame 2: L
+    PlayFrame(store, 0, 0.0);
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5)));
 
     EXPECT_FALSE(store.Resolve(0).sameEyePrevious.has_value());
 }
@@ -164,7 +161,6 @@ TEST(CameraRecordStoreTest, ReportingTheSameEyeTwiceInAFrameKeepsTheLatest) {
 
 TEST(CameraRecordStoreTest, RelativeTranslationIsExpressedInTheCurrentCamerasAxes) {
     CameraRecordStore store;
-    // Both cameras are yawed 90 degrees about Y, so camera-local +X is world -Z.
     CameraRecord prev = MakeRecord(1, 0.0, 0.0, 0.0);
     SetYaw(prev, 1.5707963267948966);
     ASSERT_TRUE(store.Report(prev));
@@ -202,7 +198,6 @@ TEST(CameraRecordStoreTest, RelativeRotationAngleIsTheYawBetweenTheCameras) {
 
 TEST(CameraRecordStoreTest, RelativeTransformsKeepMillimetrePrecisionAtLargeMapCoordinates) {
     CameraRecordStore store;
-    // A float cannot hold 4,000,000.064 to better than about 0.25 m; double keeps it to nanometres.
     const double base = 4000000.0;
     ASSERT_TRUE(store.Report(MakeRecord(1, base, 123456.0, -987654.0)));
     store.AdvanceFrame();

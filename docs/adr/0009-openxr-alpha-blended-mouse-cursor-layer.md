@@ -31,3 +31,5 @@ Accepted
 - Modifying Direct3D 12 backbuffer via custom blit shader before presentation (rejected: requires creating D3D12 render target views, descriptor heaps, root signatures, pipeline state objects, and mutating the backbuffer state transitions, introducing significant performance overhead and risking crashes or conflicts with engine pipelines).
 - In-engine Luau GUI cursor overlay (rejected: GIANTS Engine GUI does not draw software cursors, and manipulating GUI elements from Luau does not give access to mouse pointer bitmaps at native resolution/refresh rates).
 - Alpha-blended secondary OpenXR quad composition layer (selected: zero engine-side modifications, zero D3D12 render pipeline modifications, hardware-accelerated compositor alpha blending, native headset refresh rate and resolution, completely clean separation of concerns).
+
+More decisions about this area, from the code comments: [ADR-0056](0056-openxr-decisions.md).

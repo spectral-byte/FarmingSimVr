@@ -36,7 +36,6 @@ void ApplyRelativeTransform(const RelativeTransform& t, const float p[3], float 
 
 float ReverseZToViewDepth(float depth, float nearClip, float farClip, bool infiniteDepth) {
     if (infiniteDepth) {
-        // depth <= near / cap would exceed the cap (and 0 divides by zero): that is the sky.
         if (!(depth > nearClip / kInfiniteSkyViewDepth)) return kInfiniteSkyViewDepth;
         return nearClip / depth;
     }
@@ -45,7 +44,7 @@ float ReverseZToViewDepth(float depth, float nearClip, float farClip, bool infin
 
 bool UnprojectPixel(float px, float py, float depth, float width, float height,
                     const Projection& proj, float out[3]) {
-    if (!(depth > 0.0f)) return false; // reverse-Z: 0 is the far plane (sky)
+    if (!(depth > 0.0f)) return false;
     const float z = ReverseZToViewDepth(depth, proj.nearClip, proj.farClip, proj.infiniteDepth);
     const float ndcX = 2.0f * px / width - 1.0f;
     const float ndcY = 1.0f - 2.0f * py / height;
@@ -89,8 +88,6 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
         return result;
     }
 
-    // The same point as if infinitely far: only the relative rotation moves it. Depth cancels in the
-    // projection, so the unit direction stands in for the point.
     float rotP[3] = {p[0], p[1], p[2]};
     float rotQ[3];
     const float rotLen = std::sqrt(rotP[0] * rotP[0] + rotP[1] * rotP[1] + rotP[2] * rotP[2]);
@@ -104,7 +101,7 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
         return result;
     }
 
-    const float dx = px - cx; // predicted previous - current
+    const float dx = px - cx;
     const float dy = py - cy;
     const float ex = mvX * scaleX;
     const float ey = mvY * scaleY;
@@ -159,12 +156,11 @@ bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float m
 
     if (gateNonStatic &&
         !IsStaticConsistent(mvX * scaleX, mvY * scaleY, prevX - cx, prevY - cy)) {
-        return false; // camera-attached or moving: the engine's vector already holds its own motion
+        return false;
     }
     outX = mvX + (sameX - prevX) / scaleX;
     outY = mvY + (sameY - prevY) / scaleY;
     if (objectMotionFactor != 1.0f) {
-        // Object motion = the engine's vector less the static prediction toward the previous frame's camera.
         const float objX = mvX - (prevX - cx) / scaleX;
         const float objY = mvY - (prevY - cy) / scaleY;
         outX += (objectMotionFactor - 1.0f) * objX;
@@ -189,10 +185,10 @@ Projection ProjectionOf(const CameraRecord& r) {
     p.tanHalfFovY = std::tan(r.fovY * 0.5f);
     p.nearClip = r.nearClip;
     p.farClip = r.farClip;
-    return p; // aspect is the render's, filled in by the pass
+    return p;
 }
 
-} // namespace
+}
 
 CorrectionPlan PlanCorrection(const ResolvedCameras& resolved) {
     CorrectionPlan plan;
@@ -244,7 +240,7 @@ double Mean(const std::vector<float>& values) {
     return sum / static_cast<double>(values.size());
 }
 
-} // namespace
+}
 
 SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
     SelfCheckStats stats;
@@ -309,8 +305,6 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
 NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedNear) {
     NearSolution out;
     if (!samples || !(assumedNear > 0.0f) || !std::isfinite(assumedNear)) return out;
-    // e - R and T (the translation part of the prediction), R itself (for the size of the prediction in the
-    // consistency test), and the view depth at the assumed near.
     struct Term { double ex, ey, tx, ty, rx, ry, z0; };
     std::vector<Term> terms;
     for (size_t i = 0; i < count; ++i) {
@@ -329,8 +323,6 @@ NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedN
     for (const Term& t : terms) sumTT += t.tx * t.tx + t.ty * t.ty;
     if (!(sumTT / static_cast<double>(terms.size()) >= kMinNearTranslationSq)) return out;
 
-    // At candidate scale s a term is outside the near field when its view depth z0 / s reaches the cutoff (a
-    // term without a depth always is), and an inlier when its vector matches the static prediction R + s T.
     auto retained = [&](const Term& t, double s) { return !(t.z0 > 0.0) || t.z0 / s >= kNearFieldViewDepth; };
     auto inlier = [&](const Term& t, double s) {
         return IsStaticConsistent(static_cast<float>(t.rx + t.ex), static_cast<float>(t.ry + t.ey),
@@ -347,8 +339,6 @@ NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedN
         return r;
     };
 
-    // Candidate scales: the per-sample ratios (quantiles when there are many). The best candidate is the one
-    // most samples agree with; a camera-attached or moving minority cannot pull it the way it pulls a mean.
     std::vector<double> ratios;
     for (const Term& t : terms) {
         const double r = (t.ex * t.tx + t.ey * t.ty) / (t.tx * t.tx + t.ty * t.ty);
@@ -373,7 +363,6 @@ NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedN
     }
     if (!(s > 0.0)) return out;
 
-    // Refine: least squares over the inliers at the current scale, then re-classify.
     for (int pass = 0; pass < 4; ++pass) {
         double num = 0.0, den = 0.0;
         for (const Term& t : terms) {
@@ -412,4 +401,4 @@ const char* ConventionName(Convention c) {
     }
 }
 
-} // namespace fs25vr::mvreproj
+}

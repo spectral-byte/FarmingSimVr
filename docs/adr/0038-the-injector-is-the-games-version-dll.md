@@ -39,3 +39,5 @@ Accepted.
 - A tool that is a `version.dll` (some ASI loaders) now collides instead. The Installer moves it aside and puts it back.
 - Crash dumps and logs name the Injector `version.dll`.
 - Players who installed by hand must delete the old `dxgi.dll` once. The Injector's log says so.
+
+More decisions about this area, from the code comments: [ADR-0053](0053-injector-core-decisions.md), [ADR-0058](0058-installer-decisions.md).

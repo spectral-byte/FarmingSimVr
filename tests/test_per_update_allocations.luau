@@ -1,20 +1,9 @@
--- ====================================================================
--- Test Suite: the Companion Mod allocates nothing per update in the Motion Controller poll
--- and in the GUI visibility poll (the Stereo Dialog check), so the garbage collector adds no
--- frame-time spikes.
--- Seen from outside: the memory the Luau state holds across many updates of the public functions
--- (VRCompanion:updateMotionControllers, VRCompanion:pollGuiVisibility) against a stubbed VRBridge,
--- g_gui and g_inputBinding. A table or closure made per update would add to the count.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Both Motion Controllers tracked and moving: each read puts the hand somewhere new, filling the table the mod hands
--- over in place the way the native binding does once the table holds every field.
 local HAND_FIELDS = { "tracked", "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
     "isValid", "isPositionTracked", "isOrientationTracked", "gripPoseTracked",
     "gripPoseX", "gripPoseY", "gripPoseZ", "gripPosePitch", "gripPoseYaw", "gripPoseRoll",
@@ -45,7 +34,7 @@ _G.VRBridge = {
                     pitch = 0, yaw = 0, roll = 0 }
         end
         reads = reads + 1
-        local t = reads * 0.01  -- far enough every update to count as moved
+        local t = reads * 0.01
         out.tracked = true
         out.isValid, out.isPositionTracked, out.isOrientationTracked = true, true, true
         out.x, out.y, out.z = 0.2 * (hand + 1) + t, 1.0, -0.4
@@ -63,7 +52,6 @@ _G.VRBridge = {
 }
 VRBridge = _G.VRBridge
 
--- The desk mouse moves too, so that the sampled position is stored on every update
 local mouseX = 0.5
 _G.g_inputBinding = {
     getMousePosition = function(self)
@@ -72,7 +60,6 @@ _G.g_inputBinding = {
     end,
 }
 
--- The game's GUI as Gui.lua keeps it: a screen sets currentGuiName, a dialog is an element in dialogs
 local function newGui()
     return {
         currentGuiName = "",
@@ -101,7 +88,6 @@ local function test(name, fn)
     _G.g_gui = g_gui
 end
 
--- The game in the headset: the stereoscopic view, head tracking on, Motion Controllers on
 VRCompanion.handshakeComplete = true
 VRCompanion.passThroughMode = false
 VRCompanion.headTrackingEnabled = true
@@ -126,8 +112,6 @@ local SLACK_BYTES = 512
 
 print("Running Per-Update Allocation Tests...")
 
--- The poll hands the polled hands on to the subsystems that act on them (Wheel Grab, menus, ...). Their own updates are
--- their own tickets' concern: stood in for by nothing, so that this test measures the poll itself.
 local DOWNSTREAM_UPDATES = { "updateVirtualGamepad", "updateWheelGrab", "updateHandTools", "updateObjectGrab",
     "updateInteractiveControl", "updateAnimatedObjects", "updateMenuPointer", "updateVirtualHands",
     "updateVirtualGamepadUse" }

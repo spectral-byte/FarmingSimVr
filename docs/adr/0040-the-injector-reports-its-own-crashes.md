@@ -34,3 +34,5 @@ Accepted.
 - The dump holds file paths and the Windows user name, as any dump of the game does. The README tells players to zip it before sharing.
 - Microsoft's [Collecting User-Mode Dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps) says applications that do their own custom crash reporting are not supported by the `LocalDumps` feature. The reporter does not end the process or claim the exception, it passes it on, but how the two dumps go together in the game has been tried with a child process that stands for the game, not in the game itself.
 - Release symbols (the symbols zip) are what open a dump from a release, and the crash line's Injector version says which ones.
+
+More decisions about this area, from the code comments: [ADR-0053](0053-injector-core-decisions.md).

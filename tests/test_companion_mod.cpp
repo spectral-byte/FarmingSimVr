@@ -70,7 +70,6 @@ TEST_F(CompanionModTest, EveryCompanionModFunctionIsDefinedInExactlyOneFile) {
 TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
     std::string script = ReadFile("scripts/package_release.ps1");
     ASSERT_FALSE(script.empty());
-    // Packaging globs src/*.lua; every modDesc-listed file must live directly in src/.
     EXPECT_NE(script.find("src/*.lua"), std::string::npos);
     EXPECT_NE(script.find("modDesc.xml"), std::string::npos);
     EXPECT_NE(script.find("icon_vr.png"), std::string::npos);
@@ -82,8 +81,6 @@ TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
 }
 
 TEST_F(CompanionModTest, EveryScriptThatZipsTheModShipsTheVirtualHandModelItsShapesAndItsAttribution) {
-    // The Virtual Hand model is an asset, not a script: the zip must carry models/ or the Companion Mod
-    // starts without Virtual Hands in the player's game.
     for (const char* scriptPath : { "scripts/deploy.ps1", "scripts/package_release.ps1" }) {
         SCOPED_TRACE(scriptPath);
         std::istringstream lines(ReadFile(scriptPath));
@@ -120,8 +117,6 @@ TEST_F(CompanionModTest, TheVirtualHandModelRecordsItsSourceAuthorAndLicense) {
 }
 
 TEST_F(CompanionModTest, ReleaseBundleAndModZipShipTheGplLicense) {
-    // GPL-3.0 requires conveying a copy of the license with every distributed copy;
-    // the mod zip is also published on its own, so it carries LICENSE too.
     std::string script = ReadFile("scripts/package_release.ps1");
     ASSERT_FALSE(script.empty());
     std::istringstream lines(script);
@@ -146,14 +141,11 @@ TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
     int loadStatus = LoadCompanionModChecked(L);
     ASSERT_EQ(loadStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
-    // Simulate engine triggering loadMap
     int mapStatus = RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall");
     EXPECT_EQ(mapStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
-    // Verify mod table state
     RunLuauChunk(L, "assert(VRCompanion.handshakeComplete == true)", "=assertHandshake");
 
-    // Verify captured logs
     bool foundHandshakeLog = false;
     for (const auto& msg : s_capturedLogs) {
         if (msg.find("[FS25_VR] Handshake successful! VRBridge detected") != std::string::npos) {
@@ -165,8 +157,6 @@ TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
 }
 
 TEST_F(CompanionModTest, CompletesItsHandshakeWhateverVersionTheInjectorReports) {
-    // The Companion Mod only prints the Injector's version for now; an Injector of another release than the mod's
-    // must not stop the handshake.
     fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
@@ -190,11 +180,9 @@ TEST_F(CompanionModTest, FallsBackGracefullyInPassThroughModeWhenVRBridgeAbsent)
     int loadStatus = LoadCompanionModChecked(L);
     ASSERT_EQ(loadStatus, 0);
 
-    // Call loadMap without VRBridge present
     int mapStatus = RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall");
     EXPECT_EQ(mapStatus, 0);
 
-    // Verify mod table state
     RunLuauChunk(L, "assert(VRCompanion.handshakeComplete == false)", "=assertNoHandshake");
 
     bool foundFallbackLog = false;
@@ -208,7 +196,6 @@ TEST_F(CompanionModTest, FallsBackGracefullyInPassThroughModeWhenVRBridgeAbsent)
 }
 
 TEST_F(CompanionModTest, HandlesFailedHandshakeGracefully) {
-    // Inject mock VRBridge returning failure
     RunLuauChunk(L, R"(
         VRBridge = {
             version = "1.0.0",
@@ -234,7 +221,6 @@ TEST_F(CompanionModTest, HandlesFailedHandshakeGracefully) {
 }
 
 TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) {
-    // Inject mock engine stereo functions
     RunLuauChunk(L, R"(
         _G.capturedStereoCalls = {}
         function setStereoRendering(enable)
@@ -247,17 +233,14 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Call loadMap
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
-    // Verify setStereoRendering(true) was called and redundant setInvertStereoRendering was NOT called
     int checkStatus = RunLuauChunk(L, R"(
         assert(#_G.capturedStereoCalls == 1, "Expected exactly 1 stereo call")
         assert(_G.capturedStereoCalls[1].fn == "setStereoRendering" and _G.capturedStereoCalls[1].val == true)
     )", "=checkStereoCalls");
     EXPECT_EQ(checkStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
-    // Verify log message
     bool foundStereoLog = false;
     for (const auto& msg : s_capturedLogs) {
         if (msg.find("Invoked engine stereo rendering toggle: setStereoRendering(true)") != std::string::npos) {
@@ -267,7 +250,6 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
     }
     EXPECT_TRUE(foundStereoLog);
 
-    // Call deleteMap and verify setStereoRendering(false)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
     int checkRestore = RunLuauChunk(L, R"(
         local last = _G.capturedStereoCalls[#_G.capturedStereoCalls]
@@ -292,7 +274,6 @@ TEST_F(CompanionModTest, RequiresAfrFallbackFromTheFirstFrameWithoutPollingTelem
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
-    // The fixed verdict (ADR-0017) holds before the first update, with no probe to wait for.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion:requiresAfrFallback() == true, "AFR fallback must be required before the first frame")
     )luau", "=assertBeforeUpdate"), 0);
@@ -311,7 +292,6 @@ TEST_F(CompanionModTest, RequiresAfrFallbackFromTheFirstFrameWithoutPollingTelem
         assert(VRCompanion:requiresAfrFallback() == true, "AFR fallback must stay required across updates")
     )luau", "=updateCalls"), 0);
 
-    // No retired telemetry probe is reported, at load or while updating.
     for (const auto& msg : s_capturedLogs) {
         EXPECT_EQ(msg.find("Telemetry Probe"), std::string::npos) << msg;
     }
@@ -320,7 +300,6 @@ TEST_F(CompanionModTest, RequiresAfrFallbackFromTheFirstFrameWithoutPollingTelem
 TEST_F(CompanionModTest, HandlesMissingStereoRenderingTogglesGracefully) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Without setting setStereoRendering, loadMap should not throw
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
     bool foundMissingLog = false;
@@ -360,7 +339,6 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup mock engine scene graph functions
     ASSERT_EQ(RunLuauChunk(L, R"(
         _G.cameraTransforms = {}
         function getParent(node) return 300 end
@@ -391,11 +369,9 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
         }
     )", "=setupCameraMocks"), 0);
 
-    // Update inside camera
     int updateInside = RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockInsideCam, 16.6)", "=updateInside");
     EXPECT_EQ(updateInside, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
-    // Verify inside camera applied 1:1 motion and localToLocal cab binding
     ASSERT_EQ(RunLuauChunk(L, R"(
         assert(_G.cameraTransforms.translation ~= nil, "translation must be set")
         assert(_G.cameraTransforms.translation.node == 100, "must target inside cameraNode")
@@ -410,9 +386,6 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
         assert(math.abs(_G.cameraTransforms.rotation.rz - 0.02) < 0.001, "roll mismatch")
     )", "=verifyInsideCam"), 0);
 
-    // Clear and test outside camera: the engine camera sits at (10, 2, 30) looking along world +X
-    // (heading -pi/2) and is only read. The head pose is composited on a level base node at that
-    // position and heading, and rendered through the eye camera linked under it.
     ASSERT_EQ(RunLuauChunk(L, R"(
         _G.translations = {}
         _G.rotations = {}
@@ -470,7 +443,6 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup player camera mock
     ASSERT_EQ(RunLuauChunk(L, R"(
         _G.playerCamTransforms = {}
         function getTranslation(node)
@@ -489,13 +461,10 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
         }
     )", "=setupPlayerCamMocks"), 0);
 
-    // Initialize base translation
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraMakeCurrent(_G.mockPlayerCam)", "=makeCurrentCall"), 0);
 
-    // Update player camera (walking / crouching)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCam"), 0);
 
-    // Verify 6DOF tracking offset applied relative to base height (0, 1.8, 0)
     ASSERT_EQ(RunLuauChunk(L, R"(
         assert(_G.playerCamTransforms.translation ~= nil, "player translation must be set")
         assert(_G.playerCamTransforms.translation.node == 500, "must target firstPersonCamera")
@@ -524,7 +493,6 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup mock scene graph, active vehicle camera, and player camera
     ASSERT_EQ(RunLuauChunk(L, R"(
         _G.vehTrans = {}
         _G.playerTrans = {}
@@ -566,10 +534,8 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
         assert(math.abs(_G.playerTrans.x - 0.5) < 0.001, "pre-recenter player x must match simPose")
     )", "=setupRecenterMocks"), 0);
 
-    // Call recenter action
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCall"), 0);
 
-    // Verify translational offsets are zeroed in bridge and camera node positions are actively realigned
     ASSERT_EQ(RunLuauChunk(L, R"(
         local pose = VRBridge.getHeadPose()
         assert(math.abs(pose.x) < 0.001, "recenter must zero x")
@@ -586,7 +552,6 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
         assert(math.abs(_G.playerTrans.z - 0.0) < 0.001, "realigned player z must be 0")
     )", "=checkZeroedPoseAndNodes"), 0);
 
-    // Verify recenter logged
     bool foundRecenterLog = false;
     bool foundVehicleRealignLog = false;
     bool foundPlayerRealignLog = false;
@@ -615,7 +580,6 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsVehicleCameraCenteredWhatever
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup engine camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion.allowObliqueProjection = true -- a leftover from an older version must change nothing
@@ -626,10 +590,8 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsVehicleCameraCenteredWhatever
         }
     )luau", "=setupVehicleCamMock"), 0);
 
-    // Run vehicle camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
 
-    // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[301] ~= nil, "setFovY must be called on vehicle cameraNode")
         assert(math.abs(_G.cameraFovY[301] - 1.80) < 0.02, "vehicle vertical fov must be the rendered FOV covering the headset FOV (outer side 0.90 at the headset aspect)")
@@ -655,7 +617,6 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsPlayerCameraCenteredWhateverT
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup player camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion.allowObliqueProjection = true -- a leftover from an older version must change nothing
@@ -665,10 +626,8 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsPlayerCameraCenteredWhateverT
         }
     )luau", "=setupPlayerCamMock"), 0);
 
-    // Run player camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCam"), 0);
 
-    // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[401] ~= nil, "setFovY must be called on player firstPersonCamera")
         assert(math.abs(_G.cameraFovY[401] - 1.80) < 0.02, "player vertical fov must be the rendered FOV covering the headset FOV (outer side 0.90 at the headset aspect)")
@@ -703,10 +662,8 @@ TEST_F(CompanionModTest, CentersCameraProjectionToPreventCrossEyedDisparity) {
         }
     )luau", "=setupVehicleCamMock"), 0);
 
-    // Run vehicle camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
 
-    // Verify projection offset is explicitly 0, 0 to ensure zero disparity shear at infinity
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
         assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "vehicle horizontal offset must be zero")
@@ -912,7 +869,6 @@ TEST_F(CompanionModTest, DlssNearClipDefaultsAreCabPointOneOutsideAutoAndOnFootP
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // No settings file: the defaults apply from map load
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.addConsoleCommand = function() end
         _G.testVehicleCam = { isInside = true }
@@ -992,7 +948,6 @@ TEST_F(CompanionModTest, DlssNearClipFollowsTheCameraModeCabOutsideAndOnFoot) {
     )luau", "=testNearClipBackInCab"), 0);
     EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
 
-    // vrDlssNearClip sets every mode at once
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:consoleCommandDlssNearClip("0.2")
         assert(VRCompanion.dlssNearClipCab == 0.2 and VRCompanion.dlssNearClipOutside == 0.2
@@ -1018,7 +973,6 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.cameraProjectionOffsets[505] = { x = 0.07, y = -0.03 } -- the game camera's own lens
@@ -1029,19 +983,15 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
         }
     )luau", "=setupRestoreMocks"), 0);
 
-    // Apply projection via update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockCam, 16.6)", "=updateCam"), 0);
 
-    // Ensure modified
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.cameraFovY[505] - 1.80) < 0.02, "must be set to the rendered VR fov")
         assert(_G.cameraProjectionOffsets[505].x == 0 and _G.cameraProjectionOffsets[505].y == 0, "must be centered while the mod owns the camera")
     )luau", "=checkModified"), 0);
 
-    // Unload map
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
 
-    // Verify restored
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.cameraFovY[505] - 1.0472) < 0.001, "original FOV must be restored")
         assert(math.abs(_G.cameraProjectionOffsets[505].x - 0.07) < 0.001, "offset x must be restored")
@@ -1086,11 +1036,9 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredO
         }
     )luau", "=setupAFRVehicleMocks"), 0);
 
-    // Frame 0 (even, left eye, parity = 0)
     ASSERT_EQ(bridge.GetFrameParity(), 0u);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame0"), 0);
 
-    // Check Frame 0: Left Eye projection centered although the eye's tan offset is -0.23, and negative IPD offset (-0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301] ~= nil, "projection offset must be set on vehicle camera")
         assert(_G.cameraProjectionOffsets[301].x == 0 and _G.cameraProjectionOffsets[301].y == 0, "frame 0 should have a centered projection")
@@ -1101,14 +1049,11 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredO
         assert(math.abs(_G.cameraTranslations[301].z) < 0.001, "z translation should be zero")
     )luau", "=verifyFrame0InCab"), 0);
 
-    // Advance frame parity to 1 (odd, right eye)
     bridge.AdvanceFrame();
     ASSERT_EQ(bridge.GetFrameParity(), 1u);
 
-    // Frame 1 (odd, right eye, parity = 1)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame1"), 0);
 
-    // Check Frame 1: Right Eye projection centered although the eye's tan offset is +0.23, and positive IPD offset (+0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301].x == 0 and _G.cameraProjectionOffsets[301].y == 0, "frame 1 should have a centered projection")
         assert(math.abs(_G.cameraTranslations[301].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
@@ -1156,12 +1101,10 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredO
         }
     )luau", "=setupAFRPlayerMocks"), 0);
 
-    // Frame 0 (even, left eye, parity = 0)
     ASSERT_EQ(bridge.GetFrameParity(), 0u);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraMakeCurrent(_G.mockPlayerCam)", "=makeCurrentPlayer"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame0"), 0);
 
-    // Check Frame 0: Left Eye projection centered although the eye's tan offset is -0.23, and negative IPD offset (-0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[401] ~= nil, "projection offset must be set on player camera")
         assert(_G.cameraProjectionOffsets[401].x == 0 and _G.cameraProjectionOffsets[401].y == 0, "frame 0 should have a centered projection")
@@ -1171,14 +1114,11 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredO
         assert(math.abs(_G.cameraTranslations[401].y - 1.8) < 0.001, "y translation should match base head height")
     )luau", "=verifyFrame0OnFoot"), 0);
 
-    // Advance frame parity to 1 (odd, right eye)
     bridge.AdvanceFrame();
     ASSERT_EQ(bridge.GetFrameParity(), 1u);
 
-    // Frame 1 (odd, right eye, parity = 1)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame1"), 0);
 
-    // Check Frame 1: Right Eye projection centered although the eye's tan offset is +0.23, and positive IPD offset (+0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[401].x == 0 and _G.cameraProjectionOffsets[401].y == 0, "frame 1 should have a centered projection")
         assert(math.abs(_G.cameraTranslations[401].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
@@ -1230,15 +1170,12 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
         }
     )luau", "=setupPlayerCameraHookMocks"), 0);
 
-    // Hook PlayerCamera
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:hookPlayerCamera()", "=hookPlayerCam"), 0);
     ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion.playerCameraHooked == true)", "=assertHooked"), 0);
 
-    // Call makeCurrent then updatePosition via PlayerCamera class
     ASSERT_EQ(RunLuauChunk(L, "PlayerCamera.makeCurrent(_G.testPlayerCam)", "=callMakeCurrent"), 0);
     ASSERT_EQ(RunLuauChunk(L, "PlayerCamera.updatePosition(_G.testPlayerCam, 16.6)", "=callUpdatePosition"), 0);
 
-    // Verify both original method and VR tracking were invoked
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.testPlayerCam.baseMakeCurrentCalled == true, "original makeCurrent must be called")
         assert(_G.testPlayerCam.baseUpdatePositionCalled == true, "original updatePosition must be called")
@@ -1249,7 +1186,6 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
         assert(math.abs(VRCompanion:normalizeAngle(_G.cameraRotations[777].y - (0.10 + math.pi))) < 0.005, "yaw must be applied")
     )luau", "=verifyPlayerCameraHookDispatched"), 0);
 
-    // Test deleteMap restores original updatePosition
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapTest"), 0);
     ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion.playerCameraHooked == false)", "=assertUnhooked"), 0);
 }
@@ -1307,7 +1243,6 @@ TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState
 
     EXPECT_FALSE(bridge.IsCompanionActive());
 
-    // Load map: triggers handshake and marks active
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     EXPECT_TRUE(bridge.IsCompanionActive());
 
@@ -1316,7 +1251,6 @@ TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState
         assert(VRBridge.isCompanionActive() == true, "VRBridge.isCompanionActive() must be true")
     )luau", "=verifyActive"), 0);
 
-    // Unload map: triggers deleteMap and notifies VRBridge
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
     EXPECT_FALSE(bridge.IsCompanionActive());
 
@@ -1332,7 +1266,6 @@ TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Mock g_gui with getIsGuiVisible method
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
             _visible = false,
@@ -1345,11 +1278,9 @@ TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     EXPECT_FALSE(bridge.IsMenuVisible());
 
-    // Update with menu closed
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall1"), 0);
     EXPECT_FALSE(bridge.IsMenuVisible());
 
-    // Open menu
     ASSERT_EQ(RunLuauChunk(L, "_G.g_gui._visible = true", "=openMenu"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall2"), 0);
 
@@ -1368,7 +1299,6 @@ TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
     }
     EXPECT_TRUE(foundOpenLog);
 
-    // Close menu
     ASSERT_EQ(RunLuauChunk(L, "_G.g_gui._visible = false", "=closeMenu"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall3"), 0);
 
@@ -1406,7 +1336,6 @@ TEST_F(CompanionModTest, SuppressesAfrEyeOffsetAndAlternationWhenMenuVisible) {
 
     EXPECT_TRUE(bridge.IsMenuVisible());
 
-    // When menu is visible, computeEyeOffset should return 0, 0, 0 regardless of eye index
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local ox, oy, oz = VRCompanion:computeEyeOffset({ qx = 0, qy = 0, qz = 0, qw = 1 }, 1, true)
         assert(ox == 0 and oy == 0 and oz == 0, "computeEyeOffset must return 0, 0, 0 when menu is visible")
@@ -1419,13 +1348,11 @@ TEST_F(CompanionModTest, HandlesMissingOrFailingGuiGracefullyWithoutError) {
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // 1. g_gui is nil
     ASSERT_EQ(RunLuauChunk(L, "_G.g_gui = nil", "=nilGui"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCallNil"), 0);
     EXPECT_FALSE(bridge.IsMenuVisible());
 
-    // 2. g_gui:getIsGuiVisible throws an error
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
             getIsGuiVisible = function() error("Simulated GUI exception") end
@@ -1452,7 +1379,6 @@ TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
     EXPECT_TRUE(bridge.IsMenuVisible());
 
-    // Unload map
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
     EXPECT_FALSE(bridge.IsMenuVisible());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1475,7 +1401,6 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Setup showroom / background menu camera mocks
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.activeCamNode = 999
         _G.camTrans = { x = 0.0, y = 2.0, z = -5.0 }
@@ -1514,7 +1439,6 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
 
-    // Verify camera translation and rotation received head pose offsets
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.setTransCalls >= 1, "setTranslation must be called for active camera node")
         assert(_G.setRotCalls >= 1, "setRotation must be called for active camera node")
@@ -1563,16 +1487,13 @@ TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall1"), 0);
 
-    // Verify offset applied
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.camTrans.x - 1.5) < 0.001, "offset must be applied during menu")
     )luau", "=verifyOffsetApplied"), 0);
 
-    // Now close the menu
     ASSERT_EQ(RunLuauChunk(L, "_G.g_gui._visible = false", "=closeMenu"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall2"), 0);
 
-    // Verify original base transform restored
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.camTrans.x - 1.0) < 0.001, "camTrans.x must be restored to base 1.0")
         assert(math.abs(_G.camTrans.y - 3.0) < 0.001, "camTrans.y must be restored to base 3.0")
@@ -1621,7 +1542,6 @@ TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
 
-    // Simulate 2D mouse and controller events being dispatched to GUI
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui:mouseEvent(0.5, 0.5, true, false, 1)
         _G.g_gui:keyEvent(65, 97, 0, true)
@@ -1653,7 +1573,6 @@ TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
 
-    // Recenter invoked while menu is displayed
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCall"), 0);
 
     EXPECT_TRUE(openXrManager->HasMenuQuadPose());
@@ -1820,10 +1739,8 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
         _G.mockPlayerCam.player = { inputComponent = _G.mockInput }
     )luau", "=setupPlayerHierachyMocks"), 0);
 
-    // Initial pose: head forward (pitch=0, yaw=0, roll=0)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=callPlayerCamUpdate"), 0);
 
-    // Verify camera look vector points along world forward (+Z) and matches W walk vector
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         -- GIANTS Engine camera looks down its local -Z axis
         local camLookX, _, camLookZ = localDirectionToWorld(_G.mockPlayerCam.firstPersonCamera, 0, 0, -1)
@@ -1860,7 +1777,6 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
         assert(math.abs(dotA - 1.0) < 0.001, "A must strafe in the exact camera left direction! dotA=" .. tostring(dotA))
     )luau", "=verifyCollinearMovement"), 0);
 
-    // Now test mouse turning via onPlayerCameraUpdateRotation
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.mockInput.cameraRotationY = 0.5 -- mouse turn right
         VRCompanion:onPlayerCameraUpdateRotation(_G.mockPlayerCam, 16.6)
@@ -2474,7 +2390,6 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     PlaceHudAtLayoutDepth();
 
-    // Set simulated IPD on native OpenXR manager: 64mm
     oxr->SetIpd(0.064f);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3868,13 +3783,11 @@ TEST_F(CompanionModTest, ImplementsGetAndSetRenderingMode) {
 
 TEST_F(CompanionModTest, QueriesNativeRenderingModeOnInitializationAndHandshake) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
-    // Pre-configure native state to Sequential Dual-Pass
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Initial map load should handshake and query native rendering mode
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap"), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3883,7 +3796,6 @@ TEST_F(CompanionModTest, QueriesNativeRenderingModeOnInitializationAndHandshake)
         assert(VRCompanion.renderingMode == "SequentialDualPass", "VRCompanion.renderingMode property must be 'SequentialDualPass'")
     )luau", "=assertNativeSync"), 0);
 
-    // Verify log contains the active rendering mode
     bool foundModeLog = false;
     for (const auto& msg : s_capturedLogs) {
         if (msg.find("renderingMode: SequentialDualPass") != std::string::npos ||
@@ -3901,21 +3813,16 @@ TEST_F(CompanionModTest, RenderingModePersistenceAcrossMapUnload) {
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // First map load
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap1"), 0);
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
 
-    // User switches to AFR in game
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setRenderingMode('AFR')", "=setAFR"), 0);
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
 
-    // Map unload
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMap"), 0);
-    // Native state must persist AFR
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
 
-    // Second map load
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapAlpine')", "=loadMap2"), 0);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.handshakeComplete == true, "handshake must succeed on second map")
@@ -3980,7 +3887,6 @@ TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
 }
 
 namespace {
-// Engine camera queries for two eye camera nodes, 0.064 m apart along world X.
 constexpr const char* kCameraQueryMocks = R"luau(
     _G.currentCamera = 0
     function _G.setCamera(cam) _G.currentCamera = cam end
@@ -4004,7 +3910,7 @@ constexpr const char* kCameraQueryMocks = R"luau(
     VRCompanion.cameraNodeLeft = 5001
     VRCompanion.cameraNodeRight = 5002
 )luau";
-} // namespace
+}
 
 TEST_F(CompanionModTest, DualPassSubPassesReportTheCameraOfTheEyeEachRendered) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
@@ -4012,8 +3918,6 @@ TEST_F(CompanionModTest, DualPassSubPassesReportTheCameraOfTheEyeEachRendered) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
 
-    // Sub-pass 0 renders the left eye, sub-pass 1 the right eye; each reports once, stamped with
-    // the frame the Injector is rendering.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRBridge.setSubPassIndex(0)
         _G.FSBaseMission:update(16.666)
@@ -4407,13 +4311,11 @@ TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DVi
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    // Initial state: clear any initialization discontinuities
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
 
-    // 1. Recenter Action flags discontinuity across VRBridge
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:onRecenterAction()
     )luau", "=testRecenterDiscontinuity"), 0);
@@ -4422,7 +4324,6 @@ TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DVi
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
 
-    // 2. 2D/3D Mode toggle flags discontinuity across VRBridge
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:set2DViewActive(true)
     )luau", "=test2DViewToggleDiscontinuity"), 0);
@@ -4431,7 +4332,6 @@ TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DVi
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
 
-    // Toggling back to 3D mode also flags discontinuity
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:set2DViewActive(false)
     )luau", "=testRestore3DDiscontinuity"), 0);
@@ -4440,7 +4340,6 @@ TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DVi
     bridge.ConsumeDiscontinuity(0);
     bridge.ConsumeDiscontinuity(1);
 
-    // 3. Snap Turn locomotion flags discontinuity across VRBridge
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockVehCam = {
             isInside = true,
@@ -4758,7 +4657,7 @@ TEST_F(CompanionModTest, DesktopMirrorIsOnWhenNothingIsSaved) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    bridge.SetDesktopMirrorEnabled(false);  // a stale off in the bridge must not survive a map load
+    bridge.SetDesktopMirrorEnabled(false);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.addConsoleCommand = function() end
@@ -4990,7 +4889,7 @@ TEST_F(CompanionModTest, MouseConfinementIsOnWhenNothingIsSaved) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    bridge.SetMouseConfinementEnabled(false);  // a stale off in the bridge must not survive a map load
+    bridge.SetMouseConfinementEnabled(false);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.addConsoleCommand = function() end

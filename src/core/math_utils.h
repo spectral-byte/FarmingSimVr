@@ -64,12 +64,10 @@ inline EulerAngles QuaternionToEuler(const Quaternion& q) {
 }
 
 inline Vector3 RotateVectorByQuaternion(const Quaternion& q, const Vector3& v) {
-    // t = 2 * cross(q.xyz, v)
     float tx = 2.0f * (q.y * v.z - q.z * v.y);
     float ty = 2.0f * (q.z * v.x - q.x * v.z);
     float tz = 2.0f * (q.x * v.y - q.y * v.x);
 
-    // v' = v + qw * t + cross(q.xyz, t)
     return Vector3(
         v.x + q.w * tx + (q.y * tz - q.z * ty),
         v.y + q.w * ty + (q.z * tx - q.x * tz),
@@ -77,4 +75,4 @@ inline Vector3 RotateVectorByQuaternion(const Quaternion& q, const Vector3& v) {
     );
 }
 
-} // namespace fs25vr
+}

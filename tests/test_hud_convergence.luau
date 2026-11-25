@@ -1,17 +1,10 @@
--- ====================================================================
--- Test Suite for VR HUD Convergence Parity
--- ====================================================================
-
--- Mock GIANTS Engine globals before loading VRCompanion
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
--- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
 VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
@@ -30,13 +23,11 @@ end
 
 print("Running VR HUD Convergence Parity Tests...")
 
--- Every setting back to its default (HUD Group Margins included), then the HUD Safe Area set
 local function useSafeArea(horizontal, vertical)
     VRCompanion:loadConfiguration("non_existent_file.xml")
     VRCompanion:configureHudSafeArea(horizontal, vertical)
 end
 
--- Slice 1: Mathematical scaling, target depth, fallback, and boundary clamping
 test("DefinesConvergenceConstantsAndDefaults", function()
     assert(VRCompanion.HUD_LAYOUT_DEPTH == 1.8, "the HUD layouts are set for 1.8 m")
     assert(VRCompanion.DEFAULT_HUD_DEPTH == 2.5, "a new install starts at a HUD Depth of 2.5 m")
@@ -65,45 +56,37 @@ test("FallsBackToSafeDisparityWhenIpdIsNilOrInvalid", function()
 end)
 
 test("ScalesDisparityLinearlyWithHeadsetIpd", function()
-    -- 70mm IPD
     local disparity70 = VRCompanion:computeConvergenceDisparity(0.070, 1.8)
     local expected70 = 0.012 * (0.070 / 0.064)
     assert(math.abs(disparity70 - expected70) < 0.0001, string.format("70mm IPD should yield %f, got %f", expected70, disparity70))
 
-    -- 58mm IPD
     local disparity58 = VRCompanion:computeConvergenceDisparity(0.058, 1.8)
     local expected58 = 0.012 * (0.058 / 0.064)
     assert(math.abs(disparity58 - expected58) < 0.0001, string.format("58mm IPD should yield %f, got %f", expected58, disparity58))
 end)
 
 test("ScalesDisparityInverselyWithVirtualDepth", function()
-    -- Closer depth (0.9m) -> double disparity
     local disparityNear = VRCompanion:computeConvergenceDisparity(0.064, 0.9)
     assert(math.abs(disparityNear - 0.024) < 0.0001, string.format("0.9m depth should yield 0.024, got %f", disparityNear))
 
-    -- Farther depth (3.6m) -> half disparity
     local disparityFar = VRCompanion:computeConvergenceDisparity(0.064, 3.6)
     assert(math.abs(disparityFar - 0.006) < 0.0001, string.format("3.6m depth should yield 0.006, got %f", disparityFar))
 end)
 
 test("ClampsDisparityAndIpdWithinSafeBoundaries", function()
-    -- Extremely small IPD clamped to MIN_IPD (0.040)
     local disparityMinIpd = VRCompanion:computeConvergenceDisparity(0.010, 1.8)
     local expectedMin = 0.012 * (0.040 / 0.064)
     assert(math.abs(disparityMinIpd - expectedMin) < 0.0001, "Small IPD must be clamped to MIN_IPD")
 
-    -- Extremely large IPD clamped to MAX_IPD (0.085)
     local disparityMaxIpd = VRCompanion:computeConvergenceDisparity(0.200, 1.8)
     local expectedMax = 0.012 * (0.085 / 0.064)
     assert(math.abs(disparityMaxIpd - expectedMax) < 0.0001, "Large IPD must be clamped to MAX_IPD")
 
-    -- Extremely close depth clamped to MAX_CONVERGENCE_DISPARITY (0.040)
     local disparityExtNear = VRCompanion:computeConvergenceDisparity(0.085, 0.1)
     assert(disparityExtNear <= VRCompanion.MAX_CONVERGENCE_DISPARITY, "Extreme near depth must not exceed MAX_CONVERGENCE_DISPARITY")
     assert(disparityExtNear >= VRCompanion.MIN_CONVERGENCE_DISPARITY, "Must not be below MIN_CONVERGENCE_DISPARITY")
 end)
 
--- Slice 2: Parity directionality and frame parity offset calculation
 test("CalculatesPositiveConvergenceOffsetOnLeftEyeParity0", function()
     local offset = VRCompanion:getConvergenceOffset(0, 0.012)
     assert(math.abs(offset - 0.012) < 0.0001, "Parity 0 (Left eye) must yield positive +0.012 offset")
@@ -115,11 +98,9 @@ test("CalculatesNegativeConvergenceOffsetOnRightEyeParity1", function()
 end)
 
 test("AlternatesOffsetSignAcrossArbitrarySequentialParityIndices", function()
-    -- Even indices (Left eye) -> positive
     assert(math.abs(VRCompanion:getConvergenceOffset(2, 0.015) - 0.015) < 0.0001)
     assert(math.abs(VRCompanion:getConvergenceOffset(100, 0.015) - 0.015) < 0.0001)
 
-    -- Odd indices (Right eye) -> negative
     assert(math.abs(VRCompanion:getConvergenceOffset(3, 0.015) - (-0.015)) < 0.0001)
     assert(math.abs(VRCompanion:getConvergenceOffset(101, 0.015) - (-0.015)) < 0.0001)
 end)
@@ -139,7 +120,6 @@ test("ResolvesOffsetFromBridgeWhenParityOmitted", function()
     _G.VRBridge = nil
 end)
 
--- Slice 3: Frame anchor updates and drift-free preservation
 test("UpdatesHorizontalAnchorsWithPositiveOffsetOnParity0", function()
     useSafeArea(0.20, 0.16)
     _G.VRBridge = {
@@ -199,11 +179,9 @@ test("MaintainsBaseAnchorsInvariantlyAcrossTenThousandFramesWithoutDrift", funct
         VRCompanion:updateHudConvergence()
     end
 
-    -- Verify base anchors remain strictly invariant
     assert(math.abs(VRCompanion.hudAnchorLeftBase - 0.20) < 0.0000001, "hudAnchorLeftBase must not drift")
     assert(math.abs(VRCompanion.hudAnchorRightBase - 0.80) < 0.0000001, "hudAnchorRightBase must not drift")
 
-    -- Final frame was 10000 % 2 == 0 (parity 0)
     assert(math.abs(VRCompanion.hudAnchorLeft - 0.212) < 0.0000001, "Final frame left anchor must be exactly 0.212")
     assert(math.abs(VRCompanion.hudAnchorRight - 0.812) < 0.0000001, "Final frame right anchor must be exactly 0.812")
 
@@ -234,13 +212,11 @@ test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
     }
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
-    -- Frame 0 (Parity 0 -> the Speedometer group's right margin edge shifts by +0.012: 1 - 0.30 + 0.012 = 0.712)
     curParity = 0
     VRCompanion:updateHudConvergence()
     assert(mockSpeedMeter.position ~= nil)
     assert(math.abs(mockSpeedMeter.position.x - 0.712) < 0.0001, "SpeedMeter aligned with parity 0 shifted margin edge")
 
-    -- Frame 1 (Parity 1 -> shifts by -0.012: 1 - 0.30 - 0.012 = 0.688)
     curParity = 1
     VRCompanion:updateHudConvergence()
     assert(math.abs(mockSpeedMeter.position.x - 0.688) < 0.0001, "SpeedMeter aligned with parity 1 shifted margin edge")
@@ -249,7 +225,6 @@ test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
     _G.VRBridge = nil
 end)
 
--- HUD Groups (spec #50, ticket #51): the per-frame placement takes each display's home corner from its group
 test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
     useSafeArea(0.20, 0.16)
     _G.VRBridge = {
@@ -324,7 +299,6 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndStackedFillLevelsAcrossParity
     }
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
-    -- Frame 0: Left Eye (Parity 0 -> the group's right margin edge = 0.65 + 0.012 = 0.662)
     curParity = 0
     VRCompanion:updateHudConvergence()
     assert(mockSpeedMeter.position ~= nil)
@@ -334,7 +308,6 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndStackedFillLevelsAcrossParity
     assert(math.abs(mockFill.position.y - 0.25) < 0.0001, "FillLevels sit on the Speedometer group's bottom margin")
     assert(math.abs(mockSpeedMeter.position.y - (0.25 + 0.03 + 0.002)) < 0.0001, "SpeedMeter is stacked above the fill levels, one scaled gap clear")
 
-    -- Frame 1: Right Eye (Parity 1 -> right anchor = 0.65 - 0.012 = 0.638)
     curParity = 1
     VRCompanion:updateHudConvergence()
     assert(math.abs(mockSpeedMeter.position.x - (0.638 - 0.10)) < 0.0001, "SpeedMeter must receive -0.012 disparity (0.638 - its 0.10 width)")
@@ -381,7 +354,6 @@ test("ConvergenceShiftsEveryGroupAndTheContextActionByTheSameAmount", function()
         assert(math.abs((left[n].x - hud[n].position.x) - 0.024) < 0.0001, n .. " must shift by the full eye-to-eye disparity")
         assert(math.abs(left[n].y - hud[n].position.y) < 0.0001, n .. " must not move vertically")
     end
-    -- Margins still hold at the left eye's offset (+0.012)
     assert(math.abs(left.ingameMap.x - (0.05 + 0.012)) < 0.0001, "map left margin")
     assert(math.abs(left.speedMeter.x - (1.0 - 0.07 - 0.10 + 0.012)) < 0.0001, "speedometer right margin")
     assert(math.abs(left.gameInfo.y - (1.0 - 0.14 - 0.05)) < 0.0001, "info top margin")
@@ -417,7 +389,6 @@ test("ConsoleCommandsKeepTheConvergenceOffsetOnEveryGroupFillLevelsAndTheContext
     _G.g_currentMission = { hud = hud }
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
-    -- The left eye's frame sets the +0.012 offset; the console command that follows places everything with it
     VRCompanion:updateHudConvergence()
     assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "left eye offset")
     for _, n in ipairs({ "ingameMap", "speedMeter", "fillLevels", "gameInfo", "inputHelp", "contextAction" }) do hud[n].position = nil end
@@ -437,7 +408,6 @@ test("ConsoleCommandsKeepTheConvergenceOffsetOnEveryGroupFillLevelsAndTheContext
     useSafeArea(0.30, 0.22)
 end)
 
--- Hidden HUD: no repositioning, but convergence state keeps updating
 local function makeCountingHud()
     local calls = { count = 0 }
     local function mk(name)
@@ -526,7 +496,6 @@ test("SwitchingFromHiddenPositionsElementsWithCurrentConvergenceOffset", functio
     assert(math.abs(hud.ingameMap.position.x - 0.312) < 0.0001, "Map must use its group's shifted left margin")
     assert(math.abs(hud.fillLevels.position.x - (0.712 - 0.08)) < 0.0001, "Fill levels must carry the offset")
 
-    -- Streamlined path too
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     parity.value = 1
     VRCompanion:updateHudConvergence()
@@ -551,7 +520,6 @@ test("VisibleStatesKeepRepositioningEveryUpdate", function()
     teardownHiddenHudScene()
 end)
 
--- Slice 4: Pass-Through mode and disabled head tracking smooth reversion to zero
 test("PassThroughModeRevertsConvergenceOffsetSmoothlyToZero", function()
     useSafeArea(0.20, 0.16)
     local curParity = 0
@@ -564,22 +532,18 @@ test("PassThroughModeRevertsConvergenceOffsetSmoothlyToZero", function()
     VRCompanion.passThroughMode = false
     VRCompanion.headTrackingEnabled = true
 
-    -- Initialize active disparity
     VRCompanion:updateHudConvergence()
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001)
 
-    -- Activate Pass-Through mode
     VRCompanion.passThroughMode = true
     assert(VRCompanion:isPassThroughMode() == true, "Pass-Through mode must be active")
 
-    -- Step 1 frame with 16ms: disparity should decrease smoothly, not instantly drop to 0
     curParity = 1
     VRCompanion:updateHudConvergence(16)
     local d1 = VRCompanion.currentConvergenceDisparity
     assert(d1 < 0.012, "Disparity must decrease from initial 0.012")
     assert(d1 > 0.0, "Disparity must smoothly transition rather than instantly vanishing on frame 1")
 
-    -- Step 25 frames (~400ms): disparity must smoothly reach exactly 0.0
     for f = 1, 25 do
         curParity = f % 2
         VRCompanion:updateHudConvergence(16)
@@ -606,20 +570,16 @@ test("DisabledHeadTrackingRevertsConvergenceOffsetSmoothlyToZero", function()
     VRCompanion.passThroughMode = false
     VRCompanion.headTrackingEnabled = true
 
-    -- Initialize active disparity
     VRCompanion:updateHudConvergence()
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001)
 
-    -- Disable head tracking
     VRCompanion.headTrackingEnabled = false
     assert(VRCompanion:isHeadTrackingActive() == false, "Head tracking must report inactive")
 
-    -- Step 1 frame: smooth decrement
     VRCompanion:updateHudConvergence(16)
     local d1 = VRCompanion.currentConvergenceDisparity
     assert(d1 < 0.012 and d1 > 0.0, "Disparity must decay smoothly on frame 1")
 
-    -- Step remaining frames to reach 0.0
     for f = 1, 25 do
         curParity = f % 2
         VRCompanion:updateHudConvergence(16)
@@ -627,7 +587,6 @@ test("DisabledHeadTrackingRevertsConvergenceOffsetSmoothlyToZero", function()
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0) < 0.00001, "Disparity must smoothly reach 0.0")
     assert(math.abs(VRCompanion.currentConvergenceOffset - 0.0) < 0.00001, "Offset must be 0.0")
 
-    -- Both Left (0) and Right (1) parity frames now produce zero offset
     curParity = 0
     local left0, right0, off0 = VRCompanion:updateHudConvergence(16)
     assert(math.abs(off0) < 0.00001 and math.abs(left0 - 0.20) < 0.00001)
@@ -636,7 +595,6 @@ test("DisabledHeadTrackingRevertsConvergenceOffsetSmoothlyToZero", function()
     local left1, right1, off1 = VRCompanion:updateHudConvergence(16)
     assert(math.abs(off1) < 0.00001 and math.abs(left1 - 0.20) < 0.00001)
 
-    -- Re-enable tracking: smoothly recovers
     VRCompanion.headTrackingEnabled = true
     for f = 1, 35 do
         curParity = f % 2
@@ -648,8 +606,6 @@ test("DisabledHeadTrackingRevertsConvergenceOffsetSmoothlyToZero", function()
     VRCompanion.headTrackingEnabled = true
 end)
 
--- In the game the engine's own head-tracking setting reads off (no TrackIR) while the mod places the head itself (as found for
--- the Pointer Ray, 2b334b7): the HUD must keep the depth it is set to, or vrHudDepth and vrDialogDepth do nothing.
 test("TheHudKeepsItsDepthWhileTheEnginesHeadTrackingSettingIsOff", function()
     useSafeArea(0.20, 0.16)
     local curParity = 0
@@ -688,21 +644,17 @@ test("TheHudKeepsItsDepthWhileTheEnginesHeadTrackingSettingIsOff", function()
 end)
 
 test("PassThroughModeDetectionAndGameSettingsIntegration", function()
-    -- When VRBridge is nil -> pass through is true
     _G.VRBridge = nil
     VRCompanion.passThroughMode = nil
     assert(VRCompanion:isPassThroughMode() == true, "Pass-Through mode true when VRBridge is nil")
 
-    -- When VRBridge.isReady returns false -> pass through is true
     _G.VRBridge = { isReady = function() return false end }
     assert(VRCompanion:isPassThroughMode() == true, "Pass-Through mode true when VRBridge not ready")
 
-    -- When VRBridge.isReady returns true and handshake is complete -> pass through is false
     _G.VRBridge = { isReady = function() return true end, isCompanionActive = true }
     VRCompanion.handshakeComplete = true
     assert(VRCompanion:isPassThroughMode() == false, "Pass-Through mode false when VRBridge ready")
 
-    -- Test GameSettings head tracking toggle
     local trackingSettingValue = true
     _G.GameSettings = { SETTING = { IS_HEAD_TRACKING_ENABLED = 42 } }
     _G.g_gameSettings = {
@@ -722,9 +674,7 @@ test("PassThroughModeDetectionAndGameSettingsIntegration", function()
     _G.VRBridge = nil
 end)
 
--- Slice 5: Map lifecycle and GUI menu integration
 test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
-    -- Mock XML with custom depth
     _G.mockXmlData = {
         ["vrSettings.hudSafeAreaHorizontal"] = 0.20,
         ["vrSettings.hudSafeAreaVertical"] = 0.16,
@@ -738,17 +688,14 @@ test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
     assert(math.abs(VRCompanion.hudConvergenceDepth - 2.0) < 0.0001, "Loaded convergence depth must be 2.0")
     assert(math.abs(safeArea.convergenceDepth - 2.0) < 0.0001, "getHudSafeArea().convergenceDepth must be 2.0")
 
-    -- Verify disparity scaled with 2.0m depth: (0.064 / 2.0) * 0.3375 = 0.0108
     local disparity = VRCompanion:computeConvergenceDisparity(0.064)
     assert(math.abs(disparity - 0.0108) < 0.0001, "Disparity for 2.0m depth must be 0.0108")
 
-    -- Clean up XML mocks
     _G.loadXMLFile = nil
     _G.getXMLFloat = nil
     _G.delete = nil
     _G.mockXmlData = nil
 
-    -- Now test deleteMap cleanup
     _G.VRBridge = {
         getFrameParity = function() return 0 end,
         getIpd = function() return 0.064 end,
@@ -786,12 +733,10 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     VRCompanion.passThroughMode = false
     VRCompanion.headTrackingEnabled = true
 
-    -- In game, VR active
     VRCompanion.isMenuVisible = false
     VRCompanion:updateHudConvergence()
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001)
 
-    -- Player enters GUI menu (floating quad active, HUD convergence disabled)
     VRCompanion.isMenuVisible = true
     for f = 1, 35 do
         curParity = f % 2
@@ -800,7 +745,6 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0) < 0.0001, "In menu, disparity reverts to 0")
     assert(math.abs(VRCompanion.currentConvergenceOffset - 0.0) < 0.0001, "In menu, offset is 0")
 
-    -- Player exits GUI menu (stereoscopic 3D projection rendering resumes)
     VRCompanion.isMenuVisible = false
     for f = 1, 35 do
         curParity = f % 2
@@ -808,7 +752,6 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     end
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001, "Exiting menu, disparity recovers to 0.012")
 
-    -- Verify parity alternation resumes
     curParity = 0
     local _, _, off0 = VRCompanion:updateHudConvergence()
     assert(math.abs(off0 - 0.012) < 0.0001, "Parity 0 offset is +0.012")
@@ -820,7 +763,6 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     _G.VRBridge = nil
 end)
 
--- Presentation and input are separate states: a menu that only takes the input leaves the stereo HUD depth alone
 test("AMenuThatOnlyTakesTheInputKeepsTheHudConvergence", function()
     useSafeArea(0.20, 0.16)
     _G.VRBridge = {
@@ -841,7 +783,6 @@ test("AMenuThatOnlyTakesTheInputKeepsTheHudConvergence", function()
     _G.VRBridge = nil
 end)
 
--- The pass-through and head-tracking checks resolve once per update
 local function withProbedUpdate(probe)
     local real = VRCompanion.updateHudConvergence
     VRCompanion.updateHudConvergence = function(self, dt)
@@ -853,7 +794,6 @@ local function withProbedUpdate(probe)
     assert(ok, tostring(err))
 end
 
--- Peak heap growth (KB) while running fn many times; per-call closures show up as growth
 local function peakHeapGrowthKb(fn, iterations)
     fn()
     local base = gcinfo()
@@ -982,7 +922,6 @@ test("SettersTakeEffectNoLaterThanTheNextUpdate", function()
     clearCountingMocks()
 end)
 
--- The game runs VRCompanion:update inside the hooked mission update
 local function withHookedMissionUpdate(missionUpdate, fn, mode)
     _G.FSBaseMission = { update = missionUpdate }
     VRCompanion:setRenderingMode(mode or "AFR")
@@ -1008,7 +947,6 @@ test("UpdateNestedInTheHookedMissionUpdateQueriesEachSourceOncePerFrame", functi
             ok, err = pcall(withHookedMissionUpdate, function(self, dt) VRCompanion:update(dt) end, function()
                 for _ = 1, 3 do
                     counts.ready, counts.setting, counts.available = 0, 0, 0
-                    -- Sub-pass 0 runs the mission update (and with it VRCompanion:update)
                     VRCompanion:setSubPassIndex(0)
                     _G.FSBaseMission:update(16)
                     local where = mode .. ": "
@@ -1079,9 +1017,6 @@ test("AnErrorInANestedUpdateKeepsItsRaiseSiteAndClosesEveryScope", function()
     assert(depth == 0, "an error in a nested scope must not leave a scope open, depth=" .. tostring(depth))
 end)
 
--- The shift that puts the HUD at a depth comes from the view the eyes are rendered with: a point `depth` metres ahead is
--- seen half the IPD to the side by each eye, which is (ipd / 2) / depth in tangent, over a screen 2 tan(fovX / 2) wide.
--- (Headset check: with a fixed factor the HUD read at about half the depth set on a 109 degree view.)
 test("TheHudShiftIsTheDisparityOfItsDepthInTheRenderedView", function()
     local fovX = math.rad(109.0)
     _G.VRBridge = {
@@ -1096,14 +1031,12 @@ test("TheHudShiftIsTheDisparityOfItsDepthInTheRenderedView", function()
     VRCompanion.is2DViewActive = false
     local ok, err = pcall(function()
         local function expected(depth, view) return 0.064 / (4.0 * depth * math.tan(view / 2.0)) end
-        -- The camera path fetches the eye projection every sub-pass; the HUD takes the FOV from that fetch
         assert(VRCompanion:fetchEyeProjection(0), "the projection is fetched")
         local atDefault = VRCompanion:computeConvergenceDisparity(0.064, 1.8)
         assert(math.abs(atDefault - expected(1.8, fovX)) < 1e-6, string.format("1.8 m in a 109 degree view: %.6f", atDefault))
         local atFive = VRCompanion:computeConvergenceDisparity(0.064, 5.0)
         assert(math.abs(atFive - expected(5.0, fovX)) < 1e-6, string.format("5 m: %.6f", atFive))
 
-        -- The FOV Overscan widens the rendered view, which the projection already says: it is not taken off a second time
         VRCompanion.fovOverscan = 20
         fovX = 2.0 * math.atan(math.tan(math.rad(109.0) / 2.0) * 1.2)
         VRCompanion:fetchEyeProjection(0)
@@ -1117,7 +1050,6 @@ test("TheHudShiftIsTheDisparityOfItsDepthInTheRenderedView", function()
     assert(ok, tostring(err))
 end)
 
--- vrHudDepth: the console command that sets the depth the HUD reads at
 test("VrHudDepthIsACoreConsoleCommand", function()
     local found = nil
     for _, command in ipairs(VRCompanion.CORE_CONSOLE_COMMANDS) do
@@ -1192,7 +1124,6 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
     VRCompanion:loadConfiguration("settings.xml")
     assert(VRCompanion.hudConvergenceDepth == 4.25, "and loaded back: " .. tostring(VRCompanion.hudConvergenceDepth))
 
-    -- Older versions allowed 0.5 m, and the file can be edited by hand: a depth out of range loads as the nearest one allowed
     store["vrSettings.hudConvergenceDepth"] = 0.5
     VRCompanion:loadConfiguration("settings.xml")
     assert(VRCompanion.hudConvergenceDepth == 1.0, "0.5 m loads as 1 m: " .. tostring(VRCompanion.hudConvergenceDepth))
@@ -1213,8 +1144,6 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
     VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 end)
 
--- vrHudTrace: logs, for a few rendered frames, the eye each HUD convergence update placed the HUD for and how far the
--- overlays drawn on each side reach in each rendered frame
 test("VrHudTraceLogsThePlacementAndTheDrawnReachOfEachEyeAndThenRestoresOverlayRender", function()
     useSafeArea(0.20, 0.16)
     local frameIndex, subPass = 7, 0
@@ -1232,7 +1161,6 @@ test("VrHudTraceLogsThePlacementAndTheDrawnReachOfEachEyeAndThenRestoresOverlayR
     local drawn = 0
     local realRender = function() drawn = drawn + 1 end
     _G.Overlay = { render = realRender }
-    -- A speedometer that draws at the position it was given, and a map that draws at a place of its own whatever it is given
     local function newDisplay(name, drawAt)
         local class = {}
         class.__index = class
@@ -1268,7 +1196,6 @@ test("VrHudTraceLogsThePlacementAndTheDrawnReachOfEachEyeAndThenRestoresOverlayR
         end
         return found
     end
-    -- One rendered frame: the HUD placed for the eye, then the displays drawn and a crosshair drawn outside them
     local function renderFrame()
         VRCompanion:updateHudConvergence()
         speedMeter:draw()
@@ -1287,13 +1214,11 @@ test("VrHudTraceLogsThePlacementAndTheDrawnReachOfEachEyeAndThenRestoresOverlayR
         subPass, frameIndex = 0, 8
         renderFrame()
 
-        -- The second frame's line is written when the third frame's first overlay is drawn, so its update is logged too
         local updates = linesWith("HUD trace: update")
         assert(#updates == 3, "one update line per update until the trace ends: " .. table.concat(updates, "\n"))
         assert(string.find(updates[1], "frame 7 sub-pass 0 active eye 0, placed for eye 0 at offset +0.0120: speedometer x=0.7120", 1, true) ~= nil, updates[1])
         assert(string.find(updates[2], "frame 7 sub-pass 1 active eye 1, placed for eye 1 at offset -0.0120: speedometer x=0.6880", 1, true) ~= nil, updates[2])
         assert(string.find(updates[3], "frame 8 sub-pass 0 active eye 0", 1, true) ~= nil, updates[3])
-        -- Each display's own range, the map's where the mod's shift puts it: both move with the eye
         local rendered = linesWith("HUD trace: rendered")
         assert(#rendered == 2, "one line per rendered frame: " .. table.concat(rendered, "\n"))
         assert(string.find(rendered[1], "rendered frame 7 sub-pass 0 eye 0: speedometer 0.6120..0.7120 (1), map 0.0276..0.1276 (1), other 0.4900..0.5100 (1)", 1, true) ~= nil, rendered[1])
@@ -1316,7 +1241,6 @@ test("VrHudTraceLogsThePlacementAndTheDrawnReachOfEachEyeAndThenRestoresOverlayR
     assert(ok, tostring(err))
 end)
 
--- vrHudEyeTest: the HUD moved far right in the frames of one eye only, to see in the headset which eye shows those frames
 test("VrHudEyeTestMovesTheHudInTheNamedEyesFramesOnly", function()
     useSafeArea(0.20, 0.16)
     local curParity = 0

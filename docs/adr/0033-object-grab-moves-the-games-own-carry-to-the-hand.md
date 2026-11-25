@@ -33,3 +33,5 @@ Accepted
 - With a Motion Controller aiming and empty hands, getting into a vehicle or reading an animal's prompt means pointing at it, not looking at it.
 - A game update that renames or reshapes `HandToolHands.updateKinematicNode`, `pickUpTarget`, `throwHeldItemWithForceVector`, the `spec_hands` fields or `PlayerTargeter:getLastLookRay` turns Object Grab off with a warning until the Companion Mod is updated.
 - Not yet confirmed in game: the game's mass limits and throw constants (`MAXIMUM_PICKUP_MASS`, `PICKUP_DISTANCE`, `MAXIMUM_THROW_TIME` are stripped from the source; read them at run time), how a swing's speed maps to the full throw, and how the joint feels with a hand that moves much faster than the head.
+
+More decisions about this area, from the code comments: [ADR-0051](0051-object-grab-decisions.md).

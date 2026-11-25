@@ -1,10 +1,3 @@
--- ====================================================================
--- Test Suite: the core's game function wrap helper (VRCompanion.GameWraps, spec #280, ticket #285)
---
--- Seen from outside: each test makes stand-in game classes (globals, as the engine has them), declares the functions a Subsystem
--- would wrap, and reads what the classes and the log were given. Never the helper's own tables.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -18,7 +11,6 @@ local GameWraps = VRCompanion.GameWraps
 local passed = 0
 local failed = 0
 
--- The lines the mod printed during the test running now.
 local logged = {}
 local realPrint = print
 _G.print = function(...)
@@ -53,8 +45,6 @@ local function warnings()
     return lines
 end
 
--- ---- Refusing a game function that is not the expected shape ------------------------------------------------------------
-
 test("a missing function gives up with one warning that names it", function()
     _G.StubClass = {}
     local set = GameWraps.newSet({
@@ -72,7 +62,6 @@ test("a missing function gives up with one warning that names it", function()
     expectEqual(lines[1], "[FS25_VR] [Warning] Stub disabled: StubClass.update: it is missing. The game is unchanged.", "the warning")
 end)
 
--- A Subsystem with one function, update(object, dt), on StubClass, and the give-up sentence of the first test.
 local function stubSet(make)
     return GameWraps.newSet({
         owner = "stub",
@@ -132,8 +121,6 @@ test("a Subsystem can have its reasons name the function as their subject", func
     set:check()
     expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: StubClass.update takes 1 parameters, not (object, dt). The game is unchanged.", "the warning")
 end)
-
--- ---- Putting a wrapper on and lifting it --------------------------------------------------------------------------------
 
 test("a wrapper is put on the class once, however often the Subsystem wraps", function()
     local original = function(object, dt) return "game" end
@@ -243,9 +230,6 @@ test("a class can be found by a function, for one kept in another mod's environm
     expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: StubClass.update: it takes 0 parameters, not (object, dt). The game is unchanged.", "named by className")
 end)
 
--- ---- Giving up ------------------------------------------------------------------------------------------------------------
-
--- Two functions on StubClass: update is wrapped, draw is only checked.
 local function twoFunctionSet()
     return GameWraps.newSet({
         owner = "stub",
@@ -259,7 +243,7 @@ end
 
 test("giving up lifts every wrap and logs once", function()
     local original = function(object, dt) return "game" end
-    _G.StubClass = { update = original }  -- draw is missing
+    _G.StubClass = { update = original }
     local set = twoFunctionSet()
     set:wrapAll()
     expectEqual((StubClass.update({}, 1)), "wrapped", "wrapped first")
@@ -327,8 +311,6 @@ test("the game's own function stays reachable while it is wrapped", function()
     expectEqual(set:isWrapped("update"), true, "wrapped")
 end)
 
--- ---- A wrap shared by two Subsystems ------------------------------------------------------------------------------------
-
 GameWraps.defineShared("stubAim", {
     class = "StubPlayer", fn = "getRay",
     make = function(original) return function(player) return "aimed", original(player) end end,
@@ -359,7 +341,7 @@ end)
 test("one Subsystem giving up leaves the shared wrap to the other, and the last one lifts it", function()
     local original = function(player) return "head" end
     _G.StubPlayer = { getRay = original }
-    local a = aimingSet("a", { class = "StubTool", parameters = 1, describe = "(tool)" })  -- a also needs StubTool.extra
+    local a = aimingSet("a", { class = "StubTool", parameters = 1, describe = "(tool)" })
     local b = aimingSet("b")
     _G.StubTool = { extra = 7 }
     a:wrapAll()
@@ -408,15 +390,13 @@ test("a shared wrap is put on again when the game replaced the class table", fun
     expectEqual(StubPlayer.getRay, newOriginal, "and lifted")
 end)
 
--- ---- A wrap on one game object's own copy ------------------------------------------------------------------------------
-
 test("an object's own copy of a function is wrapped, and given back when lifted", function()
     local classFn = function(object, dt) return "class" end
     _G.StubClass = { update = classFn, draw = function(object) end }
     local set = twoFunctionSet()
     set:wrapAll()
     local ownCopy = function(object, dt) return "own" end
-    local object = { update = ownCopy }  -- copied from the class before it was wrapped
+    local object = { update = ownCopy }
     set:wrapInstance(object, { "update" })
     local a, b = object.update(object, 1)
     expectEqual(a, "wrapped", "the copy is wrapped")
@@ -432,7 +412,7 @@ test("an object that reaches the class wrap is not wrapped again", function()
     local object = setmetatable({}, { __index = StubClass })
     set:wrapInstance(object, { "update" })
     expectEqual(rawget(object, "update"), nil, "nothing put on the object")
-    local copied = { update = StubClass.update }  -- a copy of the class wrapper
+    local copied = { update = StubClass.update }
     set:wrapInstance(copied, { "update" })
     expectEqual(copied.update, StubClass.update, "the copied wrapper is left as it is")
 end)
@@ -441,7 +421,7 @@ test("an object whose own copy is wrapped through its class is given nothing of 
     local classFn = function(object, dt) return "class" end
     _G.StubClass = { update = classFn, draw = function(object) end }
     local set = twoFunctionSet()
-    local object = setmetatable({}, { __index = StubClass })  -- reads the class's function, which is not wrapped
+    local object = setmetatable({}, { __index = StubClass })
     set:wrapInstance(object, { "update" })
     expectEqual((object.update(object, 1)), "wrapped", "wrapped on the object")
     set:liftInstance()
@@ -510,8 +490,6 @@ test("the Subsystem can tell which object's own copy is wrapped, for its diagnos
     expectEqual(set:instanceTarget(), nil, "none once lifted")
 end)
 
--- ---- The give-up warning's sentence ---------------------------------------------------------------------------------------
-
 test("a give-up sentence without %s raises when the set is declared, naming the Subsystem", function()
     for _, sentence in ipairs({ "Stub disabled. The game is unchanged.", 42 }) do
         local ok, err = pcall(GameWraps.newSet, {
@@ -531,8 +509,6 @@ test("a give-up reason with a % in it is logged as it is", function()
     set:giveUp("100% gone")
     expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: 100% gone. The game is unchanged.", "the warning")
 end)
-
--- ---- The order the functions are checked in -----------------------------------------------------------------------------
 
 test("a set declared with an order checks its functions in that order, so the first reason logged is the first declared", function()
     _G.StubClass = {}
@@ -578,8 +554,6 @@ test("an order that leaves out a declared function, or names one that is not dec
         expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
     end
 end)
-
--- ---- Giving up once, without wraps ----------------------------------------------------------------------------------------
 
 test("a Subsystem that wraps by itself gives up once with one warning, and again after a reset", function()
     local giveUp = GameWraps.newGiveUp("stub", "Stub disabled: %s. The game is unchanged.")

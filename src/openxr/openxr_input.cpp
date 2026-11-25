@@ -10,7 +10,6 @@ namespace {
 
 constexpr const char* kHandPaths[OpenXrInput::kHandCount] = { "/user/hand/left", "/user/hand/right" };
 
-// One binding of an action on both hands. A null suffix means that hand has no such input.
 struct HandBinding {
     XrAction action;
     const char* leftSuffix;
@@ -22,7 +21,7 @@ struct Profile {
     std::vector<HandBinding> bindings;
 };
 
-} // namespace
+}
 
 void OpenXrInput::ResetHands() {
     for (auto& hand : m_hands) hand = HandState{};
@@ -33,7 +32,6 @@ void OpenXrInput::ResetHands() {
 void OpenXrInput::FailCreate(IOpenXrDispatch& dispatch, const char* step, XrResult result) {
     LogWarn(std::string("OpenXrInput: ") + step + " failed (result " + std::to_string(result) +
             "). Motion Controllers are unavailable; head tracking and presentation are unchanged.");
-    // Keeps m_attempted: a refused session is not asked again.
     const bool attempted = m_attempted;
     Destroy(dispatch);
     m_attempted = attempted;
@@ -55,8 +53,6 @@ bool OpenXrInput::CreateAction(IOpenXrDispatch& dispatch, const char* name, cons
     return true;
 }
 
-// The grip pose is optional: a runtime that refuses it leaves the aim pose and every other input
-// working, and the grip pose then reports untracked (the Virtual Hand has nothing to be drawn at).
 void OpenXrInput::CreateGripPoseAction(IOpenXrDispatch& dispatch) {
     XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
     info.actionType = XR_ACTION_TYPE_POSE_INPUT;
@@ -119,7 +115,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
         XrResult res = dispatch.StringToPath(instance, profile.path, &profilePath);
         std::vector<XrActionSuggestedBinding> suggested;
         for (const HandBinding& binding : profile.bindings) {
-            if (binding.action == XR_NULL_HANDLE) continue;  // an optional action the runtime refused
+            if (binding.action == XR_NULL_HANDLE) continue;
             const char* suffixes[kHandCount] = { binding.leftSuffix, binding.rightSuffix };
             for (uint32_t hand = 0; hand < kHandCount && XR_SUCCEEDED(res); ++hand) {
                 if (!suffixes[hand]) continue;
@@ -140,7 +136,6 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
         if (XR_SUCCEEDED(res)) {
             ++accepted;
         } else {
-            // A runtime that does not know a controller profile says so; the others still bind.
             lastFailure = res;
             LogInfo(std::string("OpenXrInput: suggested bindings for ") + profile.path + " were refused (result " +
                     std::to_string(res) + ").");
@@ -216,7 +211,6 @@ bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSessi
         spaceInfo.action = m_gripPoseAction;
         res = dispatch.CreateActionSpace(session, &spaceInfo, &m_gripSpaces[hand]);
         if (XR_FAILED(res)) {
-            // Optional like the action itself: this hand's grip pose reports untracked.
             m_gripSpaces[hand] = XR_NULL_HANDLE;
             LogWarn("OpenXrInput: creating the grip action space failed (result " + std::to_string(res) +
                     "). The grip pose reports untracked; the aim pose is unchanged.");
@@ -234,13 +228,12 @@ void OpenXrInput::Sync(IOpenXrDispatch& dispatch, XrSession session) {
 
     XrActiveActionSet active{};
     active.actionSet = m_actionSet;
-    active.subactionPath = XR_NULL_PATH;  // both hands
+    active.subactionPath = XR_NULL_PATH;
     XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
     syncInfo.countActiveActionSets = 1;
     syncInfo.activeActionSets = &active;
     const XrResult res = dispatch.SyncActions(session, &syncInfo);
     if (res == XR_SESSION_NOT_FOCUSED) {
-        // Another application has the input focus: no input is delivered, which is not an error.
         ResetHands();
         return;
     }
@@ -296,9 +289,6 @@ void OpenXrInput::Sync(IOpenXrDispatch& dispatch, XrSession session) {
     }
 }
 
-// Locates one pose space in `baseSpace` at `time` into `out` (the head pose's convention). False, and
-// `out` left untouched, when the pose is inactive or the runtime can not give a valid position and
-// orientation for it.
 static bool LocatePoseSpace(IOpenXrDispatch& dispatch, XrSpace space, bool active, XrSpace baseSpace, XrTime time,
                             HeadPose& out) {
     if (!active || space == XR_NULL_HANDLE || baseSpace == XR_NULL_HANDLE) return false;
@@ -327,7 +317,6 @@ void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTi
         state.aim = HeadPose{};
         state.gripPose = HeadPose{};
         state.tracked = LocatePoseSpace(dispatch, m_aimSpaces[hand], m_poseActive[hand], baseSpace, time, state.aim);
-        // The grip pose is located whether or not the aim pose is: each reports its own tracked flag.
         state.gripTracked = LocatePoseSpace(dispatch, m_gripSpaces[hand], m_gripPoseActive[hand], baseSpace, time,
                                             state.gripPose);
     }
@@ -371,4 +360,4 @@ void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
     ResetHands();
 }
 
-} // namespace fs25vr
+}

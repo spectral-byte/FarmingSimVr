@@ -1,7 +1,5 @@
 name: Build and test
 
-# The steps CI runs on every change and a release runs on a tag, defined once so the two cannot drift
-# apart. Called by ci.yml and release.yml; it only reads the repository, whoever calls it.
 on:
   workflow_call:
 
@@ -20,26 +18,22 @@ jobs:
         shell: pwsh
         run: scripts/check_proprietary.ps1
 
-      # Fails when a fetched dependency, an Action or the Inno Setup install is not pinned to fixed
-      # content; its own test proves, on scratch copies, that it can fail.
       - name: Check pins
         shell: pwsh
         run: |
           scripts/check_pins.ps1
           scripts/test_check_pins.ps1
 
-      # The same script a local build runs (see "Building from source" in the README); under
-      # GitHub Actions it also exports the environment to the later steps. Done by a script of
-      # our own because ilammy/msvc-dev-cmd has no release off deprecated Node 20.
+      - name: Check comments
+        shell: pwsh
+        run: |
+          scripts/check_comments.ps1
+          scripts/test_check_comments.ps1
+
       - name: Set up MSVC developer environment
         shell: pwsh
         run: scripts/enter_msvc_env.ps1
 
-      # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau, MinHook) live outside the
-      # build tree, in .deps (FETCHCONTENT_BASE_DIR in CMakePresets.json; change the two
-      # together), so they can be cached across runs. Only the sources and the
-      # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
-      # Keyed on CMakeLists.txt, where the pinned dependency commits are declared.
       - name: Cache fetched dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -49,14 +43,9 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: deps-${{ runner.os }}-
 
-      # The "ci" preset in CMakePresets.json: Ninja, RelWithDebInfo, warnings as errors, the
-      # build tree in build and fetched dependencies in .deps.
       - name: Configure
         run: cmake --preset ci
 
-      # The shipped configuration compiles with full inlining (/Ob2); fail if the
-      # cache says otherwise (e.g. CMake's default /Ob1 crept back in), or if the
-      # ci preset lost the warnings-as-errors option.
       - name: Verify full inlining
         shell: pwsh
         run: scripts/check_build_config.ps1 build -RequireWarningsAsErrors
@@ -64,9 +53,6 @@ jobs:
       - name: Build (Injector DLL and tests)
         run: cmake --build build --target injector fs25_vr_tests
 
-      # The Injector is built against the static C runtime; fail if the built version.dll
-      # imports VCRUNTIME140/MSVCP140/api-ms-win-crt-* (players would need the VC++ redistributable),
-      # or version.dll (the game loads the Injector as its version.dll).
       - name: Verify Injector imports
         shell: pwsh
         run: scripts/check_injector_imports.ps1 build\version.dll
@@ -74,16 +60,9 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 120
 
-      # ctest runs each test in its own process; a single-process run catches
-      # state leaking between tests through process-wide state (the hook
-      # registries and InjectorRuntime::Instance()).
       - name: Test (single process)
         run: build\fs25_vr_tests.exe --gtest_brief=1
 
-      # Build the Installer exactly as a release does (the zip bundle and the Setup exe from the
-      # same staged files), then drive it silently against a fake game folder.
-      # At a stated version, so a new Inno Setup release cannot change the Installer unnoticed;
-      # upgrade with --allow-downgrade also replaces a different version the runner image ships.
       - name: Install Inno Setup
         run: choco upgrade innosetup --version=6.7.1 --allow-downgrade -y --no-progress
 
@@ -91,10 +70,6 @@ jobs:
         shell: pwsh
         run: scripts/package_release.ps1
 
-      # The release also carries the Injector's PDB as a symbols zip (so a crash dump from any release
-      # opens with symbols): it must exist, hold the PDB the linker wrote, and that PDB must belong to the
-      # Injector the bundle ships (same GUID and age). The packaging test then
-      # proves, in a scratch copy, that packaging fails without the PDB and that this check can fail.
       - name: Check the symbols zip
         shell: pwsh
         run: scripts/check_release_symbols.ps1
@@ -103,8 +78,6 @@ jobs:
         shell: pwsh
         run: scripts/test_package_release.ps1
 
-      # The release workflow runs scripts/check_release_tag.ps1 on a tag, which a CI run never has;
-      # its own test keeps that rule exercised on every change.
       - name: Test the release tag check
         shell: pwsh
         run: scripts/test_check_release_tag.ps1
@@ -122,8 +95,6 @@ jobs:
             build/version.pdb
           if-no-files-found: error
 
-      # A release publishes these three files as built here: the zip bundle, the Setup exe and the
-      # symbols zip.
       - name: Upload zip bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

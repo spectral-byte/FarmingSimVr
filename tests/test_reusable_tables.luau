@@ -1,8 +1,3 @@
--- ====================================================================
--- Test Suite: Companion Mod reuses head pose / eye projection tables
--- VRBridge fills a caller-supplied table in place, so per-frame reads must not allocate.
--- ====================================================================
-
 _G.g_currentModName = "FS25_VRCompanion"
 _G.g_hudAnchorLeft = 0.0
 _G.g_hudAnchorRight = 1.0
@@ -27,9 +22,6 @@ _G.MathUtil = {
     end
 }
 
--- Mock VRBridge that honours the output-table argument like the native binding: a supplied
--- head pose table is filled in place only when it already holds every field, otherwise a
--- fresh table is returned.
 local POSE_FIELDS = { "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
     "isValid", "isPositionTracked", "isOrientationTracked" }
 local function hasAllFields(t, fields)
@@ -138,7 +130,6 @@ test("PerFrameVehicleCameraUpdatesReuseBothTables", function()
 end)
 
 test("TrackIrFallbackReusesItsTableAndKeepsTheBridgeTableComplete", function()
-    -- Bridge pose invalid: fall back to TrackIR, which has no quaternion.
     local original = mockVRBridge.getHeadPose
     local bridgeValid = false
     mockVRBridge.getHeadPose = function(out)
@@ -170,7 +161,6 @@ test("TrackIrFallbackReusesItsTableAndKeepsTheBridgeTableComplete", function()
 end)
 
 test("PerFrameOutsideCameraUpdatesReuseBothTables", function()
-    -- An orbit Outside Camera at (10, 2, 30) looking along world +X, rendered through world-space eye nodes
     local nextNode = 800
     _G.createCamera = function() nextNode = nextNode + 1; return nextNode end
     _G.getRootNode = function() return 1 end

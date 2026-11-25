@@ -17,9 +17,6 @@ namespace {
 std::once_flag g_minHookInitOnce;
 bool g_minHookReady = false;
 
-// Every target MinHook holds a hook for on our behalf. Live: a FunctionDetour owns it.
-// Orphaned: its MH_RemoveHook failed, so MinHook still holds a disabled hook that nothing owns;
-// only these may be reclaimed by a later Install.
 enum class HookState { Live, Orphaned };
 std::mutex g_hookStateMutex;
 std::unordered_map<void*, HookState> g_hookStates;
@@ -59,14 +56,9 @@ bool EnsureMinHookInitialized() {
     return g_minHookReady;
 }
 
-// Resolve through incremental link table (ILT) jmp thunks (E9 rel32) and
-// 6-byte indirect import thunks (FF 25 disp32) to the real function body.
 void* ResolveThunks(void* function) {
-    // Real thunk chains are one or two hops; the cap stops a jmp cycle from hanging us.
     constexpr int kMaxHops = 8;
     for (int hop = 0; hop < kMaxHops; ++hop) {
-        // A target we already hooked starts with our own patch jmp; following it would hook
-        // the detour itself. Stop here so MinHook reports the target as taken.
         if (IsHooked(function)) return function;
         const auto* bytes = static_cast<const uint8_t*>(function);
         if (bytes[0] == 0xE9) {
@@ -86,12 +78,11 @@ void* ResolveThunks(void* function) {
     return function;
 }
 
-} // anonymous namespace
+}
 
 FunctionDetour::FunctionDetour() = default;
 
 FunctionDetour::~FunctionDetour() {
-    // At termination the patch stays and the trampoline is never freed (see IsProcessTerminating).
     if (IsProcessTerminating()) return;
     Uninstall();
 }
@@ -131,8 +122,6 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
     void* original = nullptr;
     MH_STATUS status = MH_CreateHook(targetFunction, detourFunction, &original);
     if (status == MH_ERROR_ALREADY_CREATED && TakeOrphan(targetFunction)) {
-        // A previous Uninstall could not remove its hook, so MinHook still holds a stale one
-        // for this target that nothing owns. Drop it and retry.
         LogWarn("FunctionDetour: Removing a stale hook left by a failed uninstall.");
         const MH_STATUS removeStatus = MH_RemoveHook(targetFunction);
         if (removeStatus != MH_OK) {
@@ -148,13 +137,10 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
     }
     SetHookState(targetFunction, HookState::Live);
 
-    // Publish the trampoline before the patch goes live: a thread entering the
-    // detour the moment other threads resume must already see GetOriginal().
     m_target = targetFunction;
     m_detour = detourFunction;
     m_original = original;
 
-    // MinHook suspends all other threads while patching the target.
     status = MH_EnableHook(targetFunction);
     if (status != MH_OK) {
         LogError(std::string("FunctionDetour: MH_EnableHook failed: ") + MH_StatusToString(status));
@@ -179,10 +165,8 @@ bool FunctionDetour::Uninstall() {
         return false;
     }
 
-    // Disabling restores the original bytes with other threads suspended.
     const MH_STATUS disableStatus = MH_DisableHook(m_target);
     if (disableStatus != MH_OK && disableStatus != MH_ERROR_DISABLED && disableStatus != MH_ERROR_NOT_CREATED) {
-        // The patch is still live, so callers still need the trampoline: stay installed.
         LogError(std::string("FunctionDetour: MH_DisableHook failed: ") + MH_StatusToString(disableStatus));
         return false;
     }
@@ -190,7 +174,6 @@ bool FunctionDetour::Uninstall() {
     if (removeStatus == MH_OK) {
         ForgetHook(m_target);
     } else {
-        // The hook is disabled but MinHook still holds it; let a later Install reclaim it.
         SetHookState(m_target, HookState::Orphaned);
         LogError(std::string("FunctionDetour: MH_RemoveHook failed: ") + MH_StatusToString(removeStatus));
     }
@@ -208,4 +191,4 @@ void FailNextHookRemovalForTesting() {
     g_failNextRemoval = true;
 }
 
-} // namespace fs25vr
+}

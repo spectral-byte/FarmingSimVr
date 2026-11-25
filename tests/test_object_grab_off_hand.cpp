@@ -1,9 +1,3 @@
-// Object Grab, the off-hand grabs in one squeeze (ADR-0033, ADR-0028, spec #156, ticket #161), seen from outside: the real Companion Mod
-// runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (object_grab_test_support.h). With both
-// Motion Controllers in use the Pointer Hand is the one that was; the other hand's finger is checked with a physics ray cast
-// (raycastClosest, stubbed below) only to learn whether its grip may be taken. A test squeezes that grip and asserts what the game sees:
-// the Virtual Gamepad's LB / RB, the targeter's ray, the calls of the hands tool's pickUpTarget.
-
 #include "object_grab_test_support.h"
 #include <string>
 
@@ -19,9 +13,6 @@ constexpr float kLeftHandX = 0.45f;
 constexpr float kAwayHandX = kBaleHandX + 0.8f;
 constexpr const char* kBaleAhead = "_G.bale = StubHandTool.looseObject(-0.4, -0.2, 1.5, 0.05, { name = 'bale' })";
 
-// The engine's physics ray cast the mod uses for the check (raycastClosest, synchronous, calling back with the node it hit), over every
-// object the game knows (StubHandTool.looseObjects), and a targeter whose answer to a look ray comes one update late (the real
-// targeter's ray cast is asynchronous).
 constexpr const char* kRaycastStub = R"luau(
     function _G.raycastClosest(x, y, z, dx, dy, dz, maxDistance, callbackName, target, mask)
         local length = math.sqrt(dx * dx + dy * dy + dz * dz)
@@ -69,21 +60,17 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, kBaleAhead, "=bale"), 0);
     }
 
-    // The right hand is in use first, pointing beside the bale (the Pointer Hand); then the left comes into use, pointing at the bale.
     void BothInUseLeftAtTheBale() {
         POINT_HAND(kRight, kAwayHandX, kHandY, kHandZ);
         POINT_HAND(kLeft, kLeftHandX, kHandY, kHandZ);
     }
 
-    // True when the targeter's last ray starts where the left hand's fingertip is (the left is the Pointer Hand).
     std::string TargeterRayIsTheLeftHands() {
         return EvalLua(L, "tostring(sameRay(targeterRay(), pulledBack(pointerRay(), VRCompanion.OBJECT_GRAB_REACH_BEHIND)) and math.abs(pointerRay()[1] + 0.45) < 0.01)");
     }
 };
 
-}  // namespace
-
-// ---- One squeeze of the off-hand's grip ----------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadObjectGrabOffHandTest, OneSqueezeOfTheOffHandsGripMakesItThePointerHandAndPicksUpWhatTheTargeterFindsWithItsRay) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
@@ -110,7 +97,7 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, OneSqueezeOfTheOffHandsGripMakesItTh
 TEST_F(VirtualGamepadObjectGrabOffHandTest, TheTargeterRunsAgainWithTheOffHandsRayInThatSqueezeWhateverItFoundBeforeIsNotPickedUp) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
     ASSERT_EQ(RunLuauChunk(L, "_G.sack = StubHandTool.looseObject(-1.2, -0.2, 1.5, 0.05, { name = 'sack' })", "=sack"), 0);
-    BothInUseLeftAtTheBale();  // the right hand's ray (world x -1.2) is on the sack
+    BothInUseLeftAtTheBale();
     ASSERT_EQ(PickUps(), 0);
 
     Squeeze(kLeft, 1.0f);
@@ -134,7 +121,7 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, TheGripOfAnOffHandPointingAtAGrabbab
 TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandPointingAtNothingGrabbableKeepsItsGripBindingAndGrabsNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
     POINT_HAND(kRight, kAwayHandX, kHandY, kHandZ);
-    POINT_HAND(kLeft, kAwayHandX + 0.8f, kHandY, kHandZ);  // beside the bale as well
+    POINT_HAND(kLeft, kAwayHandX + 0.8f, kHandY, kHandZ);
 
     Squeeze(kLeft, 1.0f);
     FRAMES(1);
@@ -157,7 +144,7 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandPointingAtAnObjectTheGameWi
 TEST_F(VirtualGamepadObjectGrabOffHandTest, IfTheTargeterRunWithTheOffHandsRayFindsNothingTheGameCanPickUpNothingIsPickedUp) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
     ASSERT_EQ(RunLuauChunk(L, "bale.node = nil; StubHandTool.looseObjects = {}; StubHandTool.looseObjectList = {}; _G.ghost = ghostObject(-0.45, -0.2, 1.5, 0.05)", "=ghost"), 0);
-    BothInUseLeftAtTheBale();  // the left finger points at a ghost: the check sees a grabbable object, the targeter does not
+    BothInUseLeftAtTheBale();
 
     Squeeze(kLeft, 1.0f);
     FRAMES(4);
@@ -165,8 +152,6 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, IfTheTargeterRunWithTheOffHandsRayFi
     EXPECT_EQ(PickUps(), 0) << "the check alone decides nothing";
     EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode)"), "nil");
 }
-
-// ---- The held-input rule and the trigger ---------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandGripHeldBeforeItsFingerLandedOnAnObjectKeepsItsBindingAndGrabsNothingUntilLetGoAndSqueezedAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
@@ -176,7 +161,7 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandGripHeldBeforeItsFingerLand
     FRAMES(1);
     ASSERT_TRUE(PadGrip(kLeft));
 
-    POINT_HAND(kLeft, kLeftHandX, kHandY, kHandZ);  // the finger lands on the bale with the grip still down
+    POINT_HAND(kLeft, kLeftHandX, kHandY, kHandZ);
     FRAMES(3);
     EXPECT_EQ(PickUps(), 0);
     EXPECT_TRUE(PadGrip(kLeft)) << "it keeps its binding";
@@ -200,8 +185,6 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandsTriggerPullStillMovesThePo
     EXPECT_EQ(PickUps(), 0) << "a pull is no grab";
 }
 
-// ---- A release after an off-hand grab ----------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandThatGrabbedAndLetsGoWhileSwingingThrowsAlongItsOwnTravel) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
     BothInUseLeftAtTheBale();
@@ -210,7 +193,6 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandThatGrabbedAndLetsGoWhileSw
     ASSERT_EQ(PickUps(), 1) << "the left hand grabbed in one squeeze";
     ASSERT_EQ(RunLuauChunk(L, "_G.before = { getWorldTranslation(handHolder('left')) }", "=before"), 0);
 
-    // The left hand swings up and away at the speed of a full throw, and lets go in the last update.
     const double fullSpeed = Number(L, "VRCompanion.OBJECT_GRAB_THROW_FULL_SPEED");
     const float step = static_cast<float>(fullSpeed * 1.05 * 16.667 / 1000.0);
     float y = kHandY, z = kHandZ;
@@ -232,8 +214,6 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandThatGrabbedAndLetsGoWhileSw
     EXPECT_GT(Number(L, cosine), 0.99) << "along the way the left hand travelled";
     EXPECT_FALSE(PadGrip(kLeft));
 }
-
-// ---- The targeter's answer comes later ------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabOffHandTest, WhenTheTargetersAnswerToTheNewRayComesAFrameLaterTheSqueezeStillPicksItUp) {
     ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());

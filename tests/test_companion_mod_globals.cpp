@@ -1,9 +1,3 @@
-// The globals the Companion Mod creates are pinned (spec #280, ticket #288), so a missing `local` or a mistyped name that
-// leaks a global fails a test. The shipped mod runs in a Luau state with the engine stubs: it is loaded in modDesc.xml
-// order, a map is loaded, the mod updates on foot (holding a Hand Tool) and in a cab, and the map is unloaded. Every
-// global created along the way is attributed to the function that created it, and only those created by the mod's own
-// files count: the stubs and this fixture create many, which the game would have defined.
-
 #include <gtest/gtest-spi.h>
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
@@ -16,14 +10,10 @@ using fs25vr::FakeTrackedHeadset;
 using fs25vr::HeadPose;
 using fs25vr::Vector3;
 
-// The globals the Companion Mod creates on purpose. Add one here only when the mod means to create it; a global that
-// leaked by accident is fixed in the mod.
 const std::set<std::string> kPinnedModGlobals = {
-    "VRCompanion",  // the mod itself: every file adds to it, and addModEventListener(VRCompanion) hands it to the game
+    "VRCompanion",
 };
 
-// Records, for every global created from now on, the source of the function that created it (debug.info(2, "s"), with
-// the chunk name's "=" or "@" removed): __newindex on _G only runs for a name that is not there yet.
 constexpr const char* kTrackGlobalCreation = R"luau(
     local created = {}
     _G.__globalCreators = created
@@ -38,14 +28,12 @@ constexpr const char* kTrackGlobalCreation = R"luau(
     })
 )luau";
 
-// What the game defines before any mod runs and the Companion Mod assigns: the HUD anchors (ADR-0010) and the console.
 constexpr const char* kEngineGlobals = R"luau(
     g_hudAnchorLeft, g_hudAnchorRight, g_hudAnchorBottom, g_hudAnchorTop = 0, 1, 0, 1
     _G.addConsoleCommand = function() end
     _G.removeConsoleCommand = function() end
 )luau";
 
-// The globals created by the Companion Mod's own files, by name, with the file that created each.
 std::map<std::string, std::string> GlobalsTheModCreated(lua_State* L) {
     std::set<std::string> modFiles;
     for (const auto& rel : CompanionModLoadOrder()) {
@@ -69,7 +57,6 @@ std::map<std::string, std::string> GlobalsTheModCreated(lua_State* L) {
     return result;
 }
 
-// Fails naming every global the mod created that is not pinned, and every pinned global it no longer creates.
 void ExpectOnlyPinnedGlobals(const std::map<std::string, std::string>& created, const std::set<std::string>& pinned) {
     std::string unpinned;
     for (const auto& [name, file] : created) {
@@ -85,7 +72,6 @@ void ExpectOnlyPinnedGlobals(const std::map<std::string, std::string>& created, 
                                  << missing;
 }
 
-// Self-contained so that EXPECT_NONFATAL_FAILURE can run them.
 void CompareALeakedGlobal() {
     ExpectOnlyPinnedGlobals({{"VRCompanion", "VRCompanion.lua"}, {"leakedName", "VRCompanionHud.lua"}}, {"VRCompanion"});
 }
@@ -102,7 +88,6 @@ HeadPose HandAt(float x, float y, float z) {
     return pose;
 }
 
-// What the game does each frame before the Companion Mod's update.
 void PreFrame(lua_State* L) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         if StubScene.updateCamera then StubScene.updateCamera() end
@@ -113,8 +98,6 @@ void PreFrame(lua_State* L) {
 
 class CompanionModGlobalsTest : public CompanionModTest {
 protected:
-    // The mod's whole life: loaded with the stubs in place, a map loaded, updates on foot holding the lance and then in a
-    // cab with the Motion Controllers moving, and the map unloaded.
     void RunTheModsLife() {
         FakeTrackedHeadset headset;
         fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -153,7 +136,7 @@ protected:
     }
 };
 
-}  // namespace
+}
 
 TEST_F(CompanionModGlobalsTest, TheModCreatesOnlyThePinnedGlobals) {
     ASSERT_NO_FATAL_FAILURE(RunTheModsLife());
@@ -162,7 +145,6 @@ TEST_F(CompanionModGlobalsTest, TheModCreatesOnlyThePinnedGlobals) {
 
 TEST_F(CompanionModGlobalsTest, GlobalsTheStubsCreateWhileTheModRunsAreNotCounted) {
     ASSERT_NO_FATAL_FAILURE(RunTheModsLife());
-    // StubScene.cab sets g_currentMission.controlledVehicle and the active camera; StubHandTool.onFoot sets g_localPlayer.
     EXPECT_EQ(EvalLua(L, "__globalCreators.g_localPlayer"), "handTool");
     EXPECT_EQ(GlobalsTheModCreated(L).count("g_localPlayer"), 0u);
 }

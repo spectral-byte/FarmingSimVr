@@ -10,12 +10,10 @@
 
 namespace fs25vr {
 
-// Minimal always-available OpenXR runtime for tests that only need tracking: a headset whose
-// head pose and eye FOVs the test drives through `tracking`.
 class FakeOpenXrRuntime : public IOpenXrDispatch {
 public:
     FakeOpenXrTracking tracking;
-    FakeOpenXrControllers controllers{tracking};   // Motion Controllers: poses, inputs, recorded haptics
+    FakeOpenXrControllers controllers{tracking};
     FakeOpenXrEventQueue events;
 
     XrResult EnumerateInstanceExtensionProperties(const char*, uint32_t capacity, uint32_t* count, XrExtensionProperties* properties) override {
@@ -96,7 +94,6 @@ public:
         return tracking.LocateSpace(baseSpace, location);
     }
 
-    // ---- Motion Controllers ----
     XrResult StringToPath(XrInstance, const char* pathString, XrPath* path) override {
         return controllers.StringToPath(pathString, path);
     }
@@ -199,15 +196,10 @@ public:
     }
 };
 
-// Options for FakeTrackedHeadset that must be in place before the session is created.
 struct FakeTrackedHeadsetOptions {
-    // The runtime refuses the Motion Controller action set (head tracking still works).
     bool refuseActionSet = false;
 };
 
-// An OpenXrManager running against a FakeOpenXrRuntime with its session started and tracking
-// spaces created, ready for the test to place the head and the hands and to set eye FOVs.
-// Hand ids: 0 = left, 1 = right.
 struct FakeTrackedHeadset {
     std::shared_ptr<FakeOpenXrRuntime> runtime = std::make_shared<FakeOpenXrRuntime>();
     std::shared_ptr<OpenXrManager> manager;
@@ -216,7 +208,7 @@ struct FakeTrackedHeadset {
         runtime->controllers.RefuseActionSet(options.refuseActionSet);
         manager = std::make_shared<OpenXrManager>(runtime);
         bool ok = manager->Initialize() && manager->CreateSession() && manager->CreateTrackingSpaces();
-        manager->PollEvents();  // consume READY so the session is running
+        manager->PollEvents();
         ok = ok && manager->IsSessionRunning();
         if (!ok) {
             ADD_FAILURE() << "FakeTrackedHeadset failed to start an OpenXR session";
@@ -225,7 +217,6 @@ struct FakeTrackedHeadset {
 
     void SetHeadPose(const HeadPose& pose) { runtime->tracking.SetHeadPose(pose); }
     void SetEyeFov(uint32_t eyeIndex, const XrFovf& fov) { runtime->tracking.SetEyeFov(eyeIndex, fov); }
-    // The FOV and pose the compositor received for each eye at the last xrEndFrame (empty if none).
     const std::vector<XrCompositionLayerProjectionView>& SubmittedViews() const { return runtime->lastSubmittedProjectionViews; }
 
     // Places a hand's aim pose in the runtime's tracking origin (before Recenter re-bases it) and
@@ -237,7 +228,6 @@ struct FakeTrackedHeadset {
         sim.gripPose = sim.pose;
         sim.tracked = tracked;
     }
-    // Moves only a hand's aim pose; its grip pose stays where it is.
     void SetHandAimPose(uint32_t hand, const HeadPose& pose) {
         runtime->controllers.hands[hand & 1].pose = FakeOpenXrTracking::ToXrPose(pose);
     }
@@ -248,17 +238,10 @@ struct FakeTrackedHeadset {
         sim.gripPose = FakeOpenXrTracking::ToXrPose(pose);
         sim.gripTracked = tracked;
     }
-    // A hand held so that its index fingertip is at the position of `aim` and its finger runs along `aim`'s -Z axis:
-    // the aim pose is `aim` and the grip pose is the one that puts the relaxed glove finger there (the Pointer Ray
-    // starts at the fingertip and runs along the finger, so for a test that says "the hand points here" this is
-    // the hand that does). The fingertip and the finger direction are the grip-frame numbers of the Gloved Hand,
-    // metres, left hand (the right hand is the left with X negated), written out here independently of the mod:
-    // scripts/derive_virtual_hand_pointer.py prints them.
     void SetHandPointing(uint32_t hand, const HeadPose& aim, bool tracked = true) {
         const float mirror = (hand & 1) ? -1.0f : 1.0f;
         const Vector3 tip(-0.0052f * mirror, -0.0905f, -0.0441f);
         const Vector3 finger(0.3349f * mirror, -0.9232f, -0.1885f);
-        // The shortest turn that takes the finger direction onto -Z, then the aim orientation after it.
         const Vector3 forward(0.0f, 0.0f, -1.0f);
         const float dot = finger.x * forward.x + finger.y * forward.y + finger.z * forward.z;
         Quaternion fingerToForward(finger.y * forward.z - finger.z * forward.y, finger.z * forward.x - finger.x * forward.z,
@@ -294,4 +277,4 @@ struct FakeTrackedHeadset {
     }
 };
 
-} // namespace fs25vr
+}

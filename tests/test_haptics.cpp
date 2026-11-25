@@ -1,11 +1,3 @@
-// Haptic pulses on the Pointer Hand (spec #71). Two layers, both seen from outside:
-//  - OpenXrManagerTest: OpenXrManager::PulseHaptic against FakeOpenXrRuntime, which records every
-//    pulse the runtime was asked to play (hand, duration in nanoseconds, amplitude).
-//  - CompanionModTest: the real Companion Mod over FakeTrackedHeadset and the real VRBridge, with the
-//    Interactive Control stand-in of companion_mod_stubs.h. The test moves the Motion Controllers, drives
-//    frames, and asserts which pulses reached which hand.
-// The bridge call itself (VRBridge.pulseHaptic) is covered in test_vr_bridge.cpp.
-
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
 
@@ -71,9 +63,7 @@ void PreFrame(lua_State* L) {
     )luau", "=preFrame"), 0);
 }
 
-} // namespace
-
-// ---- OpenXrManager::PulseHaptic ---------------------------------------------------------------
+}
 
 TEST(OpenXrManagerTest, PulseHapticPlaysOnTheNamedHandInNanosecondsAndNeverOnTheOther) {
     FakeTrackedHeadset headset;
@@ -118,13 +108,9 @@ TEST(OpenXrManagerTest, PulseHapticIsHarmlessWhenTheRuntimeRefusedTheActionSetOr
     EXPECT_TRUE(failing.HapticPulses().empty());
 }
 
-// ---- The Companion Mod: pulses on landing and click -------------------------------------------
-
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The hand is picked up (it moves) and held so that its index fingertip is at the given spot and its finger runs
-// straight ahead (SetHandPointing), so the ray runs along +Z from there.
 #define PICK_UP_AND_AIM(hand, x, y, z) \
     do { \
         SetGameTime(10000); \
@@ -151,7 +137,7 @@ size_t PulsesTo(const FakeTrackedHeadset& headset, int hand) {
     return count;
 }
 
-} // namespace
+}
 
 TEST_F(CompanionModTest, TheRayLandingOnAClickPointPulsesThePointerHandAndStayingOnItDoesNot) {
     FakeTrackedHeadset headset;
@@ -204,7 +190,6 @@ TEST_F(CompanionModTest, TheRayStayingOnAClickPointOutsideTheCabPulsesOnceThough
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
-    // Interactive Control updates a Click Point on a vehicle's exterior only on the vehicle's update tick, every few frames.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true })", "=addPoint"), 0);
     const int tick = std::stoi(EvalLua(L, "StubIC.outdoorTickFrames"));
 
@@ -276,7 +261,6 @@ TEST_F(CompanionModTest, PulsesGoToTheLeftHandWhenItIsThePointerHandAndNeverToTh
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_NO_FATAL_FAILURE(AddCenterAndThreeDegrees(L));
-    // The right Motion Controller is on and tracked but lies still, so it is not in use.
     headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
 
     PICK_UP_AND_AIM(kLeft, 0.3f, 0.0f, -0.3f);
@@ -310,14 +294,12 @@ TEST_F(CompanionModTest, NoPulsesWhileMotionControllersAreOff) {
     FRAMES(5);
     EXPECT_EQ(headset.HapticPulses().size(), 1u) << "no landing and no click pulses while off";
 
-    // Even if some other code reports the events, the setting wins.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:onClickPointEvent("selected", { name = "x" })
         VRCompanion:onClickPointEvent("clicked", { name = "x" })
     )luau", "=directEvents"), 0);
     EXPECT_EQ(headset.HapticPulses().size(), 1u);
 
-    // Turned back on, the pulses come back.
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllers', 'on')").find("on"), std::string::npos);
     PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
     FRAMES(3);
@@ -325,7 +307,6 @@ TEST_F(CompanionModTest, NoPulsesWhileMotionControllersAreOff) {
 }
 
 TEST_F(CompanionModTest, PulsingIsHarmlessWithTheActionSetRefusedTheCallFailingOrNoPointerHand) {
-    // Action set refused: no Motion Controller is ever tracked, so there is no Pointer Hand and nothing to pulse.
     FakeTrackedHeadset headset(FakeTrackedHeadsetOptions{ .refuseActionSet = true });
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));

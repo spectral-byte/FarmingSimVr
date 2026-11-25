@@ -42,7 +42,7 @@ public:
     int64_t lastConvertedCounter = 0;
 
     XrResult ConvertWin32PerformanceCounterToTime(
-        XrInstance /*instance*/, const LARGE_INTEGER* counter, XrTime* time) override {
+        XrInstance, const LARGE_INTEGER* counter, XrTime* time) override {
         ++convertCalls;
         lastConvertedCounter = counter->QuadPart;
         *time = counter->QuadPart + convertedTimeOffset;
@@ -50,7 +50,7 @@ public:
     }
 
     XrResult EnumerateInstanceExtensionProperties(
-        const char* /*layerName*/,
+        const char*,
         uint32_t propertyCapacityInput,
         uint32_t* propertyCountOutput,
         XrExtensionProperties* properties) override {
@@ -98,13 +98,13 @@ public:
     }
 
     XrResult DestroyInstance(
-        XrInstance /*instance*/) override {
+        XrInstance) override {
         destroyInstanceCalled = true;
         return destroyInstanceResult;
     }
 
     XrResult GetInstanceProperties(
-        XrInstance /*instance*/,
+        XrInstance,
         XrInstanceProperties* instanceProperties) override {
         if (getInstancePropertiesResult != XR_SUCCESS) {
             return getInstancePropertiesResult;
@@ -117,7 +117,7 @@ public:
     }
 
     XrResult GetSystem(
-        XrInstance /*instance*/,
+        XrInstance,
         const XrSystemGetInfo* getInfo,
         XrSystemId* systemId) override {
         if (getSystemResult != XR_SUCCESS) {
@@ -134,8 +134,8 @@ public:
     D3D_FEATURE_LEVEL mockMinFeatureLevel = D3D_FEATURE_LEVEL_12_0;
 
     XrResult GetSystemProperties(
-        XrInstance /*instance*/,
-        XrSystemId /*systemId*/,
+        XrInstance,
+        XrSystemId,
         XrSystemProperties* properties) override {
         if (getSystemPropertiesResult != XR_SUCCESS) {
             return getSystemPropertiesResult;
@@ -159,9 +159,9 @@ public:
     };
 
     XrResult EnumerateViewConfigurationViews(
-        XrInstance /*instance*/,
-        XrSystemId /*systemId*/,
-        XrViewConfigurationType /*viewConfigurationType*/,
+        XrInstance,
+        XrSystemId,
+        XrViewConfigurationType,
         uint32_t viewCapacityInput,
         uint32_t* viewCountOutput,
         XrViewConfigurationView* configurationViews) override {
@@ -184,8 +184,8 @@ public:
     }
 
     XrResult GetD3D12GraphicsRequirementsKHR(
-        XrInstance /*instance*/,
-        XrSystemId /*systemId*/,
+        XrInstance,
+        XrSystemId,
         XrGraphicsRequirementsD3D12KHR* graphicsRequirements) override {
         if (getD3D12RequirementsResult != XR_SUCCESS) {
             return getD3D12RequirementsResult;
@@ -210,12 +210,11 @@ public:
     bool destroySessionCalled = false;
     XrSessionBeginInfo lastBeginSessionInfo{};
 
-    // Head tracking: drive poses through tracking.SetHeadPose() / tracking.SetEyeFov().
     FakeOpenXrTracking tracking;
 
     XrResult CreateSession(
-        XrInstance /*instance*/,
-        const XrSessionCreateInfo* /*createInfo*/,
+        XrInstance,
+        const XrSessionCreateInfo*,
         XrSession* session) override {
         createSessionCalled = true;
         if (createSessionResult != XR_SUCCESS) return createSessionResult;
@@ -233,7 +232,7 @@ public:
     }
 
     XrResult BeginSession(
-        XrSession /*session*/,
+        XrSession,
         const XrSessionBeginInfo* beginInfo) override {
         beginSessionCalled = true;
         if (beginInfo) {
@@ -242,12 +241,12 @@ public:
         return beginSessionResult;
     }
 
-    XrResult EndSession(XrSession /*session*/) override {
+    XrResult EndSession(XrSession) override {
         endSessionCalled = true;
         return endSessionResult;
     }
 
-    XrResult DestroySession(XrSession /*session*/) override {
+    XrResult DestroySession(XrSession) override {
         destroySessionCalled = true;
         return destroySessionResult;
     }
@@ -257,7 +256,7 @@ public:
     std::vector<XrSpace> destroyedSpaces;
 
     XrResult CreateReferenceSpace(
-        XrSession /*session*/,
+        XrSession,
         const XrReferenceSpaceCreateInfo* createInfo,
         XrSpace* space) override {
         if (createReferenceSpaceResult != XR_SUCCESS) return createReferenceSpaceResult;
@@ -273,16 +272,16 @@ public:
     }
 
     XrResult LocateSpace(
-        XrSpace /*space*/,
+        XrSpace,
         XrSpace baseSpace,
-        XrTime /*time*/,
+        XrTime,
         XrSpaceLocation* location) override {
         return tracking.LocateSpace(baseSpace, location);
     }
 
     XrResult LocateViews(
-        XrSession /*session*/,
-        const XrViewLocateInfo* /*viewLocateInfo*/,
+        XrSession,
+        const XrViewLocateInfo*,
         XrViewState* viewState,
         uint32_t viewCapacityInput,
         uint32_t* viewCountOutput,
@@ -326,7 +325,7 @@ public:
     std::vector<XrCompositionLayerQuad> lastSubmittedQuadLayers;
 
     XrResult EnumerateSwapchainFormats(
-        XrSession /*session*/,
+        XrSession,
         uint32_t formatCapacityInput,
         uint32_t* formatCountOutput,
         int64_t* formats) override {
@@ -341,7 +340,7 @@ public:
     }
 
     XrResult CreateSwapchain(
-        XrSession /*session*/,
+        XrSession,
         const XrSwapchainCreateInfo* createInfo,
         XrSwapchain* swapchain) override {
         createSwapchainCalls++;
@@ -352,13 +351,13 @@ public:
         return XR_SUCCESS;
     }
 
-    XrResult DestroySwapchain(XrSwapchain /*swapchain*/) override {
+    XrResult DestroySwapchain(XrSwapchain) override {
         destroySwapchainCalls++;
         return destroySwapchainResult;
     }
 
     XrResult EnumerateSwapchainImages(
-        XrSwapchain /*swapchain*/,
+        XrSwapchain,
         uint32_t imageCapacityInput,
         uint32_t* imageCountOutput,
         XrSwapchainImageBaseHeader* images) override {
@@ -377,7 +376,7 @@ public:
 
     XrResult AcquireSwapchainImage(
         XrSwapchain swapchain,
-        const XrSwapchainImageAcquireInfo* /*acquireInfo*/,
+        const XrSwapchainImageAcquireInfo*,
         uint32_t* index) override {
         acquireSwapchainImageCalls++;
         if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) > 0)) {
@@ -392,7 +391,7 @@ public:
 
     XrResult WaitSwapchainImage(
         XrSwapchain swapchain,
-        const XrSwapchainImageWaitInfo* /*waitInfo*/) override {
+        const XrSwapchainImageWaitInfo*) override {
         waitSwapchainImageCalls++;
         if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) == 0)) {
             callOrderErrors++;
@@ -403,7 +402,7 @@ public:
 
     XrResult ReleaseSwapchainImage(
         XrSwapchain swapchain,
-        const XrSwapchainImageReleaseInfo* /*releaseInfo*/) override {
+        const XrSwapchainImageReleaseInfo*) override {
         releaseSwapchainImageCalls++;
         if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) == 0)) {
             callOrderErrors++;
@@ -414,8 +413,8 @@ public:
     }
 
     XrResult WaitFrame(
-        XrSession /*session*/,
-        const XrFrameWaitInfo* /*frameWaitInfo*/,
+        XrSession,
+        const XrFrameWaitInfo*,
         XrFrameState* frameState) override {
         waitFrameCalls++;
         if (enforceCallOrder && isFrameBegun) {
@@ -435,8 +434,8 @@ public:
     }
 
     XrResult BeginFrame(
-        XrSession /*session*/,
-        const XrFrameBeginInfo* /*frameBeginInfo*/) override {
+        XrSession,
+        const XrFrameBeginInfo*) override {
         beginFrameCalls++;
         if (enforceCallOrder && (!isFrameWaiting || isFrameBegun)) {
             callOrderErrors++;
@@ -451,7 +450,7 @@ public:
     }
 
     XrResult EndFrame(
-        XrSession /*session*/,
+        XrSession,
         const XrFrameEndInfo* frameEndInfo) override {
         endFrameCalls++;
         if (enforceCallOrder && (!isFrameBegun || !acquiredSwapchains.empty())) {
@@ -511,7 +510,6 @@ TEST(OpenXrManagerTest, EntersPassThroughWhenD3D12ExtensionMissing) {
     EXPECT_EQ(manager.GetState(), OpenXrState::PassThrough);
     EXPECT_TRUE(manager.IsPassThrough());
     EXPECT_FALSE(manager.IsActive());
-    // CreateInstance should not even be called if required D3D12 extension is missing
     EXPECT_FALSE(mockDispatch->createInstanceCalled);
 }
 
@@ -525,7 +523,6 @@ TEST(OpenXrManagerTest, EntersPassThroughWhenFormFactorUnavailable) {
     EXPECT_EQ(manager.GetState(), OpenXrState::PassThrough);
     EXPECT_TRUE(manager.IsPassThrough());
     EXPECT_FALSE(manager.IsActive());
-    // Instance was created then destroyed upon entering Pass-Through Mode
     EXPECT_TRUE(mockDispatch->createInstanceCalled);
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
 }
@@ -576,12 +573,12 @@ TEST(OpenXrManagerTest, InitializesActiveWhenHmdPresent) {
 
 namespace {
 constexpr int64_t kTenMhz = 10000000;
-constexpr int64_t kDaysOfUptimeCounter = 5LL * 24 * 3600 * kTenMhz;  // 5 days at 10 MHz
+constexpr int64_t kDaysOfUptimeCounter = 5LL * 24 * 3600 * kTenMhz;
 
 bool Contains(const std::vector<std::string>& v, const char* name) {
     return std::find(v.begin(), v.end(), name) != v.end();
 }
-}  // namespace
+}
 
 TEST(OpenXrManagerTest, EnablesTimeConversionExtensionWhenRuntimeOffersIt) {
     auto dispatch = std::make_shared<MockOpenXrDispatch>();
@@ -595,7 +592,6 @@ TEST(OpenXrManagerTest, EnablesTimeConversionExtensionWhenRuntimeOffersIt) {
     EXPECT_TRUE(Contains(dispatch->lastEnabledExtensions, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME));
     EXPECT_TRUE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
 
-    // Pre-frame time comes from the runtime conversion of the raw counter.
     EXPECT_EQ(manager.GetCurrentXrTime(), kDaysOfUptimeCounter + dispatch->convertedTimeOffset);
     EXPECT_EQ(dispatch->lastConvertedCounter, kDaysOfUptimeCounter);
     EXPECT_EQ(dispatch->convertCalls, 1u);
@@ -613,11 +609,10 @@ TEST(OpenXrManagerTest, InitializeSucceedsWithoutTimeConversionExtensionAndFallb
     EXPECT_FALSE(Contains(dispatch->lastEnabledExtensions, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME));
     EXPECT_FALSE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
 
-    // The counter in nanoseconds, the time base of runtimes that back XrTime with it.
     XrTime t0 = manager.GetCurrentXrTime();
     EXPECT_EQ(t0, QpcTicksToNanoseconds(kDaysOfUptimeCounter, kTenMhz));
     EXPECT_GT(t0, 0);
-    counter += kTenMhz / 2;  // half a second later
+    counter += kTenMhz / 2;
     XrTime t1 = manager.GetCurrentXrTime();
     EXPECT_EQ(t1 - t0, 500000000LL);
     EXPECT_EQ(dispatch->convertCalls, 0u);
@@ -636,9 +631,9 @@ TEST(OpenXrManagerTest, ExtrapolatesFromLastPredictedDisplayTimeOnceFramesRun) {
     manager.PollEvents();
     ASSERT_TRUE(manager.BeginFrame());
 
-    XrTime predicted = 1000000;  // the mock WaitFrame's predictedDisplayTime
+    XrTime predicted = 1000000;
     ASSERT_NE(predicted, 0);
-    counter += kTenMhz;  // one second after the wait
+    counter += kTenMhz;
     EXPECT_EQ(manager.GetCurrentXrTime(), predicted + 1000000000LL);
     EXPECT_EQ(dispatch->convertCalls, 0u);
 }
@@ -656,7 +651,6 @@ TEST(OpenXrManagerTest, CreateTrackingSpacesCreatesBothBaseAndLocalSpaces) {
     EXPECT_NE(manager.GetBaseLocalSpace(), manager.GetLocalSpace());
     EXPECT_TRUE(manager.HasTrackingSpaces());
 
-    // Verify both spaces were created with XR_REFERENCE_SPACE_TYPE_LOCAL and identity pose
     ASSERT_GE(mockDispatch->createdReferenceSpaces.size(), 2u);
     EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].referenceSpaceType, XR_REFERENCE_SPACE_TYPE_LOCAL);
     EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].poseInReferenceSpace.position.x, 0.0f);
@@ -939,12 +933,12 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
 
     XrView leftView{ XR_TYPE_VIEW, nullptr };
     leftView.fov = { -0.90f, 0.80f, 0.85f, -0.85f };
-    leftView.pose.position = { -0.032f, 0.0f, 0.0f }; // -IPD/2
+    leftView.pose.position = { -0.032f, 0.0f, 0.0f };
     leftView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
 
     XrView rightView{ XR_TYPE_VIEW, nullptr };
     rightView.fov = { -0.80f, 0.90f, 0.85f, -0.85f };
-    rightView.pose.position = { 0.032f, 0.0f, 0.0f }; // +IPD/2
+    rightView.pose.position = { 0.032f, 0.0f, 0.0f };
     rightView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
 
     mockDispatch->tracking.views = { leftView, rightView };
@@ -975,7 +969,6 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
     EXPECT_NEAR(rightProj.yOffset, 0.0f, 0.005f);
     EXPECT_NEAR(rightProj.fovY, 1.80f, 0.01f);
 
-    // Asymmetry verify: opposite signs for nasal/temporal convergence
     EXPECT_LT(leftProj.xOffset, 0.0f);
     EXPECT_GT(rightProj.xOffset, 0.0f);
     EXPECT_NEAR(leftProj.xOffset, -rightProj.xOffset, 0.001f);
@@ -983,7 +976,7 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
 
 TEST(OpenXrManagerTest, FallbackProjectionWhenPassThroughOrUninitialized) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
-    mockDispatch->availableExtensions = {}; // Force Pass-Through
+    mockDispatch->availableExtensions = {};
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
@@ -1029,7 +1022,6 @@ TEST(OpenXrManagerTest, CreatesEyeSwapchainsAndEnumeratesImages) {
 TEST(OpenXrManagerTest, NegotiatesCopyCompatibleSrgbVariantOfBackBufferFormat) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
-    // Runtime prefers FP16/10-bit but also offers a variant of the back buffer family.
     mockDispatch->mockSwapchainFormats = {
         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB };
 
@@ -1044,8 +1036,6 @@ TEST(OpenXrManagerTest, NegotiatesCopyCompatibleSrgbVariantOfBackBufferFormat) {
 }
 
 TEST(OpenXrManagerTest, UnormBackBufferGetsSrgbEyeSwapchainEvenWhenUnormIsOffered) {
-    // The game's UNORM back buffer holds sRGB-encoded colour; a UNORM eye swapchain would make the
-    // runtime encode it again and wash the headset image out.
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
     mockDispatch->mockSwapchainFormats = { DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB };
@@ -1069,15 +1059,13 @@ TEST(OpenXrManagerTest, StaysInPassThroughWhenNoCompatibleSwapchainFormat) {
     ASSERT_TRUE(manager.Initialize());
     ASSERT_TRUE(manager.CreateSession());
     ASSERT_TRUE(manager.CreateTrackingSpaces());
-    manager.PollEvents();  // consume READY so the session is running
+    manager.PollEvents();
     ASSERT_TRUE(manager.IsSessionRunning());
 
     EXPECT_FALSE(manager.CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM));
     EXPECT_FALSE(manager.HasEyeSwapchains());
     EXPECT_EQ(mockDispatch->createSwapchainCalls, 0u);
     EXPECT_TRUE(manager.IsPassThrough());
-    // Pass-Through Mode holds no OpenXR session. (xrEndSession is not called: it is only valid
-    // once the runtime has moved the session to STOPPING; xrDestroySession is valid in any state.)
     EXPECT_FALSE(manager.HasSession());
     EXPECT_TRUE(mockDispatch->destroySessionCalled);
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
@@ -1090,11 +1078,10 @@ TEST(OpenXrManagerTest, DestructorAfterTerminationDetachLeavesRuntimeAlone) {
         OpenXrManager manager(mockDispatch);
         ASSERT_TRUE(manager.Initialize());
         ASSERT_TRUE(manager.CreateSession());
-        OnProcessDetach(reinterpret_cast<LPVOID>(1));  // non-null lpReserved: process terminating
-    }  // ~OpenXrManager runs here, as the CRT's static destructors do after DllMain returns.
+        OnProcessDetach(reinterpret_cast<LPVOID>(1));
+    }
     ResetProcessTerminatingForTesting();
 
-    // The runtime DLL may already be gone at termination: no session or instance teardown calls.
     EXPECT_FALSE(mockDispatch->destroySessionCalled);
     EXPECT_FALSE(mockDispatch->destroyInstanceCalled);
 }
@@ -1138,7 +1125,6 @@ TEST(OpenXrManagerTest, EnsureBackBufferFormatSupportedReleasesOpenXrOnlyWhenInc
     ASSERT_TRUE(manager.Initialize());
     ASSERT_TRUE(manager.CreateSession());
 
-    // Default mock offers R8G8B8A8 sRGB/UNORM.
     EXPECT_TRUE(manager.EnsureBackBufferFormatSupported(DXGI_FORMAT_R8G8B8A8_UNORM));
     EXPECT_TRUE(manager.IsActive());
     EXPECT_TRUE(manager.HasSession());
@@ -1148,7 +1134,6 @@ TEST(OpenXrManagerTest, EnsureBackBufferFormatSupportedReleasesOpenXrOnlyWhenInc
     EXPECT_FALSE(manager.HasSession());
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
 
-    // Inert afterwards.
     EXPECT_FALSE(manager.EnsureBackBufferFormatSupported(DXGI_FORMAT_R8G8B8A8_UNORM));
     EXPECT_TRUE(manager.IsPassThrough());
 }
@@ -1157,22 +1142,16 @@ TEST(OpenXrManagerTest, SelectCompatibleSwapchainFormatRules) {
     using M = OpenXrManager;
     const std::vector<int64_t> all = { DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_B8G8R8A8_UNORM,
                                        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM };
-    // 8-bit: the sRGB variant wins over an exact UNORM match, so the runtime doesn't encode the
-    // already sRGB-encoded back buffer a second time
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, all), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, all), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
                                                  { DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB }),
               DXGI_FORMAT_B8G8R8A8_UNORM_SRGB);
-    // UNORM is still taken when the runtime offers no sRGB variant
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, { DXGI_FORMAT_R8G8B8A8_UNORM }), DXGI_FORMAT_R8G8B8A8_UNORM);
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, all), DXGI_FORMAT_B8G8R8A8_UNORM);
-    // Typeless back buffer resolves to a member of its family
     EXPECT_NE(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_TYPELESS, all), DXGI_FORMAT_UNKNOWN);
-    // 10-bit/FP16 back buffers only match themselves
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R16G16B16A16_FLOAT, all), DXGI_FORMAT_R16G16B16A16_FLOAT);
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R10G10B10A2_UNORM, all), DXGI_FORMAT_UNKNOWN);
-    // Different family never matches
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, { DXGI_FORMAT_B8G8R8A8_UNORM }), DXGI_FORMAT_UNKNOWN);
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, {}), DXGI_FORMAT_UNKNOWN);
 }
@@ -1199,7 +1178,6 @@ TEST(OpenXrManagerTest, CopiesBackBufferAndPerformsImageAcquireWaitRelease) {
     EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 2u);
     EXPECT_TRUE(manager.GetEyeSwapchain(1).hasCopiedFrame);
 
-    // Invalid eye index rejected
     EXPECT_FALSE(manager.CopyBackBufferToEye(2, nullptr));
 }
 
@@ -1227,7 +1205,6 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Vertically asymmetric: the lower side (0.65) is shallower than the upper one (0.85).
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.65f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.65f };
     mockDispatch->tracking.SetEyeFov(0, leftFov);
@@ -1241,7 +1218,6 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     manager.SetIpd(0.064f);
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
-    // Verified pair completion: only eye 0 has copied, eye 1 has not. SubmitFramePair must fail.
     EXPECT_FALSE(manager.SubmitFramePair());
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
@@ -1256,7 +1232,6 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     EXPECT_EQ(mockDispatch->lastFrameEndInfo.layerCount, 1u);
     ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
 
-    // Verify paired left and right views
     const auto& leftView = mockDispatch->lastSubmittedProjectionViews[0];
     const auto& rightView = mockDispatch->lastSubmittedProjectionViews[1];
 
@@ -1273,7 +1248,6 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     EXPECT_NEAR(rightView.fov.angleUp, 0.85f, 0.001f);
     EXPECT_NEAR(rightView.fov.angleDown, -0.85f, 0.001f);
 
-    // Left eye shifted by -IPD/2, Right eye shifted by +IPD/2
     EXPECT_NEAR(leftView.pose.position.x, -0.032f, 0.001f);
     EXPECT_NEAR(rightView.pose.position.x, 0.032f, 0.001f);
     EXPECT_NEAR(rightView.pose.position.x - leftView.pose.position.x, 0.064f, 0.001f);
@@ -1290,7 +1264,6 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
     manager.SetIpd(0.064f);
 
-    // Frame 0 (t_2k): Left eye captured with pose at (0, 1.6, 0), identity orientation
     HeadPose leftPose;
     leftPose.position = Vector3(0.0f, 1.6f, 0.0f);
     leftPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
@@ -1306,11 +1279,10 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
     rightPose.orientation = Quaternion(0.0f, 0.7071068f, 0.0f, 0.7071068f);
     rightPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(rightPose);
-    manager.PollHeadPose(2000000);  // eye 0's frame is still open; poll the later head pose explicitly
+    manager.PollHeadPose(2000000);
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
 
-    // Submit the pair
     EXPECT_TRUE(manager.SubmitFramePair());
     ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
 
@@ -1356,7 +1328,6 @@ TEST(OpenXrManagerTest, StructuredMathTypesConstructAndSupportOperations) {
     EXPECT_EQ(qDef.w, 1.0f);
     EXPECT_TRUE(q == Quaternion(0.1f, 0.2f, 0.3f, 0.9f));
 
-    // Quaternion multiplication test: two 45-degree yaw rotations compose to 90 degrees
     float sinHalf45 = std::sin((3.14159265f / 4.0f) * 0.5f);
     float cosHalf45 = std::cos((3.14159265f / 4.0f) * 0.5f);
     Quaternion qYaw45(0.0f, sinHalf45, 0.0f, cosHalf45);
@@ -1528,8 +1499,6 @@ TEST(OpenXrManagerTest, EnforcesStrictOpenXrFrameLifecycleOrderingAcrossSwapchai
     EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
     EXPECT_EQ(mockDispatch->beginFrameCalls, 0u);
 
-    // Copying eye 0 backbuffer automatically initiates frame lifecycle (WaitFrame + BeginFrame)
-    // before acquiring the swapchain image.
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     EXPECT_TRUE(manager.IsFrameBegun());
     EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
@@ -1539,8 +1508,6 @@ TEST(OpenXrManagerTest, EnforcesStrictOpenXrFrameLifecycleOrderingAcrossSwapchai
     EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 1u);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 
-    // Frame remains active across AFR temporal separation.
-    // Copying eye 1 backbuffer executes within the active frame lifecycle without redundantly calling BeginFrame.
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
     EXPECT_TRUE(manager.IsFrameBegun());
     EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
@@ -1550,7 +1517,6 @@ TEST(OpenXrManagerTest, EnforcesStrictOpenXrFrameLifecycleOrderingAcrossSwapchai
     EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 2u);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 
-    // SubmitFramePair closes the active frame lifecycle boundary via EndFrame.
     EXPECT_TRUE(manager.SubmitFramePair());
     EXPECT_FALSE(manager.IsFrameBegun());
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
@@ -1603,22 +1569,17 @@ TEST(OpenXrManagerTest, ExplicitBeginFrameAndEndFrameControls) {
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
     EXPECT_FALSE(manager.IsFrameBegun());
-    // SubmitFramePair when no frame has begun fails
     EXPECT_FALSE(manager.SubmitFramePair());
 
-    // EndFrame when no frame has begun fails
     EXPECT_FALSE(manager.EndFrame());
 
-    // Explicit BeginFrame
     EXPECT_TRUE(manager.BeginFrame());
     EXPECT_TRUE(manager.IsFrameBegun());
 
-    // Redundant BeginFrame is a safe no-op
     EXPECT_TRUE(manager.BeginFrame());
     EXPECT_EQ(mockDispatch->beginFrameCalls, 1u);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 
-    // EndFrame closes the frame
     EXPECT_TRUE(manager.EndFrame());
     EXPECT_FALSE(manager.IsFrameBegun());
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
@@ -1639,7 +1600,6 @@ TEST(OpenXrManagerTest, SuppressesSwapchainAcquisitionWhenShouldRenderIsFalse) {
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     EXPECT_TRUE(manager.IsFrameBegun());
-    // Swapchain image acquisition should be suppressed
     EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 0u);
     EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 0u);
 
@@ -1647,7 +1607,6 @@ TEST(OpenXrManagerTest, SuppressesSwapchainAcquisitionWhenShouldRenderIsFalse) {
     EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 0u);
     EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 0u);
 
-    // SubmitFramePair succeeds and submits with layerCount = 0 per OpenXR specification
     EXPECT_TRUE(manager.SubmitFramePair());
     EXPECT_FALSE(manager.IsFrameBegun());
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
@@ -1700,7 +1659,6 @@ TEST(OpenXrManagerTest, BeginSessionIsRetriedAfterFailingOnReady) {
     EXPECT_TRUE(manager.IsActive());
     EXPECT_FALSE(manager.BeginFrame());
 
-    // No second READY event arrives; the next poll retries on its own.
     mockDispatch->beginSessionResult = XR_SUCCESS;
     manager.PollEvents();
     EXPECT_TRUE(manager.IsSessionRunning());
@@ -1717,7 +1675,6 @@ TEST(OpenXrManagerTest, SessionLostFromWaitFrameEntersPassThrough) {
     manager.PollEvents();
     ASSERT_TRUE(manager.IsSessionRunning());
 
-    // The runtime died without queueing LOSS_PENDING.
     mockDispatch->waitFrameResult = XR_ERROR_SESSION_LOST;
     EXPECT_FALSE(manager.BeginFrame());
     EXPECT_TRUE(manager.IsPassThrough());
@@ -1808,7 +1765,6 @@ TEST(OpenXrManagerTest, LossPendingReleasesResourcesAndEntersPassThrough) {
     EXPECT_TRUE(mockDispatch->destroySessionCalled);
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
 
-    // Further polling and frame calls are inert and must not crash.
     uint32_t pollsBefore = mockDispatch->pollEventCalls;
     manager.PollEvents();
     EXPECT_EQ(mockDispatch->pollEventCalls, pollsBefore);
@@ -1886,14 +1842,12 @@ TEST(OpenXrManagerTest, SubmitFramePairAppliesSafeFovAndNormalizedOrientationFal
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Do NOT set the head pose or eye FOVs on the fake runtime (leave uninitialized/zero)
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
 
     EXPECT_TRUE(manager.SubmitFramePair());
     ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
 
-    // Verify FOV angles are non-zero
     for (int i = 0; i < 2; ++i) {
         const auto& pv = mockDispatch->lastSubmittedProjectionViews[i];
         EXPECT_LT(pv.fov.angleLeft, 0.0f);
@@ -1901,7 +1855,6 @@ TEST(OpenXrManagerTest, SubmitFramePairAppliesSafeFovAndNormalizedOrientationFal
         EXPECT_GT(pv.fov.angleUp, 0.0f);
         EXPECT_LT(pv.fov.angleDown, 0.0f);
 
-        // Verify orientation quaternion is normalized (unit length)
         float lenSq = pv.pose.orientation.x * pv.pose.orientation.x +
                       pv.pose.orientation.y * pv.pose.orientation.y +
                       pv.pose.orientation.z * pv.pose.orientation.z +
@@ -1946,7 +1899,6 @@ TEST(OpenXrManagerTest, BeginFrameLocatesViewsAndRefreshesProjectionsAndPose) {
 
     EXPECT_NEAR(manager.GetIpd(), 0.066f, 0.001f);
 
-    // Verify head pose was refreshed during BeginFrame
     const auto& pose = manager.GetLastPose();
     EXPECT_TRUE(pose.isValid);
 }
@@ -1968,7 +1920,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadRejectsWhenLocalSpaceMissing) {
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
     ASSERT_TRUE(manager.CreateSession());
-    // Intentionally omit CreateTrackingSpaces() so m_localSpace is XR_NULL_HANDLE
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
@@ -1985,7 +1936,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadRejectsWhenEye0NotCopied) {
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
     EXPECT_TRUE(manager.BeginFrame());
-    // Eye 0 not copied yet
     EXPECT_FALSE(manager.SubmitMenuQuad());
 }
 
@@ -2000,7 +1950,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsValidXrCompositionLayerQuad) {
 
     EXPECT_EQ(manager.GetSubmittedQuadFrameCount(), 0u);
 
-    // Frame 1
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     EXPECT_TRUE(manager.IsFrameBegun());
     EXPECT_TRUE(manager.GetEyeSwapchain(0).hasCopiedFrame);
@@ -2020,7 +1969,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsValidXrCompositionLayerQuad) {
     EXPECT_EQ(quad.space, manager.GetLocalSpace());
     EXPECT_EQ(quad.eyeVisibility, XR_EYE_VISIBILITY_BOTH);
 
-    // Swapchain subimage
     EXPECT_EQ(quad.subImage.swapchain, manager.GetEyeSwapchain(0).handle);
     EXPECT_EQ(quad.subImage.imageRect.offset.x, 0);
     EXPECT_EQ(quad.subImage.imageRect.offset.y, 0);
@@ -2028,7 +1976,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsValidXrCompositionLayerQuad) {
     EXPECT_EQ(quad.subImage.imageRect.extent.height, 1080);
     EXPECT_EQ(quad.subImage.imageArrayIndex, 0u);
 
-    // 1.5m eye-level position in local tracking space
     EXPECT_FLOAT_EQ(quad.pose.position.x, 0.0f);
     EXPECT_FLOAT_EQ(quad.pose.position.y, 0.0f);
     EXPECT_FLOAT_EQ(quad.pose.position.z, -1.5f);
@@ -2037,12 +1984,10 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsValidXrCompositionLayerQuad) {
     EXPECT_FLOAT_EQ(quad.pose.orientation.z, 0.0f);
     EXPECT_FLOAT_EQ(quad.pose.orientation.w, 1.0f);
 
-    // 16:9 aspect ratio extents (1.6m x 0.9m)
     EXPECT_NEAR(quad.size.width, 1.6f, 0.001f);
     EXPECT_NEAR(quad.size.height, 0.9f, 0.001f);
     EXPECT_NEAR(quad.size.width / quad.size.height, 16.0f / 9.0f, 0.001f);
 
-    // Frame 2
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(manager.SubmitMenuQuad());
     EXPECT_EQ(manager.GetSubmittedQuadFrameCount(), 2u);
@@ -2058,7 +2003,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadRespectsRecenterOffset) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Simulate head pose offset at position (1.0, 0.5, -2.0) and yaw = 0.0
     HeadPose simPose;
     simPose.position = Vector3(1.0f, 0.5f, -2.0f);
     simPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
@@ -2147,7 +2091,6 @@ TEST(OpenXrManagerTest, ChangingTheMenuDistanceMovesAPlacedQuadAlongTheWayItFace
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Head at (2.0, 1.7, 3.0) looking along +X (yaw -pi/2): the quad is placed 1.5 m along +X
     HeadPose head;
     head.position = Vector3(2.0f, 1.7f, 3.0f);
     head.rotation = EulerAngles(0.0f, -1.5707963f, 0.0f);
@@ -2173,7 +2116,6 @@ TEST(OpenXrManagerTest, ChangingTheMenuDistanceMovesAPlacedQuadAlongTheWayItFace
     EXPECT_FLOAT_EQ(quad.size.width, sizeBefore.width) << "the quad keeps its size, so it fills less of the view";
     EXPECT_FLOAT_EQ(quad.size.height, sizeBefore.height);
 
-    // Nearer again, and the next placement uses the distance too
     manager.SetMenuQuadDistance(1.0f);
     EXPECT_NEAR(manager.ComputeMenuQuadPose().position.x, 3.0f, 0.01f);
     HeadPose ahead;
@@ -2195,25 +2137,20 @@ TEST(OpenXrManagerTest, SubmitMenuQuadResetsCopiedFlagsForBothSwapchains) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Copy to both eyes to simulate partial stereo state before menu opens
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
     EXPECT_TRUE(manager.GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_TRUE(manager.GetEyeSwapchain(1).hasCopiedFrame);
 
-    // Now submit a menu quad
     ASSERT_TRUE(manager.SubmitMenuQuad());
 
-    // Both swapchains must have their copied flags reset to false
     EXPECT_FALSE(manager.GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_FALSE(manager.GetEyeSwapchain(1).hasCopiedFrame);
 }
 
 TEST(OpenXrManagerTest, ComputeMenuQuadPosePlacesQuadAtGazeVectorAndDecouplesPitchAndRoll) {
-    // 1. Gaze along +X (yaw = -pi/2, looking right): quad should be at (head.x + distance, head.y, head.z)
     HeadPose headPoseYawRight;
     headPoseYawRight.position = Vector3(2.0f, 1.7f, 3.0f);
-    // Non-zero pitch (+0.4) and roll (-0.3) to test decoupling
     headPoseYawRight.rotation = EulerAngles(0.4f, -1.5707963f, -0.3f);
     headPoseYawRight.isValid = true;
 
@@ -2221,17 +2158,15 @@ TEST(OpenXrManagerTest, ComputeMenuQuadPosePlacesQuadAtGazeVectorAndDecouplesPit
 
     // Quad position: rotated (0, 0, -1.5) by yaw -pi/2 gives (1.5, 0, 0)
     EXPECT_NEAR(quadPose.position.x, 3.5f, 0.01f);
-    EXPECT_NEAR(quadPose.position.y, 1.7f, 0.001f); // Perfectly at eye level
+    EXPECT_NEAR(quadPose.position.y, 1.7f, 0.001f);
     EXPECT_NEAR(quadPose.position.z, 3.0f, 0.01f);
 
-    // Quad orientation: pure yaw -pi/2, pitch and roll decoupled (0, 0)
     Quaternion qQuad(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
     EulerAngles angles = OpenXrManager::QuaternionToEuler(qQuad);
     EXPECT_NEAR(angles.yaw, -1.5707963f, 0.01f);
     EXPECT_NEAR(angles.pitch, 0.0f, 0.001f);
     EXPECT_NEAR(angles.roll, 0.0f, 0.001f);
 
-    // 2. Gaze along -Z (yaw = 0): quad placed at (head.x, head.y, head.z - distance)
     HeadPose headPoseForward;
     headPoseForward.position = Vector3(-1.0f, 1.5f, 2.0f);
     headPoseForward.rotation = EulerAngles(-0.5f, 0.0f, 0.2f);
@@ -2240,7 +2175,7 @@ TEST(OpenXrManagerTest, ComputeMenuQuadPosePlacesQuadAtGazeVectorAndDecouplesPit
     XrPosef quadPoseFwd = OpenXrManager::ComputeMenuQuadPoseFromHeadPose(headPoseForward, 1.5f);
     EXPECT_NEAR(quadPoseFwd.position.x, -1.0f, 0.001f);
     EXPECT_NEAR(quadPoseFwd.position.y, 1.5f, 0.001f);
-    EXPECT_NEAR(quadPoseFwd.position.z, 0.5f, 0.001f); // 2.0 - 1.5 = 0.5
+    EXPECT_NEAR(quadPoseFwd.position.z, 0.5f, 0.001f);
     Quaternion qQuadFwd(quadPoseFwd.orientation.x, quadPoseFwd.orientation.y, quadPoseFwd.orientation.z, quadPoseFwd.orientation.w);
     EulerAngles anglesFwd = OpenXrManager::QuaternionToEuler(qQuadFwd);
     EXPECT_NEAR(anglesFwd.yaw, 0.0f, 0.001f);
@@ -2257,7 +2192,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadAlignsToHeadPoseOnRecenter) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Player seated at (3.0, 1.0, -1.0), looking at 45 degrees yaw (0.785398 rad) with pitch 0.2
     HeadPose simPose;
     simPose.position = Vector3(3.0f, 1.0f, -1.0f);
     simPose.rotation = EulerAngles(0.2f, 0.785398f, 0.0f);
@@ -2266,7 +2200,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadAlignsToHeadPoseOnRecenter) {
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 
-    // Recenter view while in menu
     manager.Recenter();
 
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
@@ -2305,24 +2238,20 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
     mockDispatch->tracking.SetHeadPose(initialPose);
     manager.PollHeadPose();
 
-    // Explicitly align quad to initial pose
     manager.AlignMenuQuadToHeadPose();
 
-    // Player now moves head forward 0.5m and tilts head
     HeadPose movedPose;
     movedPose.position = Vector3(0.0f, 1.7f, -0.5f);
     movedPose.rotation = EulerAngles(0.3f, 0.2f, 0.1f);
     movedPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(movedPose);
 
-    // Submit quad again
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(manager.SubmitMenuQuad());
 
     ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
     const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
 
-    // Quad position must still be anchored at (0, 1.7, -1.5) in local space, NOT moving with the head
     EXPECT_NEAR(quad.pose.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(quad.pose.position.y, 1.7f, 0.001f);
     EXPECT_NEAR(quad.pose.position.z, -1.5f, 0.001f);
@@ -2330,8 +2259,6 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
 
 namespace {
 
-// A session whose local space origin sits well below the player's eyes, as SteamVR's seated origin
-// can: a menu quad placed at the origin shows at knee level.
 struct MenuQuadSession {
     std::shared_ptr<MockOpenXrDispatch> dispatch = std::make_shared<MockOpenXrDispatch>();
     OpenXrManager manager{dispatch};
@@ -2354,8 +2281,6 @@ struct MenuQuadSession {
         dispatch->tracking.SetHeadPose(pose);
     }
 
-    // One Present in quad mode, as DxgiProxy runs it: the copy begins the frame, entering quad mode
-    // places the panel, and the quad goes out. Each frame is predicted a frame period later.
     XrPosef PresentQuadFrame(bool entersQuadMode = false) {
         dispatch->mockPredictedDisplayTime += 11111111;
         EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
@@ -2367,23 +2292,21 @@ struct MenuQuadSession {
     }
 };
 
-} // namespace
+}
 
 TEST(OpenXrManagerTest, MenuQuadPlacedBeforeTheHeadIsTrackedMovesToTheHeadOnceTracked) {
     MenuQuadSession s;
-    // The first menu frame of a session: the runtime has no head pose yet.
-    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/false);
-    XrPosef first = s.PresentQuadFrame(/*entersQuadMode=*/true);
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, false);
+    XrPosef first = s.PresentQuadFrame(true);
     EXPECT_NEAR(first.position.y, 0.0f, 0.001f);
 
-    s.SetHead(0.2f, 0.6f, 0.1f, 0.0f, /*valid=*/true);
+    s.SetHead(0.2f, 0.6f, 0.1f, 0.0f, true);
     XrPosef tracked = s.PresentQuadFrame();
     EXPECT_NEAR(tracked.position.x, 0.2f, 0.001f);
     EXPECT_NEAR(tracked.position.y, 0.6f, 0.001f);
     EXPECT_NEAR(tracked.position.z, 0.1f - 1.5f, 0.001f);
 
-    // Placed from a tracked head, it stays world-anchored as the head moves on.
-    s.SetHead(-0.3f, 0.9f, 0.4f, 0.5f, /*valid=*/true);
+    s.SetHead(-0.3f, 0.9f, 0.4f, 0.5f, true);
     XrPosef later = s.PresentQuadFrame();
     EXPECT_NEAR(later.position.x, 0.2f, 0.001f);
     EXPECT_NEAR(later.position.y, 0.6f, 0.001f);
@@ -2392,9 +2315,7 @@ TEST(OpenXrManagerTest, MenuQuadPlacedBeforeTheHeadIsTrackedMovesToTheHeadOnceTr
 
 TEST(OpenXrManagerTest, MenuQuadPlacedWhileTheRuntimeSkipsRenderingMovesToTheHeadOnceItRenders) {
     MenuQuadSession s;
-    s.SetHead(0.0f, 0.6f, 0.0f, 0.0f, /*valid=*/true);
-    // The session has just begun and is not visible yet: the frame is not rendered, so the head is
-    // never located and the panel is placed from no pose at all.
+    s.SetHead(0.0f, 0.6f, 0.0f, 0.0f, true);
     s.dispatch->mockShouldRender = XR_FALSE;
     s.dispatch->mockPredictedDisplayTime += 11111111;
     s.manager.CopyBackBufferToEye(0, nullptr);
@@ -2410,14 +2331,12 @@ TEST(OpenXrManagerTest, MenuQuadPlacedWhileTheRuntimeSkipsRenderingMovesToTheHea
 
 TEST(OpenXrManagerTest, RuntimeRecenterOfTheLocalSpaceMovesMenuQuadToTheHead) {
     MenuQuadSession s;
-    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
-    s.PresentQuadFrame(/*entersQuadMode=*/true);
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, true);
+    s.PresentQuadFrame(true);
 
-    // The player holds the headset's recenter button: the runtime re-bases the local space, so the
-    // head reads somewhere new in it from then on.
     s.dispatch->events.PushReferenceSpaceChangePending(XR_REFERENCE_SPACE_TYPE_LOCAL, 0);
     const float yaw = 0.6f;
-    s.SetHead(0.1f, 0.5f, -0.2f, yaw, /*valid=*/true);
+    s.SetHead(0.1f, 0.5f, -0.2f, yaw, true);
     XrPosef recentered = s.PresentQuadFrame();
     EXPECT_NEAR(recentered.position.x, 0.1f - 1.5f * std::sin(yaw), 0.001f);
     EXPECT_NEAR(recentered.position.y, 0.5f, 0.001f);
@@ -2426,79 +2345,68 @@ TEST(OpenXrManagerTest, RuntimeRecenterOfTheLocalSpaceMovesMenuQuadToTheHead) {
                                                             recentered.orientation.z, recentered.orientation.w)).yaw,
                 yaw, 0.001f);
 
-    // Once placed it stays put again.
-    s.SetHead(0.4f, 0.8f, 0.3f, 0.0f, /*valid=*/true);
+    s.SetHead(0.4f, 0.8f, 0.3f, 0.0f, true);
     XrPosef later = s.PresentQuadFrame();
     EXPECT_NEAR(later.position.y, 0.5f, 0.001f);
 }
 
 TEST(OpenXrManagerTest, MenuQuadWaitsForTheChangeTimeOfARuntimeRecenter) {
     MenuQuadSession s;
-    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
-    s.PresentQuadFrame(/*entersQuadMode=*/true);
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, true);
+    s.PresentQuadFrame(true);
 
-    // Located poses respect the change only from changeTime on; until then they are the old ones.
     const XrTime changeTime = s.dispatch->mockPredictedDisplayTime + 2 * 11111111;
     s.dispatch->events.PushReferenceSpaceChangePending(XR_REFERENCE_SPACE_TYPE_LOCAL, changeTime);
-    s.SetHead(0.0f, 0.3f, 0.0f, 0.0f, /*valid=*/true);
+    s.SetHead(0.0f, 0.3f, 0.0f, 0.0f, true);
     XrPosef early = s.PresentQuadFrame();
     EXPECT_NEAR(early.position.y, 0.0f, 0.001f);
 
-    s.SetHead(0.0f, 0.7f, 0.0f, 0.0f, /*valid=*/true);
+    s.SetHead(0.0f, 0.7f, 0.0f, 0.0f, true);
     XrPosef atChange = s.PresentQuadFrame();
     EXPECT_NEAR(atChange.position.y, 0.7f, 0.001f);
 }
 
 TEST(OpenXrManagerTest, MenuQuadMovesToTheHeadTheFirstTimeTheSessionIsFocused) {
     MenuQuadSession s;
-    // The game starts with the headset tracked but resting off to the side and low.
-    s.SetHead(0.5f, -0.3f, -0.4f, -0.2f, /*valid=*/true);
-    s.PresentQuadFrame(/*entersQuadMode=*/true);
+    s.SetHead(0.5f, -0.3f, -0.4f, -0.2f, true);
+    s.PresentQuadFrame(true);
 
-    // The player puts it on: the runtime focuses the session.
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
-    s.SetHead(0.0f, 0.1f, 0.0f, 0.0f, /*valid=*/true);
+    s.SetHead(0.0f, 0.1f, 0.0f, 0.0f, true);
     XrPosef worn = s.PresentQuadFrame();
     EXPECT_NEAR(worn.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(worn.position.y, 0.1f, 0.001f);
     EXPECT_NEAR(worn.position.z, -1.5f, 0.001f);
 
-    // A dashboard opened and closed focuses it again: the panel stays where the player left it.
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
-    s.SetHead(0.3f, 0.4f, 0.2f, 0.5f, /*valid=*/true);
+    s.SetHead(0.3f, 0.4f, 0.2f, 0.5f, true);
     XrPosef afterDashboard = s.PresentQuadFrame();
     EXPECT_NEAR(afterDashboard.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(afterDashboard.position.y, 0.1f, 0.001f);
     EXPECT_NEAR(afterDashboard.position.z, -1.5f, 0.001f);
 
-    // A session that stops and begins again is focused for the first time once more.
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_IDLE);
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
     s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
-    s.SetHead(-0.2f, 0.2f, 0.1f, 0.0f, /*valid=*/true);
+    s.SetHead(-0.2f, 0.2f, 0.1f, 0.0f, true);
     XrPosef resumed = s.PresentQuadFrame();
     EXPECT_NEAR(resumed.position.x, -0.2f, 0.001f);
     EXPECT_NEAR(resumed.position.y, 0.2f, 0.001f);
     EXPECT_NEAR(resumed.position.z, 0.1f - 1.5f, 0.001f);
 }
 
-// A runtime whose local space origin is far from the head, as Pimax OpenXR's is (issue 238: the head
-// read about 24 m above it). After a Recenter Action a menu opens in front of the head in the
-// recentered space the quad is submitted in, not offset by where the head sits in the runtime's own
-// local space.
 TEST(OpenXrManagerTest, MenuOpenedAfterARecenterIsPlacedInFrontOfTheHeadInTheRecenteredSpace) {
     MenuQuadSession s;
-    s.SetHead(5.3f, 23.7f, 5.0f, 0.8f, /*valid=*/true);
+    s.SetHead(5.3f, 23.7f, 5.0f, 0.8f, true);
     s.manager.Recenter();
 
-    // The player sits up 10 cm and turns their head a little, then opens the menu.
     const float turn = 0.3f;
-    s.SetHead(5.3f, 23.8f, 5.0f, 0.8f + turn, /*valid=*/true);
-    XrPosef opened = s.PresentQuadFrame(/*entersQuadMode=*/true);
+    s.SetHead(5.3f, 23.8f, 5.0f, 0.8f + turn, true);
+    XrPosef opened = s.PresentQuadFrame(true);
 
     EXPECT_NEAR(opened.position.x, -1.5f * std::sin(turn), 0.001f);
     EXPECT_NEAR(opened.position.y, 0.1f, 0.001f);
@@ -2510,11 +2418,11 @@ TEST(OpenXrManagerTest, MenuOpenedAfterARecenterIsPlacedInFrontOfTheHeadInTheRec
 
 TEST(OpenXrManagerTest, ChangeOfAnotherReferenceSpaceLeavesMenuQuadInPlace) {
     MenuQuadSession s;
-    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
-    s.PresentQuadFrame(/*entersQuadMode=*/true);
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, true);
+    s.PresentQuadFrame(true);
 
     s.dispatch->events.PushReferenceSpaceChangePending(XR_REFERENCE_SPACE_TYPE_STAGE, 0);
-    s.SetHead(0.0f, 0.5f, 0.0f, 0.0f, /*valid=*/true);
+    s.SetHead(0.0f, 0.5f, 0.0f, 0.0f, true);
     XrPosef after = s.PresentQuadFrame();
     EXPECT_NEAR(after.position.y, 0.0f, 0.001f);
 }
@@ -2527,20 +2435,17 @@ TEST(OpenXrManagerTest, ComputeCursorQuadPoseProjectsNormalizedCoordinatesWithHo
     XrExtent2Df menuSize{ 1.6f, 0.9f };
     float cursorSize = 0.035f;
 
-    // Center of screen (normX = 0.5, normY = 0.5)
     XrPosef centerCursor = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 0.5f, 0.5f, cursorSize, cursorSize);
     EXPECT_NEAR(centerCursor.position.x, 0.0f + 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(centerCursor.position.y, 1.5f - 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(centerCursor.position.z, -1.5f + 0.002f, 0.001f);
     EXPECT_FLOAT_EQ(centerCursor.orientation.w, 1.0f);
 
-    // Top-left corner (normX = 0.0, normY = 0.0) -> tip at (-0.8, 1.95)
     XrPosef tlCursor = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 0.0f, 0.0f, cursorSize, cursorSize);
     EXPECT_NEAR(tlCursor.position.x, -0.8f + 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(tlCursor.position.y, 1.95f - 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(tlCursor.position.z, -1.5f + 0.002f, 0.001f);
 
-    // Bottom-right corner (normX = 1.0, normY = 1.0) -> tip at (0.8, 1.05)
     XrPosef brCursor = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 1.0f, 1.0f, cursorSize, cursorSize);
     EXPECT_NEAR(brCursor.position.x, 0.8f + 0.5f * cursorSize, 0.001f);
     EXPECT_NEAR(brCursor.position.y, 1.05f - 0.5f * cursorSize, 0.001f);
@@ -2549,19 +2454,16 @@ TEST(OpenXrManagerTest, ComputeCursorQuadPoseProjectsNormalizedCoordinatesWithHo
 
 TEST(OpenXrManagerTest, ComputeCursorQuadPoseRotatesWithMenuQuadOrientation) {
     XrPosef menuPose{};
-    menuPose.position = { -1.5f, 1.5f, 0.0f }; // Quad 1.5m to the left (-X)
-    float halfAngle = 3.14159265f / 4.0f;       // 90 deg yaw facing +X
+    menuPose.position = { -1.5f, 1.5f, 0.0f };
+    float halfAngle = 3.14159265f / 4.0f;
     menuPose.orientation = { 0.0f, std::sin(halfAngle), 0.0f, std::cos(halfAngle) };
 
     XrExtent2Df menuSize{ 1.6f, 0.9f };
     float cursorSize = 0.035f;
 
-    // Center of screen
     XrPosef cursorPose = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 0.5f, 0.5f, cursorSize, cursorSize);
-    // Cursor orientation must strictly match menu quad orientation
     EXPECT_NEAR(cursorPose.orientation.y, menuPose.orientation.y, 0.001f);
     EXPECT_NEAR(cursorPose.orientation.w, menuPose.orientation.w, 0.001f);
-    // 2mm forward offset from quad facing +X should displace along +X (towards origin)
     EXPECT_GT(cursorPose.position.x, menuPose.position.x);
 }
 
@@ -2596,7 +2498,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsTwoLayersWhenCursorVisible) {
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
     ASSERT_TRUE(manager.CreateCursorSwapchain());
 
-    // Enable cursor at normalized coordinates (0.25, 0.75)
     MenuCursorState cursorState{ true, 0.25f, 0.75f, MenuCursorState::kDefaultCursorSize };
     manager.SetMenuCursorState(cursorState);
     EXPECT_TRUE(manager.GetMenuCursorState().visible);
@@ -2606,13 +2507,11 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsTwoLayersWhenCursorVisible) {
 
     ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 2u);
 
-    // Layer 0: Menu Quad
     const auto& menuQuad = mockDispatch->lastSubmittedQuadLayers[0];
     EXPECT_EQ(menuQuad.type, XR_TYPE_COMPOSITION_LAYER_QUAD);
     EXPECT_EQ(menuQuad.subImage.swapchain, manager.GetEyeSwapchain(0).handle);
     EXPECT_EQ(menuQuad.layerFlags, 0u);
 
-    // Layer 1: Cursor Quad
     const auto& cursorQuad = mockDispatch->lastSubmittedQuadLayers[1];
     EXPECT_EQ(cursorQuad.type, XR_TYPE_COMPOSITION_LAYER_QUAD);
     EXPECT_EQ(cursorQuad.space, manager.GetLocalSpace());
@@ -2622,7 +2521,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsTwoLayersWhenCursorVisible) {
     EXPECT_FLOAT_EQ(cursorQuad.size.width, MenuCursorState::kDefaultCursorSize);
     EXPECT_FLOAT_EQ(cursorQuad.size.height, MenuCursorState::kDefaultCursorSize);
 
-    // Verify cursor quad position matches ComputeCursorQuadPose (both overloads)
     XrPosef expectedPose = OpenXrManager::ComputeCursorQuadPose(menuQuad.pose, menuQuad.size, cursorState, MenuCursorState::kDefaultCursorSize, MenuCursorState::kDefaultCursorSize);
     EXPECT_NEAR(cursorQuad.pose.position.x, expectedPose.position.x, 0.001f);
     EXPECT_NEAR(cursorQuad.pose.position.y, expectedPose.position.y, 0.001f);
@@ -2639,7 +2537,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsSingleLayerWhenCursorHidden) {
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
     ASSERT_TRUE(manager.CreateCursorSwapchain());
 
-    // Cursor visibility set to false
     manager.SetMenuCursorState({ false, 0.5f, 0.5f, MenuCursorState::kDefaultCursorSize });
 
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
@@ -2671,7 +2568,7 @@ struct RenderPoseFixture {
         EXPECT_TRUE(manager->Initialize());
         EXPECT_TRUE(manager->CreateSession());
         EXPECT_TRUE(manager->CreateTrackingSpaces());
-        manager->PollEvents();  // consume READY so the session is running
+        manager->PollEvents();
         EXPECT_TRUE(manager->IsSessionRunning());
         EXPECT_TRUE(manager->CreateEyeSwapchains(1920, 1080));
         manager->SetIpd(0.064f);
@@ -2680,21 +2577,16 @@ struct RenderPoseFixture {
     }
 };
 
-} // namespace
+}
 
 TEST(OpenXrManagerTest, SequentialDualPassSubmitsEachEyeWithPoseItWasRenderedWith) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
 
-    // Sub-pass 0: engine reads the head pose (located before the frame begins), then the head
-    // moves before present; BeginFrame locates the moved head at the predicted display time.
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
 
-    // Sub-pass 1 runs inside the open frame, so the engine reads the display-time pose; the
-    // head then moves again and is polled before present, so the latest polled pose (the
-    // fallback) differs from the one eye 1 was rendered with.
     f.bridge->SetSubPassIndex(1);
     f.bridge->GetHeadPose();
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
@@ -2724,8 +2616,6 @@ TEST(OpenXrManagerTest, AfrSubmitsEachEyeWithPoseItWasRenderedWith) {
     f.bridge->AdvanceFrame();
     ASSERT_EQ(f.bridge->GetFrameParity(), 1u);
 
-    // The OpenXR frame is still open, so the engine reads the display-time pose for eye 1; the
-    // later poll makes the fallback pose differ from the one eye 1 was rendered with.
     f.bridge->GetHeadPose();
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
     f.manager->PollHeadPose(2000000);
@@ -2743,7 +2633,6 @@ TEST(OpenXrManagerTest, AfrSubmitsEachEyeWithPoseItWasRenderedWith) {
 TEST(OpenXrManagerTest, FrameBeginPollDoesNotOverwriteRecordedRenderPose) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
 
-    // Pose recorded before any OpenXR frame has begun (BeginFrame happens inside the first copy).
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
     ASSERT_FALSE(f.manager->IsFrameBegun());
@@ -2778,20 +2667,18 @@ TEST(OpenXrManagerTest, RecordedRenderPoseIsConsumedByCopy) {
 }
 
 TEST(OpenXrManagerTest, RuntimeTrackedPosesSubmitEachEyeWithItsRenderPose) {
-    // Poses come from xrLocateSpace, at the current time before the frame
-    // begins and at the predicted display time (cached) once it has.
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
     auto setTracked = [&](float x, float y, float z) {
         f.dispatch->tracking.head.pose.position = { x, y, z };
     };
 
     setTracked(0.0f, 1.6f, 0.0f);
-    f.bridge->GetHeadPose();  // eye 0 render pose, located before the frame begins
+    f.bridge->GetHeadPose();
     setTracked(5.0f, 1.6f, 5.0f);
-    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));  // BeginFrame locates at display time
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
 
     f.bridge->SetSubPassIndex(1);
-    f.bridge->GetHeadPose();  // eye 1, inside the open frame: the display-time pose
+    f.bridge->GetHeadPose();
     setTracked(9.0f, 9.0f, 9.0f);
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
     ASSERT_TRUE(f.manager->SubmitFramePair());
@@ -2824,7 +2711,7 @@ TEST(OpenXrManagerTest, GetEyePoseRecordsForTheRequestedEye) {
 
 TEST(OpenXrManagerTest, UnconsumedRenderPoseExpiresAtFrameEnd) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
-    f.dispatch->mockShouldRender = XR_FALSE;  // copies skip the swapchain and consume nothing
+    f.dispatch->mockShouldRender = XR_FALSE;
 
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
@@ -2853,7 +2740,6 @@ TEST(OpenXrManagerTest, SessionStopDropsRecordedRenderPoses) {
     f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetEyePose(0);
 
-    // Headset taken off: on resume the pose would be from before the pause.
     f.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
     f.manager->PollEvents();
     ASSERT_FALSE(f.manager->IsSessionRunning());
@@ -2861,8 +2747,6 @@ TEST(OpenXrManagerTest, SessionStopDropsRecordedRenderPoses) {
     EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
 }
 
-// A dispatch that implements none of the input calls (every IOpenXrDispatch input virtual keeps its
-// XR_ERROR_FUNCTION_UNSUPPORTED default) is a runtime that refuses the Motion Controller action set.
 TEST(OpenXrManagerTest, DispatchWithoutInputSupportKeepsTheSessionAndReportsUntrackedHands) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
@@ -2881,7 +2765,6 @@ TEST(OpenXrManagerTest, DispatchWithoutInputSupportKeepsTheSessionAndReportsUntr
     EXPECT_EQ(mockDispatch->StopHapticFeedback(XR_NULL_HANDLE, nullptr), XR_ERROR_FUNCTION_UNSUPPORTED);
 }
 
-// Redirects the game log (Logger) to a temp file while a test runs and counts lines in it.
 namespace {
 class OpenXrLogCapture {
 public:
@@ -2906,7 +2789,6 @@ private:
     std::filesystem::path m_path;
 };
 
-// An active manager with a session and tracking spaces, the eyes 64 mm apart.
 struct IpdRig {
     std::shared_ptr<MockOpenXrDispatch> dispatch = std::make_shared<MockOpenXrDispatch>();
     OpenXrManager manager{dispatch};
@@ -2922,7 +2804,7 @@ struct IpdRig {
     }
     bool Start() { return manager.Initialize() && manager.CreateSession() && manager.CreateTrackingSpaces(); }
 };
-} // namespace
+}
 
 TEST(OpenXrManagerTest, TwoManagersInOneProcessEachLogTheirFirstIpdCalibration) {
     OpenXrLogCapture capture("fs25vr_openxr_ipd_log_test.log");
@@ -2982,4 +2864,4 @@ TEST(OpenXrManagerTest, HeadPoseLocateFailuresAreLoggedAgainInANewManagerAndAfte
     EXPECT_EQ(capture.Count(failed), 3u);
 }
 
-} // namespace fs25vr
+}

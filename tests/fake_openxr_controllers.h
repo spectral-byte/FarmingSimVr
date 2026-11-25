@@ -11,12 +11,6 @@
 
 namespace fs25vr {
 
-// Motion Controller model for fake OpenXR dispatches. Tests place each hand and set its inputs; the
-// fake forwards the action calls (xrStringToPath ... xrApplyHapticFeedback) here and behaves like a
-// runtime: it records what was declared, refuses what the knobs say to refuse, latches inputs at
-// xrSyncActions, and locates the aim spaces in the same re-based tracking origin as the head.
-//
-// Hand ids: 0 = left, 1 = right.
 class FakeOpenXrControllers {
 public:
     struct Inputs {
@@ -39,7 +33,6 @@ public:
     };
     Hand hands[2];
 
-    // ---- knobs: make a step fail -------------------------------------------------------------
     XrResult stringToPathResult = XR_SUCCESS;
     XrResult createActionSetResult = XR_SUCCESS;
     XrResult createActionResult = XR_SUCCESS;
@@ -52,12 +45,10 @@ public:
     XrResult syncActionsResult = XR_SUCCESS;         // e.g. XR_SESSION_NOT_FOCUSED
     XrResult applyHapticResult = XR_SUCCESS;
 
-    // A runtime that refuses the whole action set at its first step.
     void RefuseActionSet(bool refuse = true) {
         createActionSetResult = refuse ? XR_ERROR_RUNTIME_FAILURE : XR_SUCCESS;
     }
 
-    // ---- records -----------------------------------------------------------------------------
     struct ActionRecord {
         std::string name;
         XrActionType type = XR_ACTION_TYPE_BOOLEAN_INPUT;
@@ -81,7 +72,7 @@ public:
         XrSpace baseSpace = XR_NULL_HANDLE;
         XrTime time = 0;
     };
-    std::vector<LocateRecord> locates;      // every pose space located
+    std::vector<LocateRecord> locates;
 
     struct HapticPulse {
         int hand = -1;
@@ -94,7 +85,6 @@ public:
 
     explicit FakeOpenXrControllers(FakeOpenXrTracking& tracking) : m_tracking(tracking) {}
 
-    // ---- dispatch side -----------------------------------------------------------------------
     XrResult StringToPath(const char* pathString, XrPath* path) {
         if (stringToPathResult != XR_SUCCESS) return stringToPathResult;
         if (!pathString || !path) return XR_ERROR_VALIDATION_FAILURE;
@@ -212,7 +202,6 @@ public:
         if (m_attachedSessions == 0) return XR_ERROR_ACTIONSET_NOT_ATTACHED;
         if (syncActionsResult != XR_SUCCESS && syncActionsResult != XR_SESSION_NOT_FOCUSED) return syncActionsResult;
         if (syncActionsResult == XR_SESSION_NOT_FOCUSED) {
-            // A session that is not focused delivers no input: every action is inactive.
             m_latchedValid = false;
             return XR_SESSION_NOT_FOCUSED;
         }
@@ -256,8 +245,6 @@ public:
         }, [&] { state->isActive = XR_FALSE; });
     }
 
-    // Locates an aim or grip space. Valid only while the latched pose action is active (a controller that
-    // is off, a grip pose that alone is untracked or a session that is not focused has no pose).
     XrResult LocateActionSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLocation* location) {
         const auto it = m_actionSpaces.find(space);
         if (it == m_actionSpaces.end()) return XR_ERROR_HANDLE_INVALID;
@@ -298,7 +285,6 @@ public:
         return (path >= 1 && path <= m_pathStrings.size()) ? m_pathStrings[path - 1] : std::string();
     }
 
-    // The handle of a declared action (XR_NULL_HANDLE when none has that name) and a hand's path.
     XrAction ActionByName(const std::string& name) const {
         for (const auto& [handle, record] : m_actionRecords) {
             if (record.name == name) return handle;
@@ -310,7 +296,6 @@ public:
         return it == m_pathIds.end() ? XR_NULL_PATH : it->second;
     }
 
-    // The binding paths a profile suggested for an action name (empty when none).
     std::vector<std::string> BindingsFor(const std::string& profile, const std::string& actionName) const {
         std::vector<std::string> out;
         const auto it = suggestedBindings.find(profile);
@@ -361,4 +346,4 @@ private:
     }
 };
 
-} // namespace fs25vr
+}

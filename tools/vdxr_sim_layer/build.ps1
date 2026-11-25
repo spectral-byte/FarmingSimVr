@@ -1,17 +1,9 @@
-# Builds the VDXR simulation layer (XrApiLayer_vdxr_sim.dll + its manifest) and harness.exe with the MSVC x64 toolchain.
-# Outputs go to <BuildDir>\vdxr_sim_layer (git-ignored). The OpenXR headers come from the repository's CMake build, so
-# configure the repository first (any target fetches them).
-#   .\build.ps1                     # <repo>\build
-#   .\build.ps1 -BuildDir <path>    # another CMake build folder
 param([string]$BuildDir = (Join-Path $PSScriptRoot '..\..\build'))
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $BuildDir = (Resolve-Path $BuildDir).Path
 $out = Join-Path $BuildDir 'vdxr_sim_layer'
 
-# The OpenXR SDK as the build fetched it: under FETCHCONTENT_BASE_DIR (the CMake presets put it in <repo>\.deps; <BuildDir>\_deps
-# without them), in openxr-src with the generated headers in openxr-build; or the source folder FETCHCONTENT_SOURCE_DIR_OPENXR
-# points at.
 $cache = Join-Path $BuildDir 'CMakeCache.txt'
 function Get-CacheValue([string]$name) {
     if (-not (Test-Path $cache)) { return $null }
@@ -49,7 +41,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cl failed for vdxr_sim_layer.cpp with exit code $LASTEXITCODE" }
     cl /nologo /EHsc /O2 /MT /W4 /utf-8 (Join-Path $here 'harness.cpp') /Fe:harness.exe
     if ($LASTEXITCODE -ne 0) { throw "cl failed for harness.cpp with exit code $LASTEXITCODE" }
-    # The manifest names the DLL relative to itself, so it sits next to it.
     Copy-Item (Join-Path $here 'XrApiLayer_vdxr_sim.json') $out
 } finally {
     Pop-Location

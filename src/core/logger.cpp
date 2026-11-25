@@ -15,7 +15,6 @@ Logger& Logger::Instance() {
     return instance;
 }
 
-// Set FS25VR_LOG_LEVEL=debug in the game's environment to enable Debug messages.
 constexpr const char* kLogLevelEnvVar = "FS25VR_LOG_LEVEL";
 
 Logger::Logger() {
@@ -36,10 +35,8 @@ std::filesystem::path Logger::DefaultLogPath() {
     HMODULE module = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&Logger::DefaultLogPath), &module)) {
-        // Can't resolve our own module; nullptr makes the lookup below fall back to the exe's directory.
         module = nullptr;
     }
-    // Grow the buffer until the path fits, so long install paths aren't truncated.
     std::wstring modulePath(MAX_PATH, L'\0');
     while (true) {
         DWORD len = GetModuleFileNameW(module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
@@ -101,8 +98,6 @@ void Logger::SetLogFile(const std::filesystem::path& filepath) {
     std::ios::openmode mode = std::ios::out | std::ios::trunc;
     std::error_code ec;
     if (std::filesystem::exists(m_filepath, ec)) {
-        // A single replacing move: if the old log is still held open (e.g. by a hung previous
-        // session) this fails without touching either file, and we append rather than lose it.
         if (!MoveFileExW(m_filepath.c_str(), BackupPathFor(m_filepath).c_str(), MOVEFILE_REPLACE_EXISTING)) {
             mode = std::ios::out | std::ios::app;
         }
@@ -159,8 +154,6 @@ void Logger::Log(LogLevel level, const std::string& message) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {
         m_fileStream << formatted;
-        // On disk at once, so a game that hangs leaves a complete log. Debug lines stay buffered: debug logging
-        // would otherwise cost a file write per line.
         if (level >= LogLevel::Info) {
             m_fileStream.flush();
         }
@@ -171,7 +164,6 @@ void Logger::Log(LogLevel level, const std::string& message) {
 
 namespace {
 
-// Writes value as exactly `digits` decimal digits; returns the end of what it wrote.
 char* PutDigits(char* out, unsigned value, int digits) {
     for (int i = digits - 1; i >= 0; --i) {
         out[i] = static_cast<char>('0' + value % 10);
@@ -180,7 +172,7 @@ char* PutDigits(char* out, unsigned value, int digits) {
     return out + digits;
 }
 
-} // namespace
+}
 
 bool Logger::TryLogWithoutWaiting(LogLevel level, const char* message, std::size_t length) {
     std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
@@ -188,8 +180,6 @@ bool Logger::TryLogWithoutWaiting(LogLevel level, const char* message, std::size
         return false;
     }
 
-    // The layout of the lines Log writes, put together by hand: snprintf and localtime_s need more stack than a
-    // thread that has just overflowed its stack has left, and the CRT's time functions take a lock of their own.
     SYSTEMTIME now;
     GetLocalTime(&now);
     char* out = m_emergencyLine;
@@ -246,4 +236,4 @@ void LogError(const std::string& message) {
     Logger::Instance().Log(LogLevel::Error, message);
 }
 
-} // namespace fs25vr
+}

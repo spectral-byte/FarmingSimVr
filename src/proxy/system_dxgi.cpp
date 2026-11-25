@@ -80,4 +80,4 @@ FARPROC SystemDxgi::GetExport(const char* name) {
     return GetProcAddress(m_hModule, name);
 }
 
-} // namespace fs25vr
+}

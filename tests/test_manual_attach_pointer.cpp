@@ -1,10 +1,3 @@
-// Manual Attach, who may work a hitch and when (ADR-0035, spec #227, ticket #228), seen from outside: the real Companion Mod runs against the real
-// VRBridge over FakeTrackedHeadset, with the game and Manual Attach stood in by Lua stubs (manual_attach_test_support.h). Covered here: the Pointer
-// Hand's trigger on the Virtual Gamepad while the ray is on a hitch, who has control of the pointer and what takes the player out of the world (the
-// desk mouse, a menu, a Stereo Dialog, 2D Floating Window Mode, Motion Controllers off, a vehicle), which hand can work a hitch (never a Tool Hand
-// holding a Hand Tool nor a hand carrying a Held Object), what wins when the ray is on more than one thing, what Manual Attach is left as, and the
-// pulses. Prior art: test_animated_objects_pointer.cpp and test_animated_objects_haptics.cpp (the same rules for Animated Objects).
-
 #include "manual_attach_test_support.h"
 #include <string>
 
@@ -13,7 +6,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace manual_attach_test;
 
-// The strongest pulse a hand got (0..1), or 0 when it got none.
 float StrongestTo(const FakeTrackedHeadset& headset, uint32_t hand) {
     float strongest = 0.0f;
     for (const auto& pulse : headset.HapticPulses()) {
@@ -22,9 +14,7 @@ float StrongestTo(const FakeTrackedHeadset& headset, uint32_t hand) {
     return strongest;
 }
 
-}  // namespace
-
-// ---- The Virtual Gamepad -------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnAHitchThePointerHandsTriggerReadsReleasedOnThePadAndTheOtherHandsStillReachesIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -51,11 +41,11 @@ TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnAHitchThePointerHandsTrigg
 TEST_F(VirtualGamepadManualAttachTest, ATriggerHeldWhenTheRayLandsOnAHitchKeepsItsBindingAndWorksNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_and_implement"));
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // aimed over the hitch
-    PullTrigger(kRight);                        // held for throttle, say
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    PullTrigger(kRight);
     ASSERT_EQ(Pad().bRightTrigger, 255);
 
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // the ray lands on the hitch with the trigger still down
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
     FRAMES(3);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
@@ -83,8 +73,6 @@ TEST_F(VirtualGamepadManualAttachTest, ATriggerThatWorkedAHitchStaysOffThePadUnt
     EXPECT_EQ(Performs(), 1);
 }
 
-// ---- Who has control of the pointer ----------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachTest, WhileTheDeskMouseHasControlTheRayIsNotDrawnOnAHitchAndNothingIsWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_and_implement"));
@@ -98,7 +86,6 @@ TEST_F(VirtualGamepadManualAttachTest, WhileTheDeskMouseHasControlTheRayIsNotDra
     EXPECT_EQ(Performs(), 0);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "and the trigger is a binding's";
 
-    // The hand moves: the ray has the pointer again, but the pull that began under the mouse works nothing.
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch);
     FRAMES(2);
@@ -109,8 +96,6 @@ TEST_F(VirtualGamepadManualAttachTest, WhileTheDeskMouseHasControlTheRayIsNotDra
     PullTrigger(kRight);
     EXPECT_EQ(Performs("joint"), 1) << "only a new pull does";
 }
-
-// ---- Out of the world -------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, InAMenuNothingIsSelectedAndNothingIsWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -214,8 +199,6 @@ TEST_F(VirtualGamepadManualAttachTest, InTheCabNoHitchIsOfferedAndManualAttachsO
     EXPECT_EQ(Pad().bRightTrigger, 255);
 }
 
-// ---- Which hand ----------------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachTest, TheToolHandHoldingAHandToolNeverWorksAHitchAndNoHitchIsOfferedWhileItIsHeld) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_and_implement"));
@@ -231,7 +214,6 @@ TEST_F(VirtualGamepadManualAttachTest, TheToolHandHoldingAHandToolNeverWorksAHit
     EXPECT_EQ(Performs(), 0);
     ReleaseTrigger(kRight);
 
-    // The other hand points at the hitch: Manual Attach lets nobody attach with a Hand Tool in hand, so none is offered.
     POINT_HAND(kLeft, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none");
     PullTrigger(kLeft);
@@ -252,7 +234,7 @@ TEST_F(VirtualGamepadManualAttachTest, ACarriedHeldObjectMeansNoHitchIsOfferedTo
     POINT_HAND(kLeft, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
-    POINT_HAND(kRight, -kHandX, kHandY, kHandZ);  // the bale, 1.2 m ahead of the right fingertip
+    POINT_HAND(kRight, -kHandX, kHandY, kHandZ);
     Squeeze(kRight, 1.0f);
     FRAMES(3);
     ASSERT_EQ(PickUps(), 1) << "the right hand carries the bale";
@@ -273,7 +255,6 @@ TEST_F(VirtualGamepadManualAttachTest, EitherHandWorksAHitchAsThePointerHand) {
     EXPECT_EQ(Pad().bLeftTrigger, 0);
     ReleaseTrigger(kLeft);
 
-    // With both hands in use the Pointer Hand changes to the other hand with a pull of its trigger, which is no pull of a hitch.
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);
     ReleaseTrigger(kRight);
@@ -283,8 +264,6 @@ TEST_F(VirtualGamepadManualAttachTest, EitherHandWorksAHitchAsThePointerHand) {
     EXPECT_EQ(Attached("plow"), "false");
     EXPECT_EQ(Pad().bRightTrigger, 0);
 }
-
-// ---- What wins ---------------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, AClickPointWithinThePointerConeWinsOverAHitch) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -355,14 +334,13 @@ TEST_F(VirtualGamepadManualAttachTest, AHitchTheRayIsOnWinsOverAnObjectObjectGra
 TEST_F(VirtualGamepadManualAttachTest, WithTheRayOnNoHitchManualAttachKeepsItsOwnNearestCandidate) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_front_and_rear"));
-    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // over both hitches
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     PullTrigger(kRight);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "tostring(StubManualAttach.handler.attachable == frontLoader and StubManualAttach.handler.attacherVehicleJointDescIndex == 2)"),
               "true") << "Manual Attach's nearest hitch, untouched";
     EXPECT_EQ(Performs(), 0);
 
-    // What the key does is what it did: Manual Attach's execute path on its own candidate.
     Lua("StubManualAttach.handler:executeAttachment(StubManualAttach.handler.vehicleJointAttachment)");
     EXPECT_EQ(Attached("frontLoader"), "true");
     EXPECT_EQ(Attached("rearPlow"), "false");
@@ -380,15 +358,13 @@ TEST_F(VirtualGamepadManualAttachTest, PointingAndPullingLeavesManualAttachItsel
     EXPECT_TRUE(ManualAttachFunctionsAreAsFound()) << "nothing of Manual Attach but its candidate update is wrapped, replaced or added: its bindings and actions are as they were";
 }
 
-// ---- The pulses ---------------------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachTest, OneLightPulseOnThePointerHandAsTheRayLandsOnAHitchAndAFirmerOneForThePullThatWorkedIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_front_and_rear"));
-    POINT_HAND(kRight, kHandX + 1.6f, kHandY, kHandZ);  // beside the hitches
+    POINT_HAND(kRight, kHandX + 1.6f, kHandY, kHandZ);
     ASSERT_EQ(PulsesTo(kRight), 0) << "nothing under the ray: nothing felt";
 
-    POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // lands on the rear hitch
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
     EXPECT_EQ(PulsesTo(kRight), 1) << "one pulse as it lands";
     const float light = StrongestTo(headset, kRight);
@@ -406,7 +382,7 @@ TEST_F(VirtualGamepadManualAttachTest, OneLightPulseOnThePointerHandAsTheRayLand
     EXPECT_EQ(PulsesTo(kRight), 2) << "and attaching changes nothing about being on the hitch";
     ReleaseTrigger(kRight);
 
-    POINT_HAND(kRight, kHandX + 1.6f, kHandY, kHandZ);  // leaves
+    POINT_HAND(kRight, kHandX + 1.6f, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(kRight), 2) << "none as it leaves";
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(PulsesTo(kRight), 3) << "one more as it lands again";
@@ -417,7 +393,7 @@ TEST_F(VirtualGamepadManualAttachTest, LandingOnAnotherHitchPulsesAgainAndARefus
     Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(PulsesTo(kRight), 1);
-    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // straight onto the other hitch
+    POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-1.20 -0.20 1.00");
     EXPECT_EQ(PulsesTo(kRight), 2) << "a different hitch";
 

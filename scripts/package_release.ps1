@@ -1,4 +1,3 @@
-# Package script for Farming Simulator 25 VR release distribution
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -11,28 +10,20 @@ $licensePath = Join-Path $repoRoot "LICENSE"
 
 Write-Host "Packaging FS25 VR Release..."
 
-# Only ship the optimised configuration (RelWithDebInfo, /Ob2).
 & (Join-Path $PSScriptRoot "check_build_config.ps1") (Join-Path $repoRoot "build")
 
 if (-not (Test-Path $builtDll)) {
     Write-Error "build\version.dll not found. Build project first (ninja -C build injector)."
 }
 
-# Every release carries the Injector's symbols (the symbols zip), so a crash dump from it can be read.
-# The next build overwrites the PDB, so a release cannot be symbolised afterwards: refuse to package
-# without it, before anything in build\release is touched.
 if (-not (Test-Path $builtPdb)) {
     Write-Error "build\version.pdb not found. The linker writes it next to version.dll, and every release must carry the Injector's symbols (the symbols zip). Rebuild the Injector (cmake --build build --target injector); do not copy a version.dll in without its PDB."
 }
-# A PDB left over from another build would be zipped as this release's symbols and open none of its crash dumps:
-# it must carry the GUID and age the linker stamped into this version.dll.
 . (Join-Path $PSScriptRoot "symbols_identity.ps1")
 Assert-PdbBelongsToDll $builtPdb $builtDll
 
-# Only ship an Injector that needs no VC++ redistributable (static C runtime).
 & (Join-Path $PSScriptRoot "check_injector_imports.ps1") $builtDll
 
-# Read the release version from modDesc
 [xml]$modDesc = Get-Content $modDescPath -Raw
 $version = $modDesc.modDesc.version
 if ([string]::IsNullOrWhiteSpace($version)) {
@@ -41,21 +32,17 @@ if ([string]::IsNullOrWhiteSpace($version)) {
 $bundleName = "FS25_VR_v$version"
 $bundleDir = Join-Path $releaseDir $bundleName
 
-# Clean and recreate staging directories
 if (Test-Path $releaseDir) {
     Remove-Item $releaseDir -Recurse -Force
 }
 New-Item -ItemType Directory -Path "$bundleDir\x64" -Force | Out-Null
 New-Item -ItemType Directory -Path "$bundleDir\mods" -Force | Out-Null
 
-# Copy Injector DLL (the game loads it as its version.dll, ADR-0038)
 Copy-Item $builtDll "$bundleDir\x64\version.dll" -Force
 Copy-Item $builtDll "$releaseDir\version.dll" -Force
 Copy-Item $builtPdb "$releaseDir\version.pdb" -Force
 Write-Host "[Package] Staged version.dll and version.pdb"
 
-# version.dll statically links these dependencies; their licenses require shipping the notices.
-# Fetched sources live wherever the build was configured to put them (the CMake presets put them in .deps).
 $depsDir = Join-Path $repoRoot "build\_deps"
 $cmakeCache = Join-Path $repoRoot "build\CMakeCache.txt"
 if (Test-Path $cmakeCache) {
@@ -81,7 +68,6 @@ $noticeText = foreach ($notice in $notices) {
     Get-Content $path -Raw
     ""
 }
-# The Virtual Hand model is CC BY: its attribution also travels with the bundle, not only inside the mod zip.
 $modelAttribution = Join-Path $companionDir "models\VirtualHand_ATTRIBUTION.txt"
 if (-not (Test-Path $modelAttribution)) {
     Write-Error "$modelAttribution not found."
@@ -93,11 +79,9 @@ $noticeText += Get-Content $modelAttribution -Raw
 Set-Content -Path "$bundleDir\THIRD_PARTY_NOTICES.txt" -Value $noticeText -Encoding utf8
 Write-Host "[Package] Wrote THIRD_PARTY_NOTICES.txt"
 
-# GPL-3.0: every distributed copy (the bundle and the standalone mod zip) carries the license.
 Copy-Item $licensePath "$bundleDir\LICENSE" -Force
 Write-Host "[Package] Staged LICENSE"
 
-# Package Companion Mod
 Push-Location $companionDir
 try {
     tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua models/* -C $repoRoot LICENSE
@@ -107,7 +91,6 @@ try {
     Pop-Location
 }
 
-# Write README.txt
 $readmeContent = @"
 ================================================================================
   Farming Simulator 25 VR (FS25 VR) - Version $version
@@ -308,7 +291,6 @@ https://github.com/spectral-byte/FarmingSimVr
 
 Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
 
-# Create master bundle zip
 $zipBundle = Join-Path $releaseDir "$bundleName.zip"
 Push-Location $bundleDir
 try {
@@ -318,9 +300,6 @@ try {
     Pop-Location
 }
 
-# Symbols zip: the PDB the linker wrote for the staged Injector, published next to the zip bundle and
-# the Setup exe so a crash dump from this release opens with full symbols. It is a file, not a second
-# FS25_VR_v* folder: scripts\test_installer.ps1 takes the one such folder in build\release as its staging dir.
 $symbolsZip = Join-Path $releaseDir "${bundleName}_Symbols.zip"
 tar.exe -a -cf $symbolsZip -C $releaseDir version.pdb
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $symbolsZip)) {
@@ -328,8 +307,6 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $symbolsZip)) {
 }
 Write-Host "[Package] Created $symbolsZip"
 
-# Build the Installer from the same staged bundle folder, so it carries the identical binaries,
-# LICENSE and THIRD_PARTY_NOTICES as the zip bundle. Inno Setup's compiler is not on PATH by default.
 $iscc = @(
     (Get-Command ISCC.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source }),
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

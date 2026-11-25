@@ -1,9 +1,3 @@
-// Manual Attach, the mod in other releases and the diagnostics (ADR-0035, spec #227, ticket #228), seen from outside: the real Companion Mod runs
-// against the real VRBridge over FakeTrackedHeadset, with Manual Attach stood in by a Lua stub (manual_attach_test_support.h) in the "releases"
-// the stub can be in. A function the module relies on that is missing or has another shape, or Manual Attach not being loaded at all, turns the
-// support off with ONE warning and leaves Manual Attach as it is; the module wraps nothing, so there is nothing to hand back at map unload.
-// Prior art: test_animated_objects_wraps.cpp and test_pointer_ray.cpp (Interactive Control missing or mismatched).
-
 #include "manual_attach_test_support.h"
 #include <string>
 
@@ -14,9 +8,6 @@ using namespace manual_attach_test;
 
 class VirtualGamepadManualAttachWrapsTest : public VirtualGamepadManualAttachTest {
 protected:
-    // Manual Attach is in a release where something is missing or reshaped: the module warns once, selects nothing, works nothing, and Manual
-    // Attach (its key: the handler's own execute path) works as it does without VR.
-    // `frames`: how long the game runs before the warning is looked for (the objects Manual Attach creates late are waited for, see below).
     void ExpectTheSupportGivesUpWith(const char* variant, int frames = 3) {
         SCOPED_TRACE(variant);
         ASSERT_NO_FATAL_FAILURE(StartWithManualAttach(variant));
@@ -36,12 +27,9 @@ protected:
     }
 };
 
-}  // namespace
-
-// ---- Giving up -------------------------------------------------------------------------------------------------------------------
+}
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachNotBeingLoadedTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("notLoaded"); }
-// (An instance and a handler that never come are waited for: 15 s of frames pass first.)
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoInstanceTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("instanceMissing", 900); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoAttachmentHandlerTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("handlerMissing", 900); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoHandlerClassTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("classMissing"); }
@@ -93,10 +81,6 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, NoWarningWhileNoMotionControllerIsTr
     EXPECT_EQ(Warnings(), 0) << "with Motion Controllers off the support is never looked at";
 }
 
-// ---- Waiting for Manual Attach's objects --------------------------------------------------------------------------------------------
-
-// Manual Attach creates its instance and its attachment handler when the map starts to load; a release or a load order that makes them later is
-// waited for, for a while, before the support gives up with its one warning. (A missing function or a mod that is not loaded is final at once.)
 TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsInstanceAppearingAfterTheFirstTrackedUpdateIsStillFound) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("instanceMissing"));
     Lua(StubChunk("manual_attach_tractor_and_implement"));
@@ -132,7 +116,6 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsHandlerAppearingAfterTh
 TEST_F(VirtualGamepadManualAttachWrapsTest, AnErrorWhileLookingForHitchesIsLoggedOnceNotEveryFrameAndSelectsNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_and_implement"));
-    // Manual Attach's own update does not use its class's isVehicleValid here (the stand-in has a local), the module does.
     Lua("StubManualAttach.Handler.isVehicleValid = function(vehicle) error('boom') end");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(5);
@@ -148,8 +131,6 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, AnErrorWhileLookingForHitchesIsLogge
     EXPECT_EQ(DrawnEnd(), kRearHitch) << "and it works again once the game does";
 }
 
-// ---- Unloading the map -----------------------------------------------------------------------------------------------------------
-
 TEST_F(VirtualGamepadManualAttachWrapsTest, UnloadingTheMapLeavesManualAttachExactlyAsFoundAndTheNextMapStartsAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(StubChunk("manual_attach_tractor_and_implement"));
@@ -164,8 +145,6 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, UnloadingTheMapLeavesManualAttachExa
     EXPECT_NE(EvalLua(L, "VRCompanion:getManualAttachDiagnostics()").find("not installed yet"), std::string::npos)
         << "the support forgot Manual Attach with the map";
 }
-
-// ---- The diagnostics ---------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, ThePointerDiagnosticsCarryOneLineForManualAttach) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
@@ -193,10 +172,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, ThePointerDiagnosticsSayTheSupportIs
         << "the line says why, as the warning does: " << EvalLua(L, "runCommand('vrPointerDiagnostics')");
 }
 
-// ---- The warning's exact words ---------------------------------------------------------------------------------------------------
-
 namespace {
-// How many of the game's log lines are exactly `line`.
 int ExactLogLines(const std::string& line) {
     int count = 0;
     for (const auto& logged : s_capturedLogs) {
@@ -209,7 +185,7 @@ std::string ManualAttachWarning(const std::string& problem) {
     return "[FS25_VR] [Warning] Manual Attach support disabled: " + problem
         + ". Motion Controllers cannot work Manual Attach's Coupling Points; Manual Attach is unchanged.";
 }
-}  // namespace
+}
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, TheWarningSaysHowAHelperOfTheClassIsReshaped) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("rangeHelperReshaped"));

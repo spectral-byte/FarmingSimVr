@@ -1,11 +1,3 @@
-// Hand Tools, the pressure washer lance (ADR-0029), seen from outside: the real Companion Mod runs
-// against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
-// StubHandTool: a player on foot, HandTool.attachToolToCamera, the lance, a tool the mod does not support). A test moves
-// the fake Motion Controllers and the game clock, drives frames the way the game would and asserts what the player or the
-// game would see: where the lance's root node is in the world, what the Virtual Hand looks like, the log. Never the mod's
-// own state. Prior art: test_wheel_grab_steering_wrap.cpp (wrapping a game function, the missing and reshaped variants) and
-// test_virtual_hands.cpp (Virtual Hand placement and poses).
-
 #include "hand_tools_test_support.h"
 #include <string>
 
@@ -13,8 +5,6 @@ namespace {
 
 using namespace hand_tools_test;
 
-// Lua helpers: where a tool is, as the game would know it. The game puts a held tool below the camera's pitch node at
-// StubHandTool.CAMERA_PLACEMENT; the Virtual Hand's node is what the Companion Mod puts it below.
 constexpr const char* kPlacementHelpers = R"luau(
     function _G.isWhereTheGamePutsIt(tool)
         if getParent(tool.rootNode) ~= foot.cam.pitchNode then return false end
@@ -25,9 +15,8 @@ constexpr const char* kPlacementHelpers = R"luau(
     function _G.isInTheHand(tool, which) return isBelow(tool.rootNode, handHolder(which)) end
 )luau";
 
-}  // namespace
+}
 
-// The lance held on foot with the right Motion Controller picked up: the common start of the tests below.
 #define LANCE_IN_THE_RIGHT_HAND() \
     FakeTrackedHeadset headset; \
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f)); \
@@ -68,8 +57,6 @@ TEST_F(CompanionModTest, TheLanceHeldOnFootHangsBelowTheRightVirtualHandAndFollo
     )luau", "=follows"), 0);
 }
 
-// The pose of a hand closed around a handle: the middle, ring and little fingers as for a full grip, whatever the real
-// grip is, and the index finger on the trigger. The references are the same hand with nothing in it and the input given.
 TEST_F(CompanionModTest, TheVirtualHandHoldingTheLanceIsClosedAroundTheHandleAndItsIndexFingerStillFollowsTheTrigger) {
     FakeTrackedHeadset headset;
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
@@ -78,7 +65,6 @@ TEST_F(CompanionModTest, TheVirtualHandHoldingTheLanceIsClosedAroundTheHandleAnd
     SetGameTime(10000);
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
 
-    // The references: an empty hand with a full grip, and one with a full trigger.
     headset.SetHandInputs(kRight, Squeeze(0.0f, 1.0f));
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, "_G.fullGrip = fingerCurl('right', 'middle'); _G.fullGripRing = fingerCurl('right', 'ring'); _G.fullGripLittle = fingerCurl('right', 'little')", "=gripReference"), 0);
@@ -86,7 +72,6 @@ TEST_F(CompanionModTest, TheVirtualHandHoldingTheLanceIsClosedAroundTheHandleAnd
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, "_G.fullTrigger = fingerCurl('right', 'index')", "=triggerReference"), 0);
 
-    // Now the lance is in the hand and the grip is open: the fingers around the handle are closed all the same.
     ASSERT_NO_FATAL_FAILURE(HoldLance(L));
     headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
     FRAMES(2);
@@ -119,7 +104,6 @@ TEST_F(CompanionModTest, TheLanceIsWhereTheGamePutsItWhileTheToolHandIsSetDownOr
     auto inTheHand = [&]() { return EvalLua(L, "isInTheHand(lance, 'right')"); };
     auto whereTheGamePutsIt = [&]() { return EvalLua(L, "isWhereTheGamePutsIt(lance)"); };
 
-    // Set down: the Motion Controller lies still for longer than the in-use timeout.
     AdvanceGameTime(3100);
     FRAMES(1);
     EXPECT_EQ(whereTheGamePutsIt(), "true") << "set down: the game's own attachToolToCamera put the lance in front of the view";
@@ -128,7 +112,6 @@ TEST_F(CompanionModTest, TheLanceIsWhereTheGamePutsItWhileTheToolHandIsSetDownOr
     EXPECT_EQ(inTheHand(), "true") << "picked up again: the lance is back in the hand";
     EXPECT_EQ(whereTheGamePutsIt(), "false");
 
-    // Tracking lost.
     headset.SetHandTracked(kRight, false);
     FRAMES(1);
     EXPECT_EQ(whereTheGamePutsIt(), "true") << "untracked: the lance is where the game puts it";
@@ -136,17 +119,14 @@ TEST_F(CompanionModTest, TheLanceIsWhereTheGamePutsItWhileTheToolHandIsSetDownOr
     FRAMES(1);
     EXPECT_EQ(inTheHand(), "true") << "tracked again: back in the hand";
 
-    // Only the grip pose lost: the aim pose still works, but there is no Virtual Hand to hold it.
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), /*tracked=*/false);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), false);
     FRAMES(1);
     EXPECT_EQ(whereTheGamePutsIt(), "true");
-    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), /*tracked=*/true);
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.30f), true);
     FRAMES(1);
     EXPECT_EQ(inTheHand(), "true");
 }
 
-// Another mod's tool is a Hand Tool the Companion Mod does not support (ADR-0029): the game places it exactly as it does without
-// VR, and the Virtual Hand next to it is an empty one.
 TEST_F(CompanionModTest, AnUnsupportedHandToolIsPlacedExactlyAsTheGamePlacesItAndTheVirtualHandIsEmpty) {
     FakeTrackedHeadset headset;
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
@@ -163,7 +143,6 @@ TEST_F(CompanionModTest, AnUnsupportedHandToolIsPlacedExactlyAsTheGamePlacesItAn
     EXPECT_EQ(EvalLua(L, "shown('right')"), "true") << "the Virtual Hand is there as ever";
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false");
 
-    // An empty hand: the fingers around the handle are open with the grip open, and follow the grip.
     ASSERT_EQ(RunLuauChunk(L, "_G.openMiddle = fingerCurl('right', 'middle')", "=openHand"), 0);
     for (int segment = 1; segment <= 3; ++segment) {
         EXPECT_NEAR(Number(L, "openMiddle[" + std::to_string(segment) + "]"), 0.0, 1e-3) << "the middle finger is open";
@@ -173,7 +152,6 @@ TEST_F(CompanionModTest, AnUnsupportedHandToolIsPlacedExactlyAsTheGamePlacesItAn
     EXPECT_GT(Number(L, "fingerCurl('right', 'middle')[1]"), 0.3) << "and follows the grip as in an empty hand";
 }
 
-// Switching tools the game's way: the lance put away and another mod's tool taken, and back.
 TEST_F(CompanionModTest, SwitchingFromTheLanceToAnUnsupportedToolAndBackMovesTheLanceOutOfTheHandAndIntoItAgain) {
     LANCE_IN_THE_RIGHT_HAND();
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=switchToOtherModTool"), 0);
@@ -188,9 +166,6 @@ TEST_F(CompanionModTest, SwitchingFromTheLanceToAnUnsupportedToolAndBackMovesThe
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
 }
 
-// Multiplayer (story 46): the game attaches a Hand Tool of every player in the session through the same function, and a
-// remote player's camera can be in first person as far as the tool is concerned. Only the local player's tool goes into the
-// Tool Hand; another player's tool is the game's.
 constexpr const char* kRemotePlayerHelpers = R"luau(
     -- another player of the session: not the local one, with a camera of their own, holding a lance in the game's way
     function _G.holdRemoteLance()
@@ -251,8 +226,6 @@ TEST_F(CompanionModTest, AnotherPlayersToolAttachedWhileTheLocalPlayerHoldsTheLa
     )luau", "=onlyOurLance"), 0);
 }
 
-// Third person on foot keeps the game's placement in the player's hand (out of scope, ADR-0029); first person again, the
-// lance goes back into the Tool Hand.
 TEST_F(CompanionModTest, InThirdPersonTheLanceIsInTheGamesPlayerHandAndBackInTheToolHandInFirstPerson) {
     LANCE_IN_THE_RIGHT_HAND();
 
@@ -266,8 +239,6 @@ TEST_F(CompanionModTest, InThirdPersonTheLanceIsInTheGamesPlayerHandAndBackInThe
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true");
 }
 
-// A menu or 2D Floating Window Mode takes the player out of the world: the Virtual Hands are hidden, and the lance with them
-// goes back to where the game puts it, then returns when the world does.
 TEST_F(CompanionModTest, WhileAMenuIsOpenTheLanceIsWhereTheGamePutsItAndBackInTheHandWhenItCloses) {
     LANCE_IN_THE_RIGHT_HAND();
 
@@ -280,16 +251,14 @@ TEST_F(CompanionModTest, WhileAMenuIsOpenTheLanceIsWhereTheGamePutsItAndBackInTh
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true");
 }
 
-// vrHandTools off and Motion Controllers off are escape hatches: every Hand Tool is as the game has it, at once.
 TEST_F(CompanionModTest, SwitchingVrHandToolsOffMovesTheLanceOutOfTheHandAtOnceAndOnAgainPutsItBack) {
     LANCE_IN_THE_RIGHT_HAND();
 
-    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);  // no frame in between
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
     EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(lance)"), "true") << "off: the lance is where the game puts it";
     FRAMES(3);
     EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(lance)"), "true") << "and stays there however the hand moves";
 
-    // The game attaches the tool while the feature is off (switching tools): the game's placement, hand or no hand.
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); StubHandTool.hold(lance)", "=takeAgain"), 0);
     EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(lance)"), "true");
 
@@ -311,7 +280,6 @@ TEST_F(CompanionModTest, WithMotionControllersOffTheLanceIsWhereTheGamePutsItAnd
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true");
 }
 
-// An Injector that offers no hand states (no Injector, or an older one): the hands read as untracked, so the lance goes back.
 TEST_F(CompanionModTest, WhenTheInjectorOffersNoHandStatesTheLanceGoesBackToWhereTheGamePutsIt) {
     LANCE_IN_THE_RIGHT_HAND();
 
@@ -321,8 +289,6 @@ TEST_F(CompanionModTest, WhenTheInjectorOffersNoHandStatesTheLanceGoesBackToWher
     EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(lance)"), "true");
 }
 
-// A game whose attachToolToCamera is not what the wrap expects: the feature is unavailable, the log says so once, and the
-// game's Hand Tools work as ever (ADR-0029, as ADR-0026 and ADR-0027).
 #define HAND_TOOLS_GIVE_UP_WHEN_ATTACH_TO_CAMERA_IS(gameVariant) \
     do { \
         FakeTrackedHeadset headset; \
@@ -361,7 +327,6 @@ TEST_F(CompanionModTest, WithAttachToolToCameraReshapedTheGamesHandToolsWorkUnch
         << "the class function was never wrapped";
 }
 
-// The wrap is on the class while the map is loaded and gone with it; another mod's later wrap is never undone.
 TEST_F(CompanionModTest, UnloadingTheMapPutsTheLanceBackAndTakesTheWrapOffTheClass) {
     LANCE_IN_THE_RIGHT_HAND();
     ASSERT_EQ(EvalLua(L, "HandTool.attachToolToCamera == StubHandTool.originalAttachToolToCamera"), "false") << "wrapped while the map is loaded";
@@ -398,8 +363,6 @@ TEST_F(CompanionModTest, TheHandToolWrapIsInstalledAgainWhenTheNextMapLoads) {
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
 }
 
-// The diagnostic is for reading in-headset problems back from the log: the Tool Hand, the Hand Tool held, whether it is in
-// the hand (and why not) and where the look ray starts.
 TEST_F(CompanionModTest, VrHandToolsDiagnosticsLogsTheToolHandTheHeldHandToolWhetherItIsInTheHandAndWhereTheLookRayStarts) {
     LANCE_IN_THE_RIGHT_HAND();
     s_capturedLogs.clear();
@@ -412,7 +375,6 @@ TEST_F(CompanionModTest, VrHandToolsDiagnosticsLogsTheToolHandTheHeldHandToolWhe
         EXPECT_EQ(CountLogLines(std::string("[FS25_VR] ") + expected), 1) << "and from the log: " << expected;
     }
 
-    // Set down, and with a tool the Companion Mod does not support.
     AdvanceGameTime(3100);
     FRAMES(1);
     const std::string setDown = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
@@ -424,7 +386,6 @@ TEST_F(CompanionModTest, VrHandToolsDiagnosticsLogsTheToolHandTheHeldHandToolWhe
     EXPECT_NE(unsupported.find("held Hand Tool: unsupported"), std::string::npos) << unsupported;
     EXPECT_NE(unsupported.find("in the Tool Hand: no (the Hand Tool is not supported)"), std::string::npos) << unsupported;
 
-    // The Pointer diagnostics carry it too.
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Tool Hand: right"), std::string::npos);
 }
 
@@ -450,7 +411,6 @@ TEST_F(CompanionModTest, VrHandToolsIsSavedAcrossSessions) {
     }
     ASSERT_EQ(saved, "false") << "the setting is written to the settings file";
 
-    // A fresh game session reads it back.
     lua_close(L);
     L = luaL_newstate();
     luaL_openlibs(L);
@@ -469,7 +429,6 @@ TEST_F(CompanionModTest, VrHandToolsIsSavedAcrossSessions) {
     EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.handTools']"), "true");
 }
 
-// The left Motion Controller is not the Tool Hand: picking it up leaves the lance where the game puts it.
 TEST_F(CompanionModTest, ALeftMotionControllerPickedUpDoesNotTakeTheLance) {
     FakeTrackedHeadset headset;
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
@@ -486,9 +445,6 @@ TEST_F(CompanionModTest, ALeftMotionControllerPickedUpDoesNotTakeTheLance) {
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'left')"), "false");
 }
 
-// The game runs the mod's update once per AFR pair but renders each eye: a frame can be rendered after the player moved
-// again with no update before it (VirtualHands). The Virtual Hand is placed again by the camera path for such a frame, and
-// the lance rides with it.
 TEST_F(CompanionModTest, TheLanceInTheHandIsCarriedAlongByAFrameRenderedWithoutAnUpdateAfterThePlayerMoved) {
     FakeTrackedHeadset headset;
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
@@ -501,7 +457,6 @@ TEST_F(CompanionModTest, TheLanceInTheHandIsCarriedAlongByAFrameRenderedWithoutA
     ASSERT_EQ(EvalLua(L, "isBelow(lance.rootNode, handHolder('right'))"), "true");
     ASSERT_EQ(RunLuauChunk(L, "_G.before = { getWorldTranslation(lance.rootNode) }", "=before"), 0);
 
-    // the second eye: the player moved and the camera followed, but no update ran
     ASSERT_EQ(RunLuauChunk(L, "setTranslation(foot.parent, 0.12, 0, 0.05); StubScene.updateCamera()", "=moveWithoutUpdate"), 0);
 
     EXPECT_EQ(RunLuauChunk(L, R"luau(

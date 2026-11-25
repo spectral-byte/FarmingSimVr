@@ -1,7 +1,3 @@
-// Test-only OpenXR API layer that imitates VDXR's xrGetSystem: it creates a DXGI factory through
-// its static dxgi.dll import before passing the call on to the real runtime. Loaded into the game,
-// that call re-enters the FS25 VR Injector's CreateDXGIFactory1 hook (up to 1.1.9: the dxgi.dll proxy)
-// while it is still starting VR, the same path that deadlocked under VDXR.
 #define XR_NO_PROTOTYPES
 #include <windows.h>
 #include <dxgi.h>
@@ -16,7 +12,6 @@ namespace {
 PFN_xrGetInstanceProcAddr g_nextGetInstanceProcAddr = nullptr;
 PFN_xrGetSystem g_nextGetSystem = nullptr;
 
-// The exe name of this process, so lines from the game and other OpenXR apps can be told apart.
 const wchar_t* ProcessName() {
     static wchar_t name[MAX_PATH] = {};
     if (!name[0]) {
@@ -28,8 +23,6 @@ const wchar_t* ProcessName() {
     return name;
 }
 
-// Each line is flushed, so a hang inside CreateDXGIFactory1 still shows the "calling" line.
-// The log is appended to and shared, so every process that loads the layer keeps its lines.
 void Log(const char* format, ...) {
     static FILE* file = [] {
         wchar_t path[MAX_PATH] = {};
@@ -97,10 +90,10 @@ XrResult XRAPI_CALL Layer_xrCreateApiLayerInstance(const XrInstanceCreateInfo* i
     return result;
 }
 
-} // anonymous namespace
+}
 
 extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerInterface(
-    const XrNegotiateLoaderInfo* loaderInfo, const char* /*layerName*/, XrNegotiateApiLayerRequest* request) {
+    const XrNegotiateLoaderInfo* loaderInfo, const char*, XrNegotiateApiLayerRequest* request) {
     if (!loaderInfo || !request || loaderInfo->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
         request->structType != XR_LOADER_INTERFACE_STRUCT_API_LAYER_REQUEST ||
         loaderInfo->minInterfaceVersion > XR_CURRENT_LOADER_API_LAYER_VERSION ||

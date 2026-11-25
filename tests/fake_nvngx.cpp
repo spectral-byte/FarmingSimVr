@@ -1,5 +1,3 @@
-// Stand-in for NVIDIA's nvngx.dll used by tests. Exports just enough NGX entry points
-// for NgxInterceptor::AttachModule to hook.
 #include <windows.h>
 
 namespace {

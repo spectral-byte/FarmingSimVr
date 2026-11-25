@@ -1,7 +1,3 @@
-# Verifies that release packaging produced the symbols zip (FS25_VR_v<version>_Symbols.zip) and that it
-# holds version.pdb, byte for byte the PDB the linker wrote for the Injector, and that this PDB belongs to the
-# Injector the bundle ships (the GUID and age in the DLL's debug directory are the PDB's own). Run it after
-# scripts\package_release.ps1; CI does, and so does scripts\test_package_release.ps1.
 param(
     [string]$ReleaseDir = (Join-Path (Split-Path -Parent $PSScriptRoot) "build\release"),
     [string]$Pdb = (Join-Path (Split-Path -Parent $PSScriptRoot) "build\version.pdb")
@@ -43,8 +39,6 @@ if ($zippedHash -ne $linkerHash) {
     Write-Error "version.pdb in $symbolsZip is not the PDB the linker wrote ($Pdb)."
 }
 
-# The PDB the linker wrote must also be the one the shipped Injector was linked with: the copy in the bundle's x64
-# folder is what the Installer places and the zip bundle carries.
 $shipped = @(Get-ChildItem $ReleaseDir -Directory -Filter "FS25_VR_v*" -ErrorAction SilentlyContinue |
     ForEach-Object { Join-Path $_.FullName "x64\version.dll" } | Where-Object { Test-Path $_ })
 if ($shipped.Count -ne 1) {

@@ -1,14 +1,3 @@
-// Wheel Grab with both hands and hand over hand (spec #89 ticket #92, ADR-0027), seen from outside: the real
-// Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with a cab vehicle that steers the way the
-// game's does (companion_mod_stubs.h, StubSteer). The test moves the two fake Motion Controllers, drives frames the way
-// the game would and asserts only what the player would see and what the game was told: the steering calls that
-// reached the vehicle and how far the Steering Wheel turned. One hand alone is covered by test_wheel_grab.cpp.
-//
-// The cab is at the world origin facing +Z with the head at tracking space origin (see test_wheel_grab.cpp). A hand "at
-// the rim" is 0.18 m from the Steering Wheel's axis, at an angle about it: 0 is the direction the Steering Wheel's rim point
-// starts in, a hand turned by +a is where the rim point of a Steering Wheel turned by a is, and a hand at angle + pi is on the
-// opposite side of the rim.
-
 #include "wheel_grab_test_support.h"
 #include <cmath>
 #include <string>
@@ -29,7 +18,6 @@ Point RimAt(lua_State* L, double angle) { return RimPoint(L, kRimRadius, angle);
 
 int CallCount(lua_State* L) { return static_cast<int>(Number(L, "#StubSteer.calls")); }
 
-// The last steering value that reached the vehicle.
 double LastValue(lua_State* L) { return Number(L, "StubSteer.calls[#StubSteer.calls].value"); }
 
 // The steering value that, once the game has caught up, leaves a 540 degree Steering Wheel at `angle`.
@@ -37,16 +25,14 @@ double ValueFor540(double angle) { return -angle / kFullLock540; }
 
 bool Held(lua_State* L) { return EvalLua(L, "VRCompanion:isSteeringWheelHeld()") == "true"; }
 
-} // namespace
+}
 
-// The hand let go of the grip.
 #define LET_GO(hand) \
     do { \
         headset.SetHandInputs((hand), Grip(0.0f)); \
         FRAMES(1); \
     } while (0)
 
-// Both hands turned in the same frame: the right hand to `rightAngle`, the left hand to `leftAngle`.
 #define TURN_HANDS_TO(rightAngle, leftAngle) \
     do { \
         headset.SetHandPose(kRight, HandAtWorld(RimAt(L, (rightAngle)))); \
@@ -54,7 +40,6 @@ bool Held(lua_State* L) { return EvalLua(L, "VRCompanion:isSteeringWheelHeld()")
         FRAMES(1); \
     } while (0)
 
-// A hand turned from rim angle `from` to rim angle `to` in `steps` frames.
 #define SWEEP_HAND(hand, from, to, steps) \
     do { \
         for (int step_ = 1; step_ <= (steps); ++step_) { \
@@ -74,12 +59,12 @@ TEST_F(CompanionModTest, EitherHandAloneGrabsTheSteeringWheelAndSteersIt) {
         const int callsBefore = CallCount(L);
         GRAB(hand, RimAt(L, 0.5));
         SWEEP_HAND(hand, 0.5, 1.1, 6);
-        FRAMES(30);  // the game's analog steering catches up with the hand
+        FRAMES(30);
         EXPECT_NEAR(WheelAngle(L), 0.6, 0.02) << "the " << name << " hand alone turned the Steering Wheel as far as it turned";
         EXPECT_GT(CallCount(L), callsBefore) << "the vehicle was told to steer by the " << name << " hand";
 
         LET_GO(hand);
-        FRAMES(60);  // the game centres the Steering Wheel again
+        FRAMES(60);
         ASSERT_NEAR(WheelAngle(L), 0.0, 0.01) << "the Steering Wheel went back to centre after the " << name << " hand let go";
     }
 }
@@ -91,7 +76,7 @@ TEST_F(CompanionModTest, TwoHandsTurningTheSameWayTurnTheSteeringWheelByThatAngl
     SetGameTime(10000);
 
     GRAB(kRight, RimAt(L, 0.5));
-    GRAB(kLeft, RimAt(L, 0.5 + kPi));  // the other side of the rim
+    GRAB(kLeft, RimAt(L, 0.5 + kPi));
     for (int step = 1; step <= 6; ++step) {
         TURN_HANDS_TO(0.5 + 0.1 * step, 0.5 + kPi + 0.1 * step);
     }
@@ -109,12 +94,11 @@ TEST_F(CompanionModTest, TwoHandsTurningByDifferentAmountsTurnTheSteeringWheelBy
     GRAB(kRight, RimAt(L, 0.0));
     GRAB(kLeft, RimAt(L, kPi));
     for (int step = 1; step <= 8; ++step) {
-        TURN_HANDS_TO(0.1 * step, kPi + 0.025 * step);  // the right hand turns 0.8, the left hand 0.2
+        TURN_HANDS_TO(0.1 * step, kPi + 0.025 * step);
     }
     FRAMES(30);
     EXPECT_NEAR(WheelAngle(L), 0.5, 0.02) << "the Steering Wheel turned by the average of 0.8 and 0.2";
 
-    // Pulling the other way with one hand than with the other, by the same amount, holds the Steering Wheel still.
     const double held = WheelAngle(L);
     const int callsBefore = CallCount(L);
     for (int step = 1; step <= 8; ++step) {
@@ -143,7 +127,7 @@ TEST_F(CompanionModTest, LettingGoWithOneHandLeavesTheOtherHandSteeringWithoutAJ
     const int callsBefore = CallCount(L);
 
     LET_GO(kLeft);
-    headset.SetHandPose(kLeft, HandAtWorld(Point{ 0.5, 1.1, 0.3 }));  // and the free hand wanders off
+    headset.SetHandPose(kLeft, HandAtWorld(Point{ 0.5, 1.1, 0.3 }));
     FRAMES(1);
     EXPECT_GT(CallCount(L), callsBefore) << "the other hand carried on steering";
     EXPECT_NEAR(LastValue(L), valueBefore, 0.002) << "no jump in what the vehicle was told when one hand let go";
@@ -170,7 +154,6 @@ TEST_F(CompanionModTest, ARegrabbingHandWhileTheOtherHoldsPicksUpFromTheSteering
     FRAMES(30);
     ASSERT_NEAR(WheelAngle(L), 0.4, 0.02);
 
-    // The left hand lets go and takes hold again somewhere else on the rim, a good way round from where it was.
     LET_GO(kLeft);
     headset.SetHandPose(kLeft, HandAtWorld(RimAt(L, 2.0)));
     FRAMES(2);
@@ -182,7 +165,6 @@ TEST_F(CompanionModTest, ARegrabbingHandWhileTheOtherHoldsPicksUpFromTheSteering
     FRAMES(30);
     EXPECT_NEAR(WheelAngle(L), 0.4, 0.02);
 
-    // Both hands turn from where they hold now.
     for (int step = 1; step <= 5; ++step) {
         TURN_HANDS_TO(0.4 + 0.1 * step, 2.0 + 0.1 * step);
     }
@@ -197,12 +179,10 @@ TEST_F(CompanionModTest, AHandTakingHoldWhileTheOtherTurnsLeavesTheOthersTurnWho
     SetGameTime(10000);
 
     GRAB(kRight, RimAt(L, 0.0));
-    BRING_HAND(kLeft, RimAt(L, kPi));  // on the rim, the grip not squeezed yet
+    BRING_HAND(kLeft, RimAt(L, kPi));
     FRAMES(2);
     ASSERT_NEAR(LastValue(L), 0.0, 0.002) << "the right hand holds the Steering Wheel still";
 
-    // In one frame the right hand turns by 0.2 and the left hand takes hold: the new hand has not turned the Steering Wheel yet,
-    // so the turn that frame is the right hand's, whole and not averaged with the left hand's nothing.
     headset.SetHandPose(kRight, HandAtWorld(RimAt(L, 0.2)));
     headset.SetHandInputs(kLeft, Grip(1.0f));
     FRAMES(1);
@@ -210,7 +190,6 @@ TEST_F(CompanionModTest, AHandTakingHoldWhileTheOtherTurnsLeavesTheOthersTurnWho
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(0)"), "true") << "the left hand took hold";
     EXPECT_NEAR(LastValue(L), ValueFor540(0.2), 0.0005) << "the Steering Wheel was asked for the whole of the right hand's turn";
 
-    // From then on the two hands average as usual.
     TURN_HANDS_TO(0.4, kPi + 0.2);
     EXPECT_NEAR(LastValue(L), ValueFor540(0.2 + 0.2), 0.0005) << "both hands turned 0.2 more";
 }
@@ -226,7 +205,6 @@ TEST_F(CompanionModTest, AHandLettingGoWhileTheOtherTurnsLeavesTheOthersTurnWhol
     FRAMES(2);
     ASSERT_NEAR(LastValue(L), 0.0, 0.002);
 
-    // In one frame the left hand lets go and swings round a long way while the right hand turns by 0.2.
     headset.SetHandInputs(kLeft, Grip(0.0f));
     headset.SetHandPose(kLeft, HandAtWorld(RimAt(L, kPi + 1.5)));
     headset.SetHandPose(kRight, HandAtWorld(RimAt(L, 0.2)));
@@ -237,13 +215,11 @@ TEST_F(CompanionModTest, AHandLettingGoWhileTheOtherTurnsLeavesTheOthersTurnWhol
 TEST_F(CompanionModTest, AHandRegrabbingAfterLettingGoPicksUpFromTheSteeringWheelsCurrentAngleNotWhereTheLastGrabWasHeading) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
-    // A very slow steering duration: the Steering Wheel stays well behind a hand that turns it, and drifts only a little
-    // towards centre while nothing holds it.
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("steeringDuration = 100")));
     SetGameTime(10000);
 
     GRAB(kRight, RimAt(L, 0.0));
-    SWEEP_HAND(kRight, 0.0, 2.0, 10);  // the hand turns far more than the slow Steering Wheel has followed
+    SWEEP_HAND(kRight, 0.0, 2.0, 10);
     FRAMES(2);
     ASSERT_GT(WheelAngle(L), 0.0001) << "the Steering Wheel has begun to follow";
     ASSERT_LT(WheelAngle(L), 0.3) << "but is far behind the hand";
@@ -292,8 +268,6 @@ TEST_F(CompanionModTest, PassingTheSteeringWheelFromHandToHandReachesFullLockWit
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     SetGameTime(10000);
 
-    // The holder turns 1.6 radians, the other hand takes hold behind it, the holder lets go and goes back round. A
-    // hand is on the Steering Wheel the whole time, so the game never centres it.
     uint32_t holder = kRight;
     uint32_t other = kLeft;
     double holderAngle = 0.0;
@@ -308,7 +282,6 @@ TEST_F(CompanionModTest, PassingTheSteeringWheelFromHandToHandReachesFullLockWit
         EXPECT_GT(sofar, reached + 1.4) << "hand-over " << handOvers + 1 << " took the Steering Wheel on";
         reached = sofar;
 
-        // The other hand takes hold behind the holder (where it started its turn) while the holder still holds.
         const double behind = holderAngle - 1.6;
         GRAB(other, RimAt(L, behind));
         FRAMES(5);
@@ -351,7 +324,7 @@ TEST_F(CompanionModTest, TheGrabEndsAndSteeringStopsBeingSentOnlyWhenTheLastHand
     LET_GO(kRight);
     EXPECT_FALSE(Held(L)) << "the last hand let go: the grab ended";
     calls = CallCount(L);
-    TURN_HAND_TO(kRight, 2.0);  // hands moving on do not steer
+    TURN_HAND_TO(kRight, 2.0);
     FRAMES(60);
     EXPECT_EQ(CallCount(L), calls) << "nothing was sent after the last hand let go";
     EXPECT_NEAR(WheelAngle(L), 0.0, 0.01) << "the game's own steering back centred the Steering Wheel";
@@ -363,7 +336,6 @@ TEST_F(CompanionModTest, TheFirstHandLettingGoWhileTheSecondHoldsAlsoLeavesTheSe
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     SetGameTime(10000);
 
-    // The left hand takes hold first and lets go first: the order of the hands does not matter.
     GRAB(kLeft, RimAt(L, 0.0));
     GRAB(kRight, RimAt(L, kPi));
     LET_GO(kLeft);

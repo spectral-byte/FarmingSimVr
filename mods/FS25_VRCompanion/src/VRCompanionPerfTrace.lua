@@ -1,29 +1,3 @@
--- ====================================================================
--- FS25 VR Companion Mod: frame timing trace
---
--- The console command `vrPerfTrace [seconds]` times the frame for a few seconds and logs it to fs25_vr.log (not log.txt): one
--- line per second, then a summary. The Injector times its own work (its present, the eye copies, xrWaitFrame, xrEndFrame, the
--- game's real Present) and the GPU work it records (the eye copies, the motion vector pass). The Companion Mod adds its hooks
--- (core/perf_trace.h in the Injector lists every section):
---   gameUpdate  the game's mission update, which runs the Companion Mod's update inside it
---   modUpdate   VRCompanion:update
---   modCamera   the vehicle and player camera hooks
---   modDraw     VRCompanion:draw
--- Off, a hook costs one field read: VRBridge is only called while `perfTracing` is set. The Injector ends the trace by itself,
--- and the update clears `perfTracing` once VRBridge says it has.
---
--- PUBLIC SURFACE
---   VRCompanion.perfTracing                         true while a trace runs
---   VRCompanion:perfTraceBegin(name) / perfTraceEnd(name, ...)   around a section; End returns its extra arguments, so it can
---                                                   wrap a call's results
---   VRCompanion:refreshPerfTracing()                 the update: notices the Injector ended the trace (the core's update calls it
---                                                   first, while `perfTracing` is set)
---   VRCompanion:consoleCommandPerfTrace(arg)         starts a trace of `arg` seconds (default 10, up to 60); "stop" ends it
---   Registered with the core: a map-unload hook that ends a running trace, and the console command; the registry adds and
---   removes the command
---   Console: vrPerfTrace [seconds|stop]
--- ====================================================================
-
 VRCompanion = VRCompanion or {}
 
 VRCompanion.PERF_TRACE_DEFAULT_SECONDS = 10
@@ -84,11 +58,6 @@ function VRCompanion:consoleCommandPerfTrace(arg)
     return string.format("Tracing frame timing for %d s into fs25_vr.log (next to the game's dxgi.dll)", seconds)
 end
 
--- No update hook: the Injector ends a trace by itself, and the core's update notices (refreshPerfTracing), as the very first step
--- of the update, a direct call because no run point is that early: a camera hook that runs in the steps after it, and the update's own sections, must not
--- time into a trace the Injector has ended. Map unload: the registry removes the command, then a running trace ends with its
--- summary.
--- Order: none matters against the other subsystems.
 VRCompanion:registerSubsystem("perfTrace", {
     mapUnload = function(self)
         if self.perfTracing then

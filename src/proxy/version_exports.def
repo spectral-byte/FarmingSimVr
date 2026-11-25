@@ -1,4 +1,3 @@
-; The exports of the system's version.dll, with its names and ordinals (see version_exports.cpp).
 LIBRARY "version"
 EXPORTS
     GetFileVersionInfoA = Fs25Vr_GetFileVersionInfoA @1

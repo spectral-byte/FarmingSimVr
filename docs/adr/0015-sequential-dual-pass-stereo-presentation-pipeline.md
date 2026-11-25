@@ -50,3 +50,5 @@ The same applies to the $2.0\times$ AFR scaling in item 3, which is superseded i
 
 ## Amendment: Desktop Mirror Window off (2026-10-28)
 With the Desktop Mirror Window switched off (`vrDesktopMirror off`), the hardware DXGI present that sub-pass 1 executes is skipped. The frame that switches the mirror off presents once, black; every later frame is not presented to DXGI. The eye copies and `SubmitFramePair()` are unchanged, so the headset is unaffected. The mirror counts as off only while the OpenXR session is focused: a sleeping headset (SYNCHRONIZED) or the dashboard (VISIBLE) keeps the session running but shows the mirror again, and the next focus presents one black frame again.
+
+More decisions about this area, from the code comments: [ADR-0043](0043-stereo-view-decisions.md), [ADR-0057](0057-present-and-desktop-decisions.md).

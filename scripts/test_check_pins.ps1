@@ -1,11 +1,4 @@
-# Runs scripts\check_pins.ps1 against the repository and against scratch copies of its CMakeLists.txt
-# and workflows with one pin broken, and inspects its exit code and message. Needs no build. Fails
-# (non-zero exit) if any assertion fails. No Pester.
-#
-# Extending: add a Test-Case at the bottom. New-ScratchRepo copies what the check reads; Edit-File
-# breaks one pin in the copy; Invoke-PinCheck runs the script in a child shell.
 param(
-    # Only run the cases whose name matches this wildcard (e.g. "*Action*"); all cases when empty.
     [string]$Filter = ""
 )
 $ErrorActionPreference = "Stop"
@@ -17,7 +10,6 @@ New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 
 $failures = New-Object System.Collections.Generic.List[string]
 
-# Copies the files the check reads (CMakeLists.txt and the workflows) into a new scratch root.
 function New-ScratchRepo {
     $root = Join-Path $scratch ([Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path (Join-Path $root ".github\workflows") -Force | Out-Null
@@ -26,8 +18,6 @@ function New-ScratchRepo {
     $root
 }
 
-# Replaces the first match of a regex in a scratch file; throws when it does not match, so a case
-# cannot pass because the repository changed shape under it.
 function Edit-File([string]$path, [string]$pattern, [string]$replacement) {
     $text = Get-Content $path -Raw
     $regex = [regex]::new($pattern, [Text.RegularExpressions.RegexOptions]::Multiline)
