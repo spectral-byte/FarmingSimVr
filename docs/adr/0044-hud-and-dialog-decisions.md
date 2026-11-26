@@ -75,6 +75,7 @@ This record holds the non-obvious decisions behind the HUD Groups and the HUD Co
 - **`pendingNotice`**: announced once the dialog is gone after an attempt, not before: the call may have done nothing
 - **`readCatch`**: Species and price from the dialog's text, nil where it is not the template the probe measured
 - **`VRCompanion:updateFishCatch`, `if type(dialogTarget.isInputDisabled) == "function" then`**: Not while the dialog says it takes no input yet: it would ignore the call
+- **`RETRY_TICKS`, `MAX_ATTEMPTS`**: The answer is asked again because one is not enough, and the dialog gives no sign of when it would be. Checked in the headset on 2026-11-26 (spectral-byte/FarmingSimVr-issues#228): a single `onYes` or `onNo`, sent in the update the fish dialog first appears and with `isInputDisabled()` false, left the dialog open for sell and for release alike. With the retry both closed it on the third attempt, about 0.4 s after it opened. The dialog's own code is not in the readable source, so why it ignores an early answer is not known.
 - **`registerSubsystem "fishCatch"`**: Every update, as an early hook: the core polls the GUI visibility after it, so the answered dialog is gone when the poll looks (the quad of 2D Floating Window Mode does not flash for it). Map unload: the registry removes the command, then the dialog that was answered is forgotten. The saved setting stays as it is. Order: none matters against the other subsystems; the early phase is what places it before the poll.
 
 ### `mods/FS25_VRCompanion/src/VRCompanionHud.lua`
