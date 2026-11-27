@@ -575,4 +575,81 @@ test("a give-up-once sentence without %s raises when it is made", function()
     expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
 end)
 
+test("a wrap group wraps a class once, never double-wraps inheriting instances, and restores cleanly", function()
+    local group = GameWraps.newGroup({ weakTargets = true })
+    local calls = 0
+    local original = function(self, value)
+        calls = calls + 1
+        return value + 1
+    end
+    local Base = { step = original }
+    local instance = setmetatable({}, { __index = Base })
+    local ownInstance = { step = function(self, value) calls = calls + 10; return value + 2 end }
+    local ownOrig = ownInstance.step
+
+    local function makeStep(orig, entry)
+        return function(self, value)
+            if not entry.active then return orig(self, value) end
+            return orig(self, value) * 10
+        end
+    end
+
+    expectEqual(group:wrap(Base, "step", makeStep), true, "wraps base class")
+    expectEqual(group:wrap(Base, "step", makeStep), false, "does not re-wrap base class")
+    expectEqual(group:wrap(instance, "step", makeStep), false, "does not wrap inheriting instance")
+    expectEqual(rawget(instance, "step"), nil, "nothing placed on inheriting instance")
+    expectEqual(group:wrap(ownInstance, "step", makeStep), true, "wraps instance with own method")
+
+    expectEqual(instance:step(2), 30, "inheriting instance runs wrapper once")
+    expectEqual(calls, 1, "original called once for inheriting instance")
+    expectEqual(ownInstance:step(2), 40, "own instance runs wrapper once")
+    expectEqual(calls, 11, "own original called once")
+
+    group:liftAll()
+    expectEqual(Base.step, original, "base restored")
+    expectEqual(rawget(instance, "step"), nil, "inheriting instance still has no own field")
+    expectEqual(ownInstance.step, ownOrig, "own instance restored")
+end)
+
+test("a wrap group preserves downstream third-party wrappers and stops running our hook when lifted", function()
+    local group = GameWraps.newGroup({ weakTargets = true })
+    local log = {}
+    local original = function(self) table.insert(log, "game"); return "game" end
+    local Cls = { run = original }
+    local instance = setmetatable({}, { __index = Cls })
+
+    local function makeWrap(orig, entry)
+        return function(self)
+            if entry.active then table.insert(log, "ours") end
+            return orig(self)
+        end
+    end
+
+    group:wrap(Cls, "run", makeWrap)
+    local ours = Cls.run
+    local theirs = function(self)
+        table.insert(log, "theirs")
+        return ours(self)
+    end
+    Cls.run = theirs
+
+    expectEqual(group:wrap(Cls, "run", makeWrap), false, "does not re-wrap when already active under third-party")
+    expectEqual(group:wrap(instance, "run", makeWrap), false, "does not double-wrap inheriting instance when third-party wrapped class")
+    expectEqual(rawget(instance, "run"), nil, "inheriting instance stays clean")
+
+    group:liftAll()
+    expectEqual(Cls.run, theirs, "third-party wrapper remains installed")
+
+    log = {}
+    Cls:run()
+    expectEqual(table.concat(log, ","), "theirs,game", "lifted inner wrapper becomes passive pass-through")
+
+    group:wrap(Cls, "run", makeWrap)
+    log = {}
+    Cls:run()
+    expectEqual(table.concat(log, ","), "ours,theirs,game", "re-hooking on next map runs our wrapper once")
+    group:liftAll()
+    expectEqual(Cls.run, theirs, "unhooking second map restores third-party wrapper")
+end)
+
 realPrint(string.format("GameWraps: %d passed, %d failed", passed, failed))

@@ -144,7 +144,7 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
 - **`VRCompanion:isStereoDialogShowing`**: A Stereo Dialog is showing in the stereoscopic view: a menu takes the input but the quad is not shown. The dialog is answered with the gamepad's own menu buttons through the Virtual Gamepad, so the Companion Mod's quad menu (the Pointer Ray, the grip and lower face button as back, the thumbstick scroll) and the Virtual Gamepad's taking of every input are not engaged.
 - **`VRCompanion:applyDlssNearClip`**: Sends the current camera's near plane to the Injector when it differs from the one last sent, so entering or leaving a vehicle or switching its camera takes effect on the next update. force resends it anyway. Returns the bridge's result when it sends, otherwise false.
 - **`VRCompanion:applyDlssNearClip`, `self.appliedDlssNearClip`**: Recorded even when the bridge has no NGX interceptor, so that is not retried every frame
-- **`VRCompanion:hookTableSpeed`**: Wraps target.updateVehicleSpeed with the dt=0 guard. Vehicle instances keep their original in a weak-keyed table so a vehicle that is gone can be collected; classes are kept strongly (they live as long as the game).
+- **`VRCompanion:hookTableSpeed`**: Wraps target.updateVehicleSpeed through a `GameWraps.newGroup({ weakTargets = true })` pool with the dt=0 guard, skipping instances that already inherit an active wrapper from a wrapped class and restoring only untouched wrappers on unload (weak-keyed so gone vehicles can be collected).
 - **`VRCompanion:installVehicleSpeedGuards`**: Installs the dt=0 guards on the named classes, the mission's vehicles and Ferry. scanGlobals additionally walks every global table for classes with updateVehicleSpeed, which only the map load install does: it is too slow to repeat during play.
 - **`VRCompanion:installVehicleSpeedGuards`, `self.lastVehicleSpeedHookTick`**: Recorded here so the install from loadMap also restarts the slow retry cadence.
 - **`withRaiseTraceback`**: Appends the traceback from where an error was raised, so rethrowing it from the outermost frame-check scope does not hide its origin.
@@ -306,7 +306,8 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
   ```
 
 - **`sortedNames`**: The declared names, sorted, so that the first reason found does not depend on the table's order.
-- **`Set:wrapInstance`**: Wraps the target's own copies of the named functions (each with its declared `make`), for as long as it is the target. A copy that is the class wrapper (the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since is wrapped again.
+- **`Set:wrapInstance`**: Wraps the target's own copies of the named functions (each with its declared `make`), for as long as it is the target. A copy that is the class wrapper (or matches the class's current method while the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since is wrapped again.
+- **`GameWraps.newGroup`**: Multi-target wrap pool (optionally weak-keyed via `{ weakTargets = true }`) for core and HUD hooks that wrap dynamic classes and live instances without giving up: skips targets that already inherit an active wrapped method from a base prototype (`rawget` + `__index` chain), tracks `hadOwn` so inherited methods are cleared back to `nil` on `liftAll()`, checks `rawget(target, methodName) == entry.wrapper` before restoring so downstream third-party wraps stay intact, and marks `entry.active = false` on lift so any remaining outer wrap passes straight through.
 
 ### `mods/FS25_VRCompanion/src/VRCompanionLocalisedTexts.lua`
 
