@@ -216,7 +216,7 @@ TEST_F(CompanionModTest, WithBothHandsInUseThePointerHandStaysUntilItsHandIsPutD
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "0");
 }
 
-TEST_F(CompanionModTest, BothHandsPickedUpTogetherLeaveNoPointerHandUntilOneIsChosen) {
+TEST_F(CompanionModTest, BothHandsPickedUpTogetherFallBackToTheToolHandAsPointerHand) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, headset, bridge));
@@ -230,7 +230,7 @@ TEST_F(CompanionModTest, BothHandsPickedUpTogetherLeaveNoPointerHandUntilOneIsCh
     NextFrame(&headset);
 
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0) and VRCompanion:isHandInUse(1)"), "true");
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
 }
 
 TEST_F(CompanionModTest, ARecenterDoesNotMakeAControllerLyingStillLookMoved) {

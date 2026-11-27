@@ -147,14 +147,7 @@ VRCompanion:registerSubsystem("manualAttach", {
     mapUnload = function(self) self:resetManualAttachSupport() end,
 })
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function addHitch(vehicle, jointIndex, attachable, attachableJointIndex, implement, joint)
     local count = state.count + 1

@@ -174,11 +174,6 @@ function VRCompanion:updateVirtualGamepadUse(dt)
                 end
             end
         end
-        for _, hand in ipairs(HANDS) do
-            if self:isHandHoldingSteeringWheel(hand) == true then
-                self:takeVirtualGamepadInput(hand, "grip")
-            end
-        end
     end
 
     for _, hand in ipairs(HANDS) do
