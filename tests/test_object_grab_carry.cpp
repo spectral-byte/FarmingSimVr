@@ -355,3 +355,18 @@ TEST_F(VirtualGamepadObjectGrabCarryTest, ReSqueezingTheGripBeforeClosingTheMenu
     EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode == bale.node)"), "true");
     EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getPointerHand())"), "nil");
 }
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, DeletedCarryRotationNodeDoesNotAbortMotionControllerUpdate) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local rot = hands.spec_hands.kinematicRotationNode
+        local realGetWorldQuaternion = _G.getWorldQuaternion
+        _G.getWorldQuaternion = function(node)
+            if node == rot then error("deleted rotation node") end
+            return realGetWorldQuaternion(node)
+        end
+        hands:updateKinematicNode()
+    )luau", "=deleteRotNode"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:isHandCarryingHeldObject(1))"), "true");
+}

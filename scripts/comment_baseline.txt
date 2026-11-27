@@ -1,11 +1,11 @@
 12 installer/fs25_vr.iss
 1 installer/game_detection.iss
-4 mods/FS25_VRCompanion/src/VRCompanionAnimatedObjects.lua
+3 mods/FS25_VRCompanion/src/VRCompanionAnimatedObjects.lua
 2 mods/FS25_VRCompanion/src/VRCompanionDialogProbe.lua
 2 mods/FS25_VRCompanion/src/VRCompanionGameWraps.lua
 31 mods/FS25_VRCompanion/src/VRCompanionHandTools.lua
 3 mods/FS25_VRCompanion/src/VRCompanionHud.lua
-10 mods/FS25_VRCompanion/src/VRCompanionInteractiveControl.lua
+8 mods/FS25_VRCompanion/src/VRCompanionInteractiveControl.lua
 8 mods/FS25_VRCompanion/src/VRCompanionManualAttach.lua
 1 mods/FS25_VRCompanion/src/VRCompanionMenuPointer.lua
 7 mods/FS25_VRCompanion/src/VRCompanionMotionControllers.lua

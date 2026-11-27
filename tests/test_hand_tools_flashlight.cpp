@@ -462,3 +462,17 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, UnloadingTheMapGivesTheFlashlights
     )luau", "=anotherModWraps"), 0);
     EXPECT_EQ(EvalLua(L, "HandToolFlashlight.onUpdate == theirWrap"), "true") << "the other mod's wrap is still the class function";
 }
+
+TEST_F(VirtualGamepadHandToolsFlashlightTest, NilGameClockDoesNotCrashPendingToolFieldGracePeriod) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    ASSERT_NO_FATAL_FAILURE(HoldFlashlight(L));
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        flashlight.spec_flashlight.lightNode = nil
+        VRCompanion.getCurrentTimeMs = function() return nil end
+        VRCompanion:updateHandTools(16.667)
+        VRCompanion:updateHandTools(16.667)
+    )luau", "=nilClockAndMissingField"), 0);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
+}

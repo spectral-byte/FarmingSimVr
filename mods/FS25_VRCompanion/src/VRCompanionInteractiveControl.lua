@@ -235,22 +235,26 @@ end
 
 local function selectFromRay(self, ray)
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local existsFn = entityExists or (_G and _G.entityExists)
     local cosCone = math.cos(math.rad(self.pointerConeDegrees))
     local live, best, bestCos, bx, by, bz = 0, nil, cosCone, nil, nil, nil
     for point, seen in pairs(state.points) do
-        if state.clockMs - seen > STALE_MS or not isPointActive(point) then
+        if state.clockMs - seen > STALE_MS or not isPointActive(point)
+            or (type(existsFn) == "function" and point.node ~= nil and point.node ~= 0 and not existsFn(point.node)) then
             state.points[point] = nil
         elseif state.refused[point] ~= nil and state.clockMs - state.refused[point] <= STALE_MS then
         else
             live = live + 1
-            if ray ~= nil and point.node ~= nil and type(getWorldTranslationFn) == "function" then
-                local px, py, pz = getWorldTranslationFn(point.node)
-                local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
-                local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
-                if distance > 0.01 then
-                    local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
-                    if cos >= bestCos then
-                        best, bestCos, bx, by, bz = point, cos, px, py, pz
+            if ray ~= nil and point.node ~= nil and point.node ~= 0 and type(getWorldTranslationFn) == "function" then
+                local ok, px, py, pz = pcall(getWorldTranslationFn, point.node)
+                if ok and type(px) == "number" and type(py) == "number" and type(pz) == "number" then
+                    local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
+                    local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
+                    if distance > 0.01 then
+                        local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
+                        if cos >= bestCos then
+                            best, bestCos, bx, by, bz = point, cos, px, py, pz
+                        end
                     end
                 end
             end
@@ -310,16 +314,6 @@ local function vehicleState(vehicle)
     return spec.state == true
 end
 
-local function activeCameraOf(vehicle)
-    if type(vehicle.getActiveCamera) == "function" then
-        local ok, cam = pcall(vehicle.getActiveCamera, vehicle)
-        if ok then return cam end
-    end
-    return nil
-end
-
--- state.autoOn = nil | { vehicle, previous, wrote, camera }: the vehicle Interactive Control was
--- switched on for while the Pointer Hand is in use.
 local function writeState(vehicle, value)
     pcall(vehicle.activateInteractiveControl, vehicle, value)
 end
@@ -335,8 +329,15 @@ local function updateAutoOn(self)
     local autoOn = state.autoOn
     local vehicle = nil
     local holding = autoOn ~= nil and self:isSteeringWheelHeld()
-    if (self:getPointerHand() ~= nil or holding) and self.motionControllersEnabled ~= false then
-        vehicle = self:getControlledVehicle()
+    if (self:getPointerHand() ~= nil or holding) and self.motionControllersEnabled ~= false
+        and not self:doesMenuTakeInput() then
+        local candidate = self:getControlledVehicle()
+        if candidate ~= nil then
+            local cam = self:getVehicleActiveCamera(candidate)
+            if type(cam) == "table" and cam.isInside == true then
+                vehicle = candidate
+            end
+        end
     end
     if autoOn ~= nil and autoOn.vehicle ~= vehicle then
         endAutoOn(autoOn)
@@ -347,7 +348,7 @@ local function updateAutoOn(self)
     if autoOn == nil then
         local previous = vehicleState(vehicle)
         if previous == nil then return end
-        autoOn = { vehicle = vehicle, previous = previous, wrote = false, camera = activeCameraOf(vehicle) }
+        autoOn = { vehicle = vehicle, previous = previous, wrote = false, camera = self:getVehicleActiveCamera(vehicle) }
         state.autoOn = autoOn
         if not previous and stateSettingIsToggle() then
             autoOn.wrote = true
@@ -356,7 +357,7 @@ local function updateAutoOn(self)
         return
     end
 
-    local camera = activeCameraOf(vehicle)
+    local camera = self:getVehicleActiveCamera(vehicle)
     if camera ~= autoOn.camera then
         autoOn.camera = camera
         if vehicleState(vehicle) == false and stateSettingIsToggle() then

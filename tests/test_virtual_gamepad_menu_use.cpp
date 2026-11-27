@@ -293,7 +293,50 @@ TEST_F(VirtualGamepadMenuUseTest, OnTheSettingsPageThePointerRayMenuStillWorksAn
     Release(kRight);
 
     Hold(kRight, Grip(1.0f));
-    EXPECT_EQ(Backs(), 1) << "the grip still goes back";
+    EXPECT_EQ(Backs(), 0);
+    EXPECT_NE(Pad().wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0);
+    Release(kRight);
+
+    FakeOpenXrControllers::Inputs lower;
+    lower.buttonLower = true;
+    Hold(kLeft, lower);
+    EXPECT_EQ(Backs(), 0);
+    EXPECT_NE(Pad().wButtons & XINPUT_GAMEPAD_X, 0);
+    Release(kLeft);
+
+    Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(Scrolls(), 0);
+    EXPECT_GT(Pad().sThumbRY, 0);
+    Release(kRight);
+
+    Hold(kRight, Grip(1.0f));
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSave"));
+    EXPECT_EQ(Backs(), 0);
+    Release(kRight);
+
+    Hold(kRight, Grip(1.0f));
+    EXPECT_EQ(Backs(), 1);
+    Release(kRight);
+
+    Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(Scrolls(), 1);
+}
+
+TEST_F(VirtualGamepadMenuUseTest, In2DFloatingWindowModeWithNoMenuOpenTriggerReachesPadWithoutGuiClick) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    bridge.Set2DViewActive(true);
+    NextFrame(&headset);
+
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Clicks(), 0);
+    EXPECT_EQ(Pad().bRightTrigger, 255);
+    Release(kRight);
+
+    OpenMenu();
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Clicks(), 1);
+    EXPECT_EQ(Pad().bRightTrigger, 0);
 }
 
 TEST_F(VirtualGamepadMenuUseTest, EveryOtherPausePageKeepsThePadNeutral) {

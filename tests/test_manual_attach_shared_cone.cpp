@@ -113,7 +113,7 @@ TEST_F(VirtualGamepadManualAttachTest, InTheCabNoHitchIsOfferedSoTheClickPointKe
     Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, -0.2, 1.0)");
-    Lua("g_currentMission.controlledVehicle = { getActiveCamera = function() return nil end }; StubIC.equip(g_currentMission.controlledVehicle, false)");
+    Lua("g_currentMission.controlledVehicle = { getActiveCamera = function() return { isInside = true } end }; StubIC.equip(g_currentMission.controlledVehicle, false)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
 
     EXPECT_EQ(EvalLua(L, "tostring(#StubIC.stateWrites > 0 and StubIC.stateWrites[1].state)"), "true") << "Interactive Control's auto-on is as before";

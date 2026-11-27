@@ -146,26 +146,13 @@ local function describeUse()
     return #names > 0 and table.concat(names, ", ") or "none"
 end
 
-local function isSettingsPageShowing()
-    local ok, showing = pcall(function()
-        local gui = g_gui or (_G and _G.g_gui)
-        local menu = g_inGameMenu or (_G and _G.g_inGameMenu)
-        if type(gui) ~= "table" or gui.currentGuiName ~= "InGameMenu" then return false end
-        if type(menu) ~= "table" then return false end
-        local page = menu.currentPage
-        if type(page) ~= "table" then return false end
-        return page.id == "pageSettings" or (menu.pageSettings ~= nil and page == menu.pageSettings)
-    end)
-    return ok and showing == true
-end
-
 function VRCompanion:updateVirtualGamepadUse(dt)
     local dialogShowing = self:doesMenuTakeInput() and self:isStereoDialogShowing()
     local dialogOpening = dialogShowing and not state.dialogShowing
     state.dialogShowing = dialogShowing
 
     if self.motionControllersEnabled ~= false then
-        if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not isSettingsPageShowing() then
+        if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not self:isSettingsPageShowing() then
             for _, hand in ipairs(HANDS) do
                 for _, input in ipairs(INPUTS) do
                     if not (hand == 1 and input == "menu") then

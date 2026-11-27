@@ -210,12 +210,20 @@ local function measureHand(self, hand, wheel)
     local ok, why = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
         pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, state.scratch)
     if not ok then return nil, why end
-    for _, name in ipairs({ "getParent", "worldToLocal", "getTranslation" }) do
-        if type(engine(name)) ~= "function" then return nil, name .. " is not available" end
+    local getParent, worldToLocal, getTranslation = engine("getParent"), engine("worldToLocal"), engine("getTranslation")
+    if type(getParent) ~= "function" then return nil, "getParent is not available" end
+    if type(worldToLocal) ~= "function" then return nil, "worldToLocal is not available" end
+    if type(getTranslation) ~= "function" then return nil, "getTranslation is not available" end
+    if wheel.node == nil or wheel.node == 0 then return nil, "the wheel node is missing" end
+    local exists = engine("entityExists")
+    if type(exists) == "function" and not exists(wheel.node) then return nil, "the wheel node does not exist" end
+    local okParent, parent = pcall(getParent, wheel.node)
+    if not okParent or parent == nil or parent == 0 then return nil, "the wheel node has no parent" end
+    local okLocal, x, y, z = pcall(worldToLocal, parent, state.scratch.x, state.scratch.y, state.scratch.z)
+    local okTrans, cx, cy, cz = pcall(getTranslation, wheel.node)
+    if not okLocal or not okTrans or type(x) ~= "number" or type(cx) ~= "number" then
+        return nil, "the wheel node transform failed"
     end
-    local parent = engine("getParent")(wheel.node)
-    local x, y, z = engine("worldToLocal")(parent, state.scratch.x, state.scratch.y, state.scratch.z)
-    local cx, cy, cz = engine("getTranslation")(wheel.node)
     local dx, dy, dz = x - cx, y - cy, z - cz
     return math.atan2(-dz, dx), math.sqrt(dx * dx + dz * dz), dy
 end

@@ -186,7 +186,7 @@ local function updateMenuButtons(self)
         end
     end
 
-    if not self:doesMenuTakeInput() or self:isStereoDialogShowing() then
+    if not self:doesMenuTakeInput() or self:isStereoDialogShowing() or self:isSettingsPageShowing() then
         scroll.dir, scroll.nextMs = 0, nil
         return
     end
@@ -199,14 +199,14 @@ local function updateMenuButtons(self)
     if pushed ~= 0 and not (scroll.nextMs ~= nil and scroll.dir == pushed) then
         step = pushed
     elseif held ~= 0 and scroll.nextMs ~= nil and scroll.dir == held then
-        if now >= scroll.nextMs then
+        if now ~= nil and now >= scroll.nextMs then
             step = held
         end
     else
         scroll.nextMs = nil
     end
     if step ~= 0 then
-        scroll.nextMs = now + self.MENU_SCROLL_REPEAT_MS
+        scroll.nextMs = now ~= nil and (now + self.MENU_SCROLL_REPEAT_MS) or nil
         local x, y = scrollPosition(self)
         if x ~= nil then
             sendWheel(x, y, step > 0)
@@ -252,12 +252,19 @@ function VRCompanion:updateMenuPointer(dt)
             setMenuCursor(true, hit.u, hit.v)
             state.cursorShown = true
         end
+    elseif state.cursorShown then
+        state.cursorShown = false
+        local setMenuCursor = bridgeFunction("setMenuCursor")
+        if setMenuCursor ~= nil then
+            setMenuCursor(false)
+        end
     end
 
-    if pulled and onPanel and not state.clickDown then
+    local mayClick = self:doesMenuTakeInput()
+    if mayClick and pulled and onPanel and not state.clickDown then
         state.clickDown = true
         sendMouse(state.lastX, state.lastY, true, false, mouseButton("MOUSE_BUTTON_LEFT", DEFAULT_MOUSE_BUTTON_LEFT))
-    elseif not held and state.clickDown then
+    elseif (not held or not mayClick) and state.clickDown then
         state.clickDown = false
         sendMouse(state.lastX, state.lastY, false, true, mouseButton("MOUSE_BUTTON_LEFT", DEFAULT_MOUSE_BUTTON_LEFT))
     end
