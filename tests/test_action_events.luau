@@ -102,7 +102,7 @@ end)
 test("EachEventIsInTheGameplayContextHighPriorityActiveAndVisibleWithItsTranslatedText", function()
     installBinding()
     _G.GS_PRIO_HIGH = 2
-    _G.g_i18n = { getText = function(self, key) return "translated " .. key end }
+    _G.g_i18n = { hasText = function() return true end, getText = function(self, key) return "translated " .. key end }
     VRCompanion:registerActionEvents(true)
     assert(#contexts == 1 and contexts[1] == "PLAYER", "registered once into the on-foot context, got " .. tostring(contexts[1]))
     for _, row in ipairs(SIX) do
@@ -118,6 +118,20 @@ end)
 test("WithoutTranslationsEachEventShowsItsFallbackText", function()
     installBinding()
     _G.g_i18n = nil
+    VRCompanion:registerActionEvents(true)
+    for _, row in ipairs(SIX) do
+        local id = registered[row.action].id
+        assert(texts[id] == row.fallback, row.action .. " falls back to " .. row.fallback .. ", got " .. tostring(texts[id]))
+    end
+    cleanup()
+end)
+
+test("WhenTheGameHasNoTextForAnActionItFallsBackToItsEnglishText", function()
+    installBinding()
+    _G.g_i18n = {
+        hasText = function() return false end,
+        getText = function(self, key) return "Missing '" .. tostring(key) .. "' in l10n" end,
+    }
     VRCompanion:registerActionEvents(true)
     for _, row in ipairs(SIX) do
         local id = registered[row.action].id
@@ -165,7 +179,10 @@ test("ASeventhRowIsRegisteredLoggedOnceAndForgottenOnMapUnloadWithoutOtherChange
     assert(type(rows) == "table" and #rows == 6, "the six events are described by one table of six rows")
     installBinding()
     captureLogs()
-    _G.g_i18n = { getText = function(self, key) return key == "input_VR_TEST_SEVENTH" and "Seventh" or key end }
+    _G.g_i18n = {
+        hasText = function(self, key) return key == "input_VR_TEST_SEVENTH" end,
+        getText = function(self, key) return key == "input_VR_TEST_SEVENTH" and "Seventh" or key end,
+    }
     VRCompanion.onTestSeventhAction = function() end
     rows[#rows + 1] = {
         idField = "testSeventhActionEventId",

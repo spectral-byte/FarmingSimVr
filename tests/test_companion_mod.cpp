@@ -1957,33 +1957,36 @@ TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclical
         assert(VRCompanion.HUD_STATE_STREAMLINED == 1, "HUD_STATE_STREAMLINED must be 1")
         assert(VRCompanion.HUD_STATE_FULL == 2, "HUD_STATE_FULL must be 2")
 
+        local savedTime = _G.g_time
+        _G.g_time = 1000
+        VRCompanion.lastHudToggleTime = nil
         VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
         assert(VRCompanion:getHudState() == 0, "Initial state must be 0")
 
-        -- 0 -> 1
         local s1 = VRCompanion:cycleHudState()
         assert(s1 == 1, "0 -> 1")
         assert(VRCompanion:getHudState() == 1, "State is 1")
 
-        -- 1 -> 2
+        _G.g_time = 1400
         local s2 = VRCompanion:cycleHudState()
         assert(s2 == 2, "1 -> 2")
         assert(VRCompanion:getHudState() == 2, "State is 2")
 
-        -- 2 -> 0
+        _G.g_time = 1800
         local s3 = VRCompanion:cycleHudState()
         assert(s3 == 0, "2 -> 0")
         assert(VRCompanion:getHudState() == 0, "State is 0")
 
-        -- Clamp check
         VRCompanion:setHudState(-10)
         assert(VRCompanion:getHudState() == 0, "Negative clamped to 0")
         VRCompanion:setHudState(10)
         assert(VRCompanion:getHudState() == 2, "Overflow clamped to 2")
 
-        -- onHudToggleAction
         VRCompanion:setHudState(0)
+        _G.g_time = 2200
         assert(VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1) == 1, "Action advances to 1")
+        VRCompanion.lastHudToggleTime = nil
+        _G.g_time = savedTime
     )luau", "=verifyHudStateMachine"), 0);
 }
 
