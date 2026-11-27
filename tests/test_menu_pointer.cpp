@@ -457,8 +457,31 @@ TEST_F(MenuPointerTest, ThePointerRayWorksOnThe2DFloatingWindowPanelToo) {
     EXPECT_TRUE(headset.manager->GetPointerCursorOverride().active);
     PullRightTrigger(1.0f);
     PullRightTrigger(0.0f);
+    EXPECT_EQ(Count("guiDowns()"), 0);
+    EXPECT_EQ(Count("guiUps()"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu2d"), 0);
+    NextFrame(&headset);
+    AimRightHandAt(0.25f, 0.40f);
+    PullRightTrigger(1.0f);
+    PullRightTrigger(0.0f);
     EXPECT_EQ(Count("guiDowns()"), 1);
     EXPECT_EQ(Count("guiUps()"), 1);
+}
+
+TEST_F(MenuPointerTest, PointingOffThePanelHidesTheDrawnCursorUntilTheRayReturns) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    AimRightHandAt(0.50f, 0.50f);
+    ASSERT_TRUE(headset.manager->GetPointerCursorOverride().active);
+
+    AimRightHandAt(1.30f, 0.50f);
+    EXPECT_FALSE(headset.manager->GetPointerCursorOverride().active);
+
+    AimRightHandAt(0.40f, 0.40f);
+    EXPECT_TRUE(headset.manager->GetPointerCursorOverride().active);
+    EXPECT_NEAR(headset.manager->GetPointerCursorOverride().u, 0.40f, 1e-3f);
+    EXPECT_NEAR(headset.manager->GetPointerCursorOverride().v, 0.40f, 1e-3f);
 }
 
 TEST_F(MenuPointerTest, ClosingTheMenuWhileTheTriggerIsHeldReleasesTheButtonOnceAndHandsTheCursorBack) {

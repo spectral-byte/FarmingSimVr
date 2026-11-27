@@ -29,15 +29,7 @@ VRCompanion.cyclopeanAudioListenerNode = VRCompanion.cyclopeanAudioListenerNode 
 VRCompanion.origCamSettings = VRCompanion.origCamSettings or {}
 VRCompanion.menuCameraOffsets = VRCompanion.menuCameraOffsets or {}
 
-local function rotateVectorByQuaternion(qx, qy, qz, qw, vx, vy, vz)
-    local tx = 2 * (qy * vz - qz * vy)
-    local ty = 2 * (qz * vx - qx * vz)
-    local tz = 2 * (qx * vy - qy * vx)
-    local rx = vx + qw * tx + (qy * tz - qz * ty)
-    local ry = vy + qw * ty + (qz * tx - qx * tz)
-    local rz = vz + qw * tz + (qx * ty - qy * tx)
-    return rx, ry, rz
-end
+local rotateVectorByQuaternion = VRCompanion.rotateVectorByQuaternion
 
 local function multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw)
     return aw * bx + ax * bw + ay * bz - az * by,
@@ -240,10 +232,8 @@ end
 function VRCompanion:unregisterDualEyeCameraNodes()
     if self.registeredEyeCameras == nil then return end
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
     for registered in pairs(self.registeredEyeCameras) do
-        local exists = type(entityExistsFn) ~= "function" or entityExistsFn(registered)
-        if exists and camMgr ~= nil and type(camMgr.removeCamera) == "function" then
+        if VRCompanion.nodeExists(registered) and camMgr ~= nil and type(camMgr.removeCamera) == "function" then
             pcall(camMgr.removeCamera, camMgr, registered)
         end
     end
@@ -357,16 +347,13 @@ function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
 end
 
 function VRCompanion:ensureDualEyeCameraNodes(referenceCamNode)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    if type(entityExistsFn) == "function" and self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0
-        and not entityExistsFn(self.cameraNodeLeft) then
+    if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 and not VRCompanion.nodeExists(self.cameraNodeLeft) then
         if self.cameraNodeRight == self.cameraNodeLeft then
             self.cameraNodeRight = nil
         end
         self.cameraNodeLeft = nil
     end
-    if type(entityExistsFn) == "function" and self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0
-        and not entityExistsFn(self.cameraNodeRight) then
+    if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 and not VRCompanion.nodeExists(self.cameraNodeRight) then
         self.cameraNodeRight = nil
     end
     if self.cameraNodeLeft == nil or self.cameraNodeRight == nil or self.cameraNodeLeft == 0 or self.cameraNodeRight == 0 then
@@ -395,6 +382,10 @@ function VRCompanion:initCyclopeanAudioListener(referenceNode)
 end
 
 function VRCompanion:ensureCyclopeanAudioListener(referenceNode)
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0
+        and not VRCompanion.nodeExists(self.cyclopeanAudioListenerNode) then
+        self.cyclopeanAudioListenerNode = nil
+    end
     if self.cyclopeanAudioListenerNode == nil or self.cyclopeanAudioListenerNode == 0 then
         self:initCyclopeanAudioListener(referenceNode)
     end
@@ -440,8 +431,9 @@ function VRCompanion:set2DViewActive(active)
     if store2DViewActive(self, newActive) then
         if newActive then
             print("[FS25_VR] Entered 2D Floating Window Mode.")
+            self:restoreMenuBackgroundCamera()
             self:restoreCameraProjectionsFor2D()
-            if self.activePlayerCamera ~= nil then
+            if self.activePlayerCamera ~= nil and self:getActiveVehicleCamera() == nil then
                 self:realignPlayerCameraToRoot(self.activePlayerCamera)
             end
             self:restoreHudSafeArea(true)
@@ -499,11 +491,7 @@ end
 function VRCompanion:restoreCameraProjectionsFor2D()
     if self.origCamSettings ~= nil then
         for camNode, orig in pairs(self.origCamSettings) do
-            local exists = true
-            if type(entityExists) == "function" then
-                exists = entityExists(camNode)
-            end
-            if exists then
+            if VRCompanion.nodeExists(camNode) then
                 if orig.fovY ~= nil and type(setFovY) == "function" then
                     pcall(setFovY, camNode, orig.fovY)
                 end
@@ -1048,9 +1036,7 @@ function VRCompanion:placeOutsideCameraBase(rootNode, x, y, z, heading)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
     local setRotationFn = setRotation or (_G and _G.setRotation)
     if type(setTranslationFn) ~= "function" or type(setRotationFn) ~= "function" then return nil end
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    if self.outsideCameraBaseNode ~= nil and type(entityExistsFn) == "function"
-        and not entityExistsFn(self.outsideCameraBaseNode) then
+    if self.outsideCameraBaseNode ~= nil and not VRCompanion.nodeExists(self.outsideCameraBaseNode) then
         self.outsideCameraBaseNode = nil
     end
     if self.outsideCameraBaseNode == nil then
@@ -1097,10 +1083,10 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     end
 
     local curVeh = self:getControlledVehicle()
-    if curVeh ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVeh] ~= nil then
+    if curVeh ~= nil then
         local activeCam = self:getVehicleActiveCamera(curVeh)
         if activeCam == cam or (activeCam and cam and activeCam.cameraNode == cam.cameraNode) then
-            self.vehicleRotationStates[curVeh].rotY = cam.rotY
+            self:updateVehicleRotationState(curVeh, cam, cam.rotY, nil)
         end
     end
 
@@ -1278,7 +1264,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local finalMidTx, finalMidTy, finalMidTz = tx, ty, tz
     local baseQx, baseQy, baseQz, baseQw = nil, nil, nil, nil
 
-    if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
+    if cam.vrHeadTrackingNode ~= nil and cam.vrHeadTrackingNode ~= 0 and camParent ~= 0 then
         if type(localToLocal) == "function" then
             finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
             finalMidTx, finalMidTy, finalMidTz = localToLocal(cam.vrHeadTrackingNode, camParent, tx, ty, tz)
@@ -1488,11 +1474,7 @@ end
 function VRCompanion:restoreMenuBackgroundCamera()
     if self.menuCameraOffsets ~= nil then
         for camNode, offset in pairs(self.menuCameraOffsets) do
-            local exists = true
-            if type(entityExists) == "function" then
-                exists = entityExists(camNode)
-            end
-            if exists and offset ~= nil then
+            if VRCompanion.nodeExists(camNode) and offset ~= nil then
                 local curX, curY, curZ = 0, 0, 0
                 if type(getTranslation) == "function" then
                     local ok, x, y, z = pcall(getTranslation, camNode)
@@ -1518,10 +1500,8 @@ end
 
 local function deleteDualEyeNodes(self)
     local deleteFn = delete or (_G and _G.delete)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
     local function deleteIfExists(node)
-        if node == nil or node == 0 then return end
-        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
+        if not VRCompanion.nodeExists(node) then return end
         pcall(deleteFn, node)
     end
     if type(deleteFn) == "function" then
@@ -1541,11 +1521,7 @@ end
 local function restoreOriginalCameraSettings(self)
     if self.origCamSettings == nil then return end
     for camNode, orig in pairs(self.origCamSettings) do
-        local exists = true
-        if type(entityExists) == "function" then
-            exists = entityExists(camNode)
-        end
-        if exists then
+        if VRCompanion.nodeExists(camNode) then
             if orig.fovY ~= nil and type(setFovY) == "function" then
                 pcall(setFovY, camNode, orig.fovY)
             end
@@ -1568,5 +1544,14 @@ VRCompanion:registerSubsystem("stereo", {
         self:resetToggleViewDebounce()
         restoreOriginalCameraSettings(self)
         self:leave2DViewOnMapUnload()
+        self.renderedFovX = nil
+        self.outsideCameraHeading = nil
+        self.lastGameShowingTrackedCamera = nil
+        self.trackedCameraShown = nil
+        self.gameCameraNode = nil
+        self.invalidPoseTicks = 0
+        self.vehCamTicks = 0
+        self.playerCamTicks = 0
+        self.menuCamTicks = 0
     end,
 })

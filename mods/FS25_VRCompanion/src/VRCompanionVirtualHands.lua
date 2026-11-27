@@ -69,12 +69,11 @@ end
 local state = newState()
 
 local engine = VRCompanion.getEngineGlobal
+local nodeExists = VRCompanion.nodeExists
 
 local function deleteNode(node)
     local deleteFn = engine("delete")
-    if node == nil or node == 0 or type(deleteFn) ~= "function" then return end
-    local exists = engine("entityExists")
-    if type(exists) == "function" and not exists(node) then return end
+    if not nodeExists(node) or type(deleteFn) ~= "function" then return end
     pcall(deleteFn, node)
 end
 
@@ -141,10 +140,7 @@ end
 
 local function applyModelToGrip(node, offset)
     local q, o = offset.rotation, offset.gripOrigin
-    local cx, cy, cz = q.y * o.z - q.z * o.y + q.w * o.x, q.z * o.x - q.x * o.z + q.w * o.y, q.x * o.y - q.y * o.x + q.w * o.z
-    local tx = o.x + 2 * (q.y * cz - q.z * cy)
-    local ty = o.y + 2 * (q.z * cx - q.x * cz)
-    local tz = o.z + 2 * (q.x * cy - q.y * cx)
+    local tx, ty, tz = VRCompanion.rotateVectorByQuaternion(q.x, q.y, q.z, q.w, o.x, o.y, o.z)
     engine("setQuaternion")(node, q.x, q.y, q.z, q.w)
     engine("setTranslation")(node, -tx, -ty, -tz)
 end
@@ -247,28 +243,47 @@ local function curlFingers(entry, pose, holdsTool)
     end
 end
 
-local function worldToNodeSpace(node, x, y, z, qx, qy, qz, qw, out)
-    out.x, out.y, out.z = engine("worldToLocal")(node, x, y, z)
-    local nqx, nqy, nqz, nqw = engine("getWorldQuaternion")(node)
-    out.qx, out.qy, out.qz, out.qw = VRCompanion.multiplyQuaternions(-nqx, -nqy, -nqz, nqw, qx, qy, qz, qw)
+local function worldToAnchorSpace(anchor, aqx, aqy, aqz, aqw, x, y, z, qx, qy, qz, qw, out)
+    local worldToLocal = engine("worldToLocal")
+    if type(worldToLocal) ~= "function" then
+        return false
+    end
+    local okL, lx, ly, lz = pcall(worldToLocal, anchor, x, y, z)
+    if not okL or type(lx) ~= "number" then return false end
+    out.x, out.y, out.z = lx, ly, lz
+    out.qx, out.qy, out.qz, out.qw = VRCompanion.multiplyQuaternions(-aqx, -aqy, -aqz, aqw, qx, qy, qz, qw)
+    return true
+end
+
+local function nodeName(node)
+    local getName = engine("getName")
+    if type(getName) ~= "function" or not nodeExists(node) then return "?" end
+    local ok, name = pcall(getName, node)
+    return ok and tostring(name) or "?"
 end
 
 local function bodyAnchor(head)
-    local getParent, getName, root = engine("getParent"), engine("getName"), engine("getRootNode")()
-    if head == nil or head == 0 then return root, "there is no head node" end
+    local getParent, getRootNode = engine("getParent"), engine("getRootNode")
+    if type(getRootNode) ~= "function" then return 0, "there is no root node" end
+    local root = getRootNode()
+    if not nodeExists(head) or type(getParent) ~= "function" then return root, "there is no head node" end
     local node = head
     while true do
-        local parent = getParent(node)
+        local okP, parent = pcall(getParent, node)
+        if not okP then return root, "the head node failed" end
         if parent == root then
             local getVisibility = engine("getVisibility")
-            if type(getVisibility) == "function" and not getVisibility(node) then
-                return root, tostring(getName(node)) .. " is hidden"
+            if type(getVisibility) == "function" then
+                local okV, visible = pcall(getVisibility, node)
+                if okV and not visible then
+                    return root, nodeName(node) .. " is hidden"
+                end
             end
             return node, nil
         end
         if parent == nil or parent == 0 then
             if node == head then return root, "the head hangs on nothing" end
-            return root, tostring(getName(node)) .. " is not below the scene root"
+            return root, nodeName(node) .. " is not below the scene root"
         end
         node = parent
     end
@@ -278,7 +293,7 @@ local function noteAnchor(anchor, why)
     if anchor == state.anchor then return end
     state.anchor = anchor
     local suffix = why ~= nil and (" (" .. why .. ")") or ""
-    print(string.format("[FS25_VR] Virtual Hands ride on %s%s", tostring(engine("getName")(anchor)), suffix))
+    print(string.format("[FS25_VR] Virtual Hands ride on %s%s", nodeName(anchor), suffix))
     for _, hand in ipairs(HANDS) do
         if state.hands[hand] ~= nil then state.hands[hand].geometryLogged = false end
     end
@@ -291,22 +306,38 @@ local function pinToWheel(self, hand, world)
     end
 end
 
-local function placeHolder(self, entry, world)
-    local anchor, why = bodyAnchor(self.cyclopeanAudioListenerNode)
+local function resolveAnchorPose(listener)
+    local anchor, why = bodyAnchor(listener)
+    if not nodeExists(anchor) then return nil end
     noteAnchor(anchor, why)
+    local getWorldQuaternion = engine("getWorldQuaternion")
+    if type(getWorldQuaternion) ~= "function" then return nil end
+    local okQ, aqx, aqy, aqz, aqw = pcall(getWorldQuaternion, anchor)
+    if not okQ or type(aqw) ~= "number" then return nil end
+    return anchor, aqx, aqy, aqz, aqw
+end
+
+local function placeHolder(entry, world, anchor, aqx, aqy, aqz, aqw)
+    if anchor == nil or not nodeExists(entry.holder) then return false end
     local placement = entry.placement
-    worldToNodeSpace(anchor, world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw, placement)
-    if engine("getParent")(entry.holder) ~= anchor then engine("link")(anchor, entry.holder) end
-    engine("setTranslation")(entry.holder, placement.x, placement.y, placement.z)
-    engine("setQuaternion")(entry.holder, placement.qx, placement.qy, placement.qz, placement.qw)
+    if not worldToAnchorSpace(anchor, aqx, aqy, aqz, aqw, world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw, placement) then
+        return false
+    end
+    local getParent, link = engine("getParent"), engine("link")
+    local setTranslation, setQuaternion = engine("setTranslation"), engine("setQuaternion")
+    if type(getParent) == "function" and type(link) == "function" then
+        local okP, currentParent = pcall(getParent, entry.holder)
+        if okP and currentParent ~= anchor then pcall(link, anchor, entry.holder) end
+    end
+    if type(setTranslation) == "function" then pcall(setTranslation, entry.holder, placement.x, placement.y, placement.z) end
+    if type(setQuaternion) == "function" then pcall(setQuaternion, entry.holder, placement.qx, placement.qy, placement.qz, placement.qw) end
+    return true
 end
 
 local function handsWereDeleted()
-    local exists = engine("entityExists")
-    if type(exists) ~= "function" then return false end
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
-        if entry ~= nil and not exists(entry.holder) then return true end
+        if entry ~= nil and entry.holder ~= nil and entry.holder ~= 0 and not nodeExists(entry.holder) then return true end
     end
     return false
 end
@@ -314,7 +345,7 @@ end
 local describeEngineGeometry
 local traceHands
 
-local function updateHand(self, hand, unavailable)
+local function updateHand(self, hand, unavailable, anchor, aqx, aqy, aqz, aqw)
     local entry = state.hands[hand]
     if entry == nil then return "no hand" end
     local status
@@ -327,25 +358,29 @@ local function updateHand(self, hand, unavailable)
         if pose.gripPoseTracked ~= true then
             status = "hidden (grip pose not tracked)"
         else
-            local world = entry.world
+            local world, relative = entry.world, entry.relative
             local ok, why = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
-                pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, world)
+                pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, world, relative)
             if ok then
-                local relative = entry.relative
-                worldToNodeSpace(self.cyclopeanAudioListenerNode, world.x, world.y, world.z,
-                    world.qx, world.qy, world.qz, world.qw, relative)
-                relative.valid = true
-                pinToWheel(self, hand, world)
-                placeHolder(self, entry, world)
-                local holdsTool = self:isHandHoldingHandTool(hand) == true
-                curlFingers(entry, pose, holdsTool)
-                entry.holdsTool = holdsTool
-                status = "shown"
-                if not entry.geometryLogged then
-                    entry.geometryLogged = true
-                    print(string.format("[FS25_VR] Virtual Hand geometry (%s): %s", HAND_NAMES[hand], describeEngineGeometry(entry)))
+                if relative.valid then
+                    pinToWheel(self, hand, world)
+                    if placeHolder(entry, world, anchor, aqx, aqy, aqz, aqw) then
+                        local holdsTool = self:isHandHoldingHandTool(hand) == true
+                        curlFingers(entry, pose, holdsTool)
+                        status = "shown"
+                        if not entry.geometryLogged then
+                            entry.geometryLogged = true
+                            print(string.format("[FS25_VR] Virtual Hand geometry (%s): %s", HAND_NAMES[hand], describeEngineGeometry(entry)))
+                        end
+                    else
+                        status = "hidden (holder placement failed)"
+                    end
+                else
+                    relative.valid = false
+                    status = "hidden (the listener node has no pose)"
                 end
             else
+                relative.valid = false
                 status = "hidden (" .. why .. ")"
             end
         end
@@ -357,9 +392,7 @@ end
 
 function VRCompanion:getVirtualHandHolder(hand)
     local entry = state.hands[hand]
-    if entry == nil or entry.holder == nil then return nil end
-    local exists = engine("entityExists")
-    if type(exists) == "function" and not exists(entry.holder) then return nil end
+    if entry == nil or not nodeExists(entry.holder) then return nil end
     return entry.holder
 end
 
@@ -377,8 +410,12 @@ function VRCompanion:updateVirtualHands(dt)
         state.reason = reason
         print("[FS25_VR] Virtual Hands: " .. reason)
     end
+    local anchor, aqx, aqy, aqz, aqw = nil, nil, nil, nil, nil
+    if unavailable == nil then
+        anchor, aqx, aqy, aqz, aqw = resolveAnchorPose(self.cyclopeanAudioListenerNode)
+    end
     for _, hand in ipairs(HANDS) do
-        updateHand(self, hand, unavailable)
+        updateHand(self, hand, unavailable, anchor, aqx, aqy, aqz, aqw)
     end
     traceHands(self, "update")
 end
@@ -441,19 +478,24 @@ end
 function VRCompanion:placeVirtualHandsForRender()
     local listener = self.cyclopeanAudioListenerNode
     local localToWorld, getWorldQuaternion = engine("localToWorld"), engine("getWorldQuaternion")
-    if listener == nil or listener == 0 or type(localToWorld) ~= "function" or type(getWorldQuaternion) ~= "function" then
+    if not nodeExists(listener) or type(localToWorld) ~= "function" or type(getWorldQuaternion) ~= "function" then
         return
     end
+    local okQ, lqx, lqy, lqz, lqw = pcall(getWorldQuaternion, listener)
+    if not okQ or type(lqw) ~= "number" then return end
+    local anchor, aqx, aqy, aqz, aqw = resolveAnchorPose(listener)
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
         if entry ~= nil and entry.shown and entry.relative.valid then
             local relative, world = entry.relative, entry.world
-            world.x, world.y, world.z = localToWorld(listener, relative.x, relative.y, relative.z)
-            local lqx, lqy, lqz, lqw = getWorldQuaternion(listener)
-            world.qx, world.qy, world.qz, world.qw = VRCompanion.multiplyQuaternions(lqx, lqy, lqz, lqw,
-                relative.qx, relative.qy, relative.qz, relative.qw)
-            pinToWheel(self, hand, world)
-            placeHolder(self, entry, world)
+            local okP, wx, wy, wz = pcall(localToWorld, listener, relative.x, relative.y, relative.z)
+            if okP and type(wx) == "number" then
+                world.x, world.y, world.z = wx, wy, wz
+                world.qx, world.qy, world.qz, world.qw = VRCompanion.multiplyQuaternions(lqx, lqy, lqz, lqw,
+                    relative.qx, relative.qy, relative.qz, relative.qw)
+                pinToWheel(self, hand, world)
+                placeHolder(entry, world, anchor, aqx, aqy, aqz, aqw)
+            end
         end
     end
     self:placeHandToolsForRender()
@@ -468,8 +510,11 @@ function VRCompanion:drawVirtualHands()
 end
 
 function VRCompanion:consoleCommandVirtualHandsTrace(arg)
-    local frames = math.floor(tonumber(arg) or 16)
-    if frames < 1 then return "Usage: vrVirtualHandsTrace [frames, default 16]" end
+    local frames = 16
+    if arg ~= nil and arg ~= "" then
+        frames = VRCompanion.parseFiniteNumber(arg, 1, nil, true)
+        if frames == nil then return "Usage: vrVirtualHandsTrace [frames, default 16]" end
+    end
     state.traceFrames = frames
     return string.format("Tracing the Virtual Hands for %d frames into the log", frames)
 end

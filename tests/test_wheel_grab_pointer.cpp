@@ -206,3 +206,32 @@ TEST_F(CompanionModTest, AnInteractiveControlThatWasOnAlreadyIsNeverWrittenByGra
     EXPECT_EQ(InteractiveControlWrites(L), "0") << "an Interactive Control that was on is left alone";
     EXPECT_EQ(InteractiveControlState(L), "true");
 }
+
+TEST_F(CompanionModTest, ReleasingATwoHandedWheelGrabFallsBackToTheConfiguredToolHandAsPointerHand) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
+    GRAB(kLeft, RimPoint(L, kRimRadius, kPi));
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(0)"), "true");
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true");
+    ASSERT_EQ(PointerHand(L), "nil");
+
+    headset.SetHandInputs(kLeft, Grip(0.0f));
+    headset.SetHandInputs(kRight, Grip(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false");
+    EXPECT_EQ(PointerHand(L), "1");
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setToolHand(VRCompanion.MOTION_HAND_LEFT, false)", "=toolHandLeft"), 0);
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
+    GRAB(kLeft, RimPoint(L, kRimRadius, kPi));
+    ASSERT_EQ(PointerHand(L), "nil");
+
+    headset.SetHandInputs(kLeft, Grip(0.0f));
+    headset.SetHandInputs(kRight, Grip(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(PointerHand(L), "0");
+}

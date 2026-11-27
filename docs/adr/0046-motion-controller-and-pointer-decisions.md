@@ -73,6 +73,7 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
 
   Also relied on (release 1.2.0.1): g_currentMission.interactiveControl.settings:getSetting("IC_STATE") with FS25_interactiveControl.InteractiveControlManager.SETTING_STATE_TOGGLE; on the vehicle spec_interactiveControl (state, interactiveControllers) and activateInteractiveControl(state, noEventSend). When they are not there the Pointer Hand simply does not switch Interactive Control.
 
+- **`updateAutoOn`**: Activates only during live in-cab gameplay (`not self:doesMenuTakeInput()` and `getVehicleActiveCamera(vehicle).isInside == true`, spectral-byte/FarmingSimVr-issues#247). A menu opening or switching to an Outside Camera ends auto-on and restores the vehicle's previous state until live in-cab gameplay resumes.
 - **`updateAutoOn`, `holding`**: A hand holding the Steering Wheel is not the Pointer Hand, but grabbing it does not touch Interactive Control's state either: what was switched on stays on while a hand holds (Wheel Grab never starts it).
 - **`updateAutoOn`, `camera`**: Interactive Control switched itself off when the camera changed: switch it on again, once.
 - **`VRCompanion:peekInteractiveControlTarget`**: The Click Point the ray would select now, before updateInteractiveControl commits: the cosine of its angle from the ray's centre (larger is nearer the centre), or nil when none is within the cone. The Pointer Ray code ranks it against a Coupling Point (VRCompanionManualAttach.lua) and then tells updateInteractiveControl whether to select none.
@@ -113,7 +114,7 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
 
   Also in menus (not in 2D gameplay, where no GUI is open to receive them), on EITHER hand and only
   while a menu is showing and Motion Controllers are on:
-    * Back / close: the grip (counts at 0.6, lets go below 0.3) or the lower face button, once per
+    * Back / close: the grip (counts at 0.6, lets go below 0.4) or the lower face button, once per
       press, delivered as the game's own MENU_BACK menu input (g_gui:onMenuInput). A button already
       held when the menu opens, or a hand appears, is not a press.
     * Scroll: thumbstick up/down (engages at 0.7, more up/down than sideways) is the mouse wheel at
@@ -137,11 +138,11 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
 - **`sendBack`**: The game's own menu input for "back": the call the engine's input binding makes for MENU_BACK, so screens, dialogs and the in-game menu react exactly as to the keyboard.
 - **`sendWheel`**: Thumbstick up/down is the mouse wheel. The game's list and slider elements do not read the wheel from the mouse event: they poll the native mouse state, Input.isMouseButtonPressed(wheel button), while they handle a mouse-down event under the cursor. A mod cannot move the real wheel, so for the duration of ONE synchronous mouse event the poll answers "yes" for the wheel button being sent, then the original function is put back (also when the menu code raises an error). Everything else is the game's own handling: the event goes through g_gui:mouseEvent to whatever is under the cursor.
 - **`scrollPosition`**: Where the scroll lands: the cursor the ray moved last while it controls the pointer, otherwise the desk mouse's position when the game can tell it, otherwise where the ray last pointed.
-- **`updateMenuButtons`**: Grip or the lower face button, on either hand, goes back once per press; the thumbstick up/down scrolls. Both only while a menu shows and Motion Controllers are on.
-- **`updateMenuButtons`, `if not self:doesMenuTakeInput() or self:isStereoDialogShowing() then`**: A Stereo Dialog is answered with the gamepad's own menu buttons, which the Virtual Gamepad passes on: the back and the scroll here would answer it a second time
-- **`updateMenuButtons`, `now`**: A fresh push scrolls at once; a held stick repeats. A second hand joining a push that is already scrolling is not a fresh push.
-- **`VRCompanion:updateMenuPointer`, `getPanelHitAlongRay`**: The ray is the one drawn in the world: it starts at the index fingertip and runs along the finger (or the aim pose while the grip pose is not tracked), in the space the hand poses are in, which is the space the Injector's panel is in. An Injector without getPanelHitAlongRay tests the aim pose.
-- **`VRCompanion:updateMenuPointer`, `local pulled, held = self:getPointerTrigger()`**: The click follows the Pointer Hand's trigger. A pull that switched the Pointer Hand to this hand is neither pressed nor held (see getPointerTrigger), and a trigger already held when the ray took over was never pressed, so neither clicks.
+- **`updateMenuButtons`**: Grip or the lower face button, on either hand, goes back once per press; the thumbstick up/down scrolls. Both only while a menu shows and Motion Controllers are on, and neither while the pause menu's Settings page (`isSettingsPageShowing()`, ADR-0048) is showing so rebinding controls never fires `MENU_BACK` or scrolls (spectral-byte/FarmingSimVr-issues#247).
+- **`updateMenuButtons`, `if not self:doesMenuTakeInput() or self:isStereoDialogShowing() or self:isSettingsPageShowing() then`**: A Stereo Dialog is answered with the gamepad's own menu buttons, and the Settings page needs grip/buttons/stick for rebinding; edge tracking (`hands`) still runs so inputs held when entering or leaving Settings do not misfire on transition.
+- **`updateMenuButtons`, `now`**: A fresh push scrolls at once; a held stick repeats when `now` (`getCurrentTimeMs()`) is non-nil (nil clock still permits the initial push without arithmetic failure). A second hand joining a push that is already scrolling is not a fresh push.
+- **`VRCompanion:updateMenuPointer`, `getPanelHitAlongRay`**: The ray is the one drawn in the world: it starts at the index fingertip and runs along the finger (or the aim pose while the grip pose is not tracked), in the space the hand poses are in, which is the space the Injector's panel is in. An Injector without getPanelHitAlongRay tests the aim pose. When the ray aims off-panel (`onPanel == false`), `setMenuCursor(false)` hides the drawn cursor instead of leaving it frozen on the panel border (spectral-byte/FarmingSimVr-issues#247).
+- **`VRCompanion:updateMenuPointer`, `local pulled, held = self:getPointerTrigger()`**: The click follows the Pointer Hand's trigger, gated on `self:doesMenuTakeInput()` so 2D Floating Window Mode gameplay without a menu open never double-fires a GUI click alongside Virtual Gamepad `RT` (spectral-byte/FarmingSimVr-issues#247). A pull that switched the Pointer Hand to this hand is neither pressed nor held (see getPointerTrigger), and a trigger already held when the ray took over was never pressed, so neither clicks.
 - **`registerSubsystem "menuPointer"`**: Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateMenuPointer runs from the Motion Controller poll, which fixes where in the update it comes (see updateMotionControllers). Unload runs in reverse file order, so it comes after the Virtual Hands, Wheel Grab and Virtual Gamepad have reset; none of them reads what this lets go of.
 
 ### `mods/FS25_VRCompanion/src/VRCompanionMotionControllers.lua`
@@ -190,10 +191,11 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
       VRCompanion:getPointerHand() -> 0 | 1 | nil
       VRCompanion.pointerHand                    mirror of getPointerHand() (read-only for others)
         Pointer Hand rule of this module: exactly one hand in use -> that hand; none in use -> nil;
-        both in use -> the previous Pointer Hand, until a trigger pull on the other hand moves it
-        there (with no previous Pointer Hand, a pull on either hand picks that hand). That switching
-        pull is consumed: getPointerTrigger() reports it as neither pressed nor held until the
-        trigger is let go, so it never clicks in a menu either.
+        both in use -> the previous Pointer Hand (falling back to the configured Tool Hand when
+        previous was nil, e.g. waking both hands together or releasing a two-handed Wheel Grab),
+        until a trigger pull on the other hand moves it there. That switching pull is consumed:
+        getPointerTrigger() reports it as neither pressed nor held until the trigger is let go,
+        so it never clicks in a menu either.
 
     VRCompanion.motionControllersEnabled  boolean, default true, saved (`vrMotionControllers on|off`).
       When false the mod ignores Motion Controller input: hands report untracked, none is in use, there is
@@ -282,9 +284,9 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
 - **`VRCompanion.POINTER_TRIGGER_PRESS`**: The trigger counts as pulled above PRESS and as released below RELEASE (hysteresis against a trigger that rests half-way).
 - **`newState`, `triggerConsumed`**: [hand] = a Pointer Hand switch took this pull: it counts for nothing until let go
 - **`movedFromReference`**: Whether the aim pose moved away from the reference pose far enough to count; the pose becomes the new reference when it did.
-- **`isHoldingSteeringWheel`**: The Pointer Hand: the one hand in use. With both in use it is the previous one, until the trigger is pulled on the other hand: that pull moves the Pointer Hand there and is consumed (it clicks nothing, see getPointerTrigger). With both in use and no previous Pointer Hand, a pull on either picks it. A hand holding the Steering Wheel is in use but never a candidate (Wheel Grab, see VRCompanionWheelGrab.lua): the Pointer Hand that starts holding falls to the other hand in use, or to nobody, and can point again once it lets go.
+- **`isHoldingSteeringWheel`**: The Pointer Hand: the one hand in use. With both in use it is the previous one (or the configured Tool Hand when there was no previous Pointer Hand, such as when both hands wake up together or are released from a two-handed Wheel Grab), until the trigger is pulled on the other hand: that pull moves the Pointer Hand there and is consumed (it clicks nothing, see getPointerTrigger). A hand holding the Steering Wheel is in use but never a candidate (Wheel Grab, see VRCompanionWheelGrab.lua): the Pointer Hand that starts holding falls to the other hand in use, or to nobody, and can point again once it lets go (falling back to the configured Tool Hand when both hands become free together).
 - **`isHoldingHandTool`**: The Tool Hand holding a supported Hand Tool is never a candidate either, as it uses the tool with its trigger (Hand Tools, ADR-0029). That holds in the world only: in a menu the tool is back where the game puts it and either hand can point.
-- **`isCarryingHeldObject`**: The hand carrying a Held Object (Object Grab, ADR-0033) is never a candidate either: no ray sticks out of the object it holds.
+- **`isCarryingHeldObject`**: The hand carrying a Held Object (Object Grab, ADR-0033) is never a candidate in the world: no ray sticks out of the object it holds. In a menu (`isMenuQuadShown()`), matching `isHoldingHandTool`, the carrying hand can act as the Pointer Hand while the Held Object stays preserved until unpaused.
 - **`choosePointerHand`, `if hand ~= previous and self:isObjectGrabSqueeze(hand) == true then`**: So does squeezing the grip of a hand that points at something it can grab (Object Grab): it grabs in that squeeze.
 - **`clearHands`, `state.ray.visible`**: the update that draws it does not run now: a ray left drawn would stay on its last target
 - **`POINTER_OWNER_LOG_LIMIT`**: Who controls the pointer One place for "desk mouse or Pointer Ray: whichever moved last" (see the header for the API).
@@ -298,7 +300,7 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
 - **`VRCompanion:updateMotionControllers`, `result`**: The bridge fills a table in place once it holds every field, and otherwise hands back a complete one that is adopted here, so nothing is allocated per frame.
 - **`VRCompanion:updateMotionControllers`, `motion.lastMovedMs`**: the clock went backwards: forget the old move
 - **`VRCompanion:updateMotionControllers`, `for _, hand in ipairs(HANDS) do`**: A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held. So does the Tool Hand while its Hand Tool keeps it in use (Hand Tools says when): a cut or a spray held with a still hand must not drop the tool. And the hand carrying a Held Object (Object Grab), which is however still it is held.
-- **`VRCompanion:updateMotionControllers`, `if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then`**: The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
+- **`VRCompanion:updateMotionControllers`, `if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then`**: The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse. Pulling the off-hand trigger to switch (or pick) the Pointer Hand also calls `notePointerRayMoved()` immediately even if that hand was still, and reserves `"trigger"` via `takeVirtualGamepadInput(hand, "trigger")` while `state.triggerConsumed[hand]` is set so that switching pull is suppressed on the Virtual Gamepad until release (spectral-byte/FarmingSimVr-issues#247).
 - **`VRCompanion:resetMotionControllerMovement`**: A Recenter Action moves the origin every pose is measured from. Hands lying still must not look moved, so the movement references are dropped and taken again at the next update.
 - **`qrotate`**:
 
@@ -329,9 +331,11 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
   Audio Listener Node's world pose (the head's centre with the head's full world rotation).
 
     VRCompanion:isHeadPlacedInTheWorld() -> boolean
-    VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out) -> true | false, reason
+    VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out, outRelative) -> true | false, reason
       On true, out.x, out.y, out.z (world position) and out.qx, out.qy, out.qz, out.qw (unit world
-      rotation) are filled in place. On false, out is untouched and reason says why in one line.
+      rotation) are filled in place; when outRelative is provided, the head-relative pose is also
+      filled into it in place so callers do not need a world-to-listener round-trip. On false, out
+      is untouched and reason says why in one line.
     VRCompanion.multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw) -> x, y, z, w   (a then b is applied as a * b)
   ```
 
@@ -358,11 +362,11 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
 - **`VRCompanion:updatePointerRay`, `if reason ~= state.rayReason then`**: Logged when it changes, so a session where pointing does not work says why in the game log.
 - **`VRCompanion:updatePointerRay`, `if source == SOURCE_FINGER and not state.fingerLogged[hand] then`**: Once per hand, the first time the ray is placed from its index finger: how far the finger points from where the runtime aims the controller, so a headset session shows whether pointing along the finger feels sane.
 - **`VRCompanion:updatePointerRay`, `clickCos`**: Click Points and Coupling Points (the hitch, its PTO stub, its hose couplers) share the cone (ADR-0035): of the Click Point and the Coupling Point within it, the one nearer the ray's centre is the target and the other selects nothing (a tie is the Click Point's). Interactive Control reports its best Click Point before it commits, Manual Attach support ranks its Coupling Point against it, and Interactive Control is then told to select none when the Coupling Point won.
-- **`VRCompanion:updatePointerRay`, `if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, coupli...`**: Either of them selected wins over everything else (Animated Objects and Object Grab): Interactive Control answers a hit point only when it selected one (it answers hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
+- **`VRCompanion:updatePointerRay`, `if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, coupli...`**: Either of them selected wins over everything else (Animated Objects and Object Grab): Interactive Control answers a hit point only when it selected one (it answers hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object or Object Grab target may replace; Object Grab ray peeking runs whenever `hitX == nil`).
 - **`VRCompanion:updatePointerRay`, `local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimated...`**: Animated Objects: the ray is on a door or gate in whose zone the player stands. Of the two the ray meets first, the nearer wins.
 - **`VRCompanion:getPointerTrigger`**: The Pointer Hand's trigger: pressed (it went down this update), held (it is down). A pull that switched the Pointer Hand to this hand is neither, however long it is held on: it is let go first.
 - **`VRCompanion:pulseHand`**: Vibrates one hand (never the other). Nothing happens, and false is returned, while Motion Controllers are off, without a hand, or when the Injector has no haptics call or the runtime refuses it.
-- **`VRCompanion:placePointerRayForRender`**: A line from the hand with a dot where it lands, drawn with the engine's debug drawing. Called by VRCompanion:placeAndBindEyes once it has placed the head for a frame, which happens before every frame the engine renders, after the Virtual Hands are placed for it. The ends are the update's, relative to the head, carried into the world from where the head is now: the game renders some frames with no update before them, after the cab moved again (Sequential Dual-Pass's second pass), and the update runs before the game moves the cab camera. A line drawn from the update's world ends (in VRCompanion:draw) was a copy lagging behind the cab in one eye, as the Virtual Hands were. The camera path may place the head more than once before a frame; each time draws the same line again.
+- **`VRCompanion:placePointerRayForRender`**: A line from the hand with a dot where it lands, drawn with the engine's debug drawing (`RAY_COLORS` distinguishes `idle`, `clickPoint`, `couplingPoint`, `animatedObject`, and `objectGrab` while `state.ray.visible` remains gated on `hasTarget`, spectral-byte/FarmingSimVr-issues#247). Called by VRCompanion:placeAndBindEyes once it has placed the head for a frame, which happens before every frame the engine renders, after the Virtual Hands are placed for it. The ends are the update's, relative to the head, carried into the world from where the head is now: the game renders some frames with no update before them, after the cab moved again (Sequential Dual-Pass's second pass), and the update runs before the game moves the cab camera. A line drawn from the update's world ends (in VRCompanion:draw) was a copy lagging behind the cab in one eye, as the Virtual Hands were. The camera path may place the head more than once before a frame; each time draws the same line again.
 - **`VRCompanion:resetMotionControllers`**: Map unload: forget everything seen this session. The saved setting stays as it is. The Menu Pointer, Virtual Hands, Wheel Grab and Virtual Gamepad reset in hooks of their own, and so do Hand Tools, Object Grab, Interactive Control, Animated Objects and Manual Attach (registered unload order is the reverse of modDesc.xml order, so Hand Tools reset before the Virtual Hands go: a tool hangs below a hand); the registry removes the console commands.
 - **`registerSubsystem "motionControllers"`**:
 

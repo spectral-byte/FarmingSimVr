@@ -764,5 +764,27 @@ test("WithAnInvalidHeadPoseSequentialDualPassSubPassesShowTheEngineView", functi
     assert(ok, tostring(err))
 end)
 
+test("SwitchingVehiclesClearsStaleOutsideCameraHeading", function()
+    local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
+    setup(state)
+    local camA = installOrbitCamera()
+    local vehA = _G.g_currentMission.controlledVehicle
+    VRCompanion:onEnterVehicle(vehA, true, nil)
+    VRCompanion:onVehicleCameraUpdate(camA, 16.6)
+    assert(VRCompanion.outsideCameraHeading ~= nil, "precondition: outsideCameraHeading was recorded")
+
+    local vehB = { rootNode = VEHICLE, getActiveCamera = function() return nil end }
+    VRCompanion:onVehicleTransition(vehA, vehB)
+    assert(VRCompanion.outsideCameraHeading == nil, "vehicle transition must clear stale outsideCameraHeading")
+
+    VRCompanion:onEnterVehicle(vehB, true, nil)
+    VRCompanion.outsideCameraHeading = 1.23
+    VRCompanion:onLeaveVehicle(vehB)
+    assert(VRCompanion.outsideCameraHeading == nil, "leaving vehicle must clear stale outsideCameraHeading")
+
+    VRCompanion.lastControlledVehicle = nil
+    cleanup()
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_outside_camera.luau", failed))

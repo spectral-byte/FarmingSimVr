@@ -218,3 +218,58 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, TheLastReleaseIsKeptForTheDiagnostics)
     EXPECT_NEAR(Number(L, "select(6, VRCompanion:getObjectGrabLastRelease())"), Number(L, "lastThrow().force"), 1e-9) << "the force scalar";
     EXPECT_NEAR(Number(L, "select(4, VRCompanion:getObjectGrabLastRelease())"), Number(L, "lastThrow().dirY"), 1e-9) << "the direction";
 }
+
+TEST_F(VirtualGamepadObjectGrabThrowTest, SwingingBeforeOpeningAMenuDoesNotThrowWithStaleVelocityOnPostPauseRelease) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    Move(FullSpeed(), 0.0f, 0.6f, -0.8f, 6);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(Throws(), 0);
+    EXPECT_EQ(Drops(), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    Squeeze(kRight, 0.0f);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1) << "post-pause release drops instead of launching with pre-menu swing velocity";
+    EXPECT_EQ(Throws(), 0);
+}
+
+TEST_F(VirtualGamepadObjectGrabThrowTest, SwingingBefore2DFloatingWindowModeDoesNotThrowWithStaleVelocity) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    Move(FullSpeed(), 0.0f, 0.6f, -0.8f, 6);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:set2DViewActive(true)", "=enter2D"), 0);
+    FRAMES(2);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:set2DViewActive(false)", "=exit2D"), 0);
+    Squeeze(kRight, 0.0f);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(Throws(), 0);
+}
+
+TEST_F(VirtualGamepadObjectGrabThrowTest, SwingingBeforeTrackingLossDoesNotThrowWithStaleVelocityWhenTrackingReturns) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    Move(FullSpeed(), 0.0f, 0.6f, -0.8f, 6);
+    headset.SetHandPose(kRight, HandAt(x, y, z), false);
+    headset.SetHandGripPose(kRight, HandAt(x, y, z), false);
+    FRAMES(2);
+
+    headset.SetHandPointing(kRight, HandAt(x, y, z));
+    Squeeze(kRight, 0.0f);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(Throws(), 0);
+}
+
+TEST_F(VirtualGamepadObjectGrabThrowTest, ReleasingAfterAThrowWindowGapWithNoFreshSamplesIsADropNotAThrow) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    Move(FullSpeed(), 0.0f, 0.6f, -0.8f, 6);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.menuTakesInput = true", "=pauseInput"), 0);
+    FRAMES(1);
+    AdvanceGameTime(200);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.menuTakesInput = false", "=resumeInput"), 0);
+    Squeeze(kRight, 0.0f);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(Throws(), 0);
+}

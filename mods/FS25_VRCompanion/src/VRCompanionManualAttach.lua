@@ -147,14 +147,7 @@ VRCompanion:registerSubsystem("manualAttach", {
     mapUnload = function(self) self:resetManualAttachSupport() end,
 })
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function addHitch(vehicle, jointIndex, attachable, attachableJointIndex, implement, joint)
     local count = state.count + 1
@@ -171,7 +164,18 @@ end
 
 local function isInReach(joint, playerRoot)
     local localToLocal = engine("localToLocal")
-    local x, y, z = localToLocal(joint.jointTransform, playerRoot, 0, 0, 0)
+    if type(localToLocal) ~= "function" or joint.jointTransform == nil or joint.jointTransform == 0
+        or playerRoot == nil or playerRoot == 0 then
+        return false
+    end
+    local exists = engine("entityExists")
+    if type(exists) == "function" and (not exists(joint.jointTransform) or not exists(playerRoot)) then
+        return false
+    end
+    local ok, x, y, z = pcall(localToLocal, joint.jointTransform, playerRoot, 0, 0, 0)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+        return false
+    end
     return x * x + y * y + z * z < state.class.PLAYER_MIN_DISTANCE_SQ
 end
 
@@ -229,7 +233,11 @@ end
 local pick = { cos = 0, hitch = nil, kind = nil, x = 0, y = 0, z = 0 }
 
 local function consider(hitch, kind, node, ray, getWorldTranslation)
-    local px, py, pz = getWorldTranslation(node)
+    if node == nil or node == 0 or type(getWorldTranslation) ~= "function" then return end
+    local exists = engine("entityExists")
+    if type(exists) == "function" and not exists(node) then return end
+    local ok, px, py, pz = pcall(getWorldTranslation, node)
+    if not ok or type(px) ~= "number" or type(py) ~= "number" or type(pz) ~= "number" then return end
     local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
     local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
     if distance <= 0.01 then return end
@@ -359,7 +367,10 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     end
     if mayUseTrigger then
         local pressed = self:getPointerTrigger()
-        if pressed and work(selected, kind) then feel(self, "clicked", selected) end
+        if pressed and work(selected, kind) then
+            state.selected, state.selectedKind = nil, nil
+            feel(self, "clicked", selected)
+        end
     end
     return true, selected.x, selected.y, selected.z
 end

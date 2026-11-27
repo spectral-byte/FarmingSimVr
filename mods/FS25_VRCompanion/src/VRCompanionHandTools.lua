@@ -43,6 +43,7 @@ local function newState()
                              -- (where it landed), bobberLast = {x, y, z} | nil (where it was at the last update, until it landed) }
             action = nil,    -- the last action a rod was given: { tool, name = "primary" | "secondary", by = text, value }
             draws = {},      -- per rod state: its last draw (see drawPulledIn)
+            traceDraws = false,
         },
         toolProblems = {},
         checkedTools = setmetatable({}, { __mode = "k" }),  -- the tools toolProblem found as expected (not checked again)
@@ -108,8 +109,8 @@ local CHAINSAW_REACH_USAGE = "Usage: vrChainsawReach [<metres, 0 to 3> | default
 local function parseChainsawReach(text)
     local word = string.lower(tostring(text))
     if word == "default" or word == CHAINSAW_REACH_GAME then return true, nil, false end
-    local metres = tonumber(word)
-    if metres == nil or metres ~= metres or metres == math.huge or metres < 0 then return false end
+    local metres = VRCompanion.parseFiniteNumber(word, 0)
+    if metres == nil then return false end
     return true, math.min(metres, VRCompanion.MAX_CHAINSAW_REACH), metres > VRCompanion.MAX_CHAINSAW_REACH
 end
 
@@ -216,24 +217,29 @@ local function chainsawReachBehind(tool)
     return minimum
 end
 
+local chainsawLowerEdgePos = { x = 0.0, y = 0.0, z = 0.0 }
+
+local function readChainsawCutRootY(tool, cutNode, model, root)
+    local node = cutNode
+    while node ~= model do
+        node = engine("getParent")(node)
+        if node == nil or node == 0 or node == root then return nil end
+    end
+    local x, y, z = engine("getWorldTranslation")(cutNode)
+    x, y, z = engine("worldToLocal")(model, x, y, z)
+    x, y, z = engine("localToWorld")(tool.graphicalNodeParent or root, x, y, z)
+    local _, rootY = engine("worldToLocal")(root, x, y, z)
+    return rootY
+end
+
 local function chainsawLowerEdge(tool)
     local spec, model, root = tool.spec_chainsaw, tool.graphicalNode, tool.rootNode
     local cutNode = type(spec) == "table" and spec.cutNode or nil
     if cutNode == nil or model == nil or root == nil or cutNode == root then return nil end
-    local ok, y = pcall(function()
-        local node = cutNode
-        while node ~= model do
-            node = engine("getParent")(node)
-            if node == nil or node == 0 or node == root then return nil end
-        end
-        local x, y, z = engine("getWorldTranslation")(cutNode)
-        x, y, z = engine("worldToLocal")(model, x, y, z)
-        x, y, z = engine("localToWorld")(tool.graphicalNodeParent or root, x, y, z)
-        local _, rootY = engine("worldToLocal")(root, x, y, z)
-        return rootY
-    end)
+    local ok, y = pcall(readChainsawCutRootY, tool, cutNode, model, root)
     if not ok or type(y) ~= "number" or y ~= y or y == math.huge or y == -math.huge then return nil end
-    return { x = 0.0, y = y, z = 0.0 }
+    chainsawLowerEdgePos.y = y
+    return chainsawLowerEdgePos
 end
 
 VRCompanion.HAND_TOOL_POINTING_AXES = {
@@ -387,8 +393,19 @@ local function toolProblem(tool, entry, nowMs)
         if problem ~= nil and (pending == nil or pending.tool ~= tool) then
             state.fieldsPending = { tool = tool, sinceMs = nowMs }
             return nil
-        elseif problem ~= nil and nowMs - pending.sinceMs < TOOL_FIELDS_GRACE_MS then
-            return nil
+        elseif problem ~= nil then
+            if nowMs == nil then return nil end
+            if pending.sinceMs == nil then
+                pending.sinceMs = nowMs
+                return nil
+            end
+            if nowMs - pending.sinceMs < 0 then
+                pending.sinceMs = nowMs
+                return nil
+            end
+            if nowMs - pending.sinceMs < TOOL_FIELDS_GRACE_MS then
+                return nil
+            end
         end
         state.fieldsPending = nil
     end
@@ -428,14 +445,7 @@ local function carryingPlayer(tool)
     return type(player) == "table" and player or nil
 end
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function localCarryingPlayer(tool)
     local player = carryingPlayer(tool)
@@ -654,9 +664,16 @@ local function isLineOutInHand(self, hand)
     return lineOut == true
 end
 
+local function isActiveFlashlightInHand(hand)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool or state.linkedHand ~= hand then return false end
+    local spec = tool.spec_flashlight
+    return type(spec) == "table" and spec.isActive == true
+end
+
 function VRCompanion:isHandKeptInUseByHandTool(hand)
     if self:getHandState(hand).tracked ~= true then return false end
-    return isTriggerUsing(hand) or isLineOutInHand(self, hand)
+    return isTriggerUsing(hand) or isLineOutInHand(self, hand) or isActiveFlashlightInHand(hand)
 end
 
 local FISHING_ROD_STATE_TEXT = { waiting = "line out" }
@@ -665,6 +682,19 @@ local FISHING_ROD_SECONDARY_ACTION = "ACTIVATE_HANDTOOL_SECONDARY"
 
 -- The secondary event wraps: the table that holds the callback -> { original, wrapper } (weak: an event the game let go of goes).
 local rodEventWraps = setmetatable({}, { __mode = "k" })
+
+local function wrapSecondaryHolder(tool, holder)
+    local original = holder.callback
+    local wrapped = rodEventWraps[holder]
+    if type(original) == "function" and (wrapped == nil or wrapped.wrapper ~= original) then
+        local wrapper = function(target, name, inputValue, ...)
+            state.fishingRod.action = { tool = tool, name = "secondary", by = "the game's binding", value = inputValue }
+            return original(target, name, inputValue, ...)
+        end
+        rodEventWraps[holder] = { original = original, wrapper = wrapper }
+        holder.callback = wrapper
+    end
+end
 
 local function wrapRodSecondaryEvent(tool)
     local events = tool.actionEvents
@@ -677,20 +707,8 @@ local function wrapRodSecondaryEvent(tool)
             if type(bound) ~= "table" then bound = nil end
             local actionName = entry.actionName or (bound ~= nil and bound.actionName) or (type(key) == "string" and key or nil)
             if actionName == FISHING_ROD_SECONDARY_ACTION then
-                local holders = { entry }
-                if bound ~= nil then holders[2] = bound end
-                for _, holder in ipairs(holders) do
-                    local original = holder.callback
-                    local wrapped = rodEventWraps[holder]
-                    if type(original) == "function" and (wrapped == nil or wrapped.wrapper ~= original) then
-                        local wrapper = function(target, name, inputValue, ...)
-                            state.fishingRod.action = { tool = tool, name = "secondary", by = "the game's binding", value = inputValue }
-                            return original(target, name, inputValue, ...)
-                        end
-                        rodEventWraps[holder] = { original = original, wrapper = wrapper }
-                        holder.callback = wrapper
-                    end
-                end
+                wrapSecondaryHolder(tool, entry)
+                if bound ~= nil then wrapSecondaryHolder(tool, bound) end
             end
         end
     end
@@ -719,24 +737,37 @@ local function isOverlay(value)
         and (value.overlayId ~= nil or value.filename ~= nil)
 end
 
-local function rodOverlays(tool, spec)
-    local found, seen = {}, { [tool] = true }
-    if type(spec.states) == "table" then seen[spec.states] = true end
-    local function look(t, depth)
-        for _, value in pairs(t) do
-            if type(value) == "table" and not seen[value] then
-                seen[value] = true
-                if isOverlay(value) then
-                    found[#found + 1] = value
-                elseif depth > 0 then
-                    look(value, depth - 1)
-                end
+local rodOverlayCache = setmetatable({}, { __mode = "k" })
+local rodScanSeen = {}
+
+local function scanRodOverlays(t, depth, overlays, overlaySet)
+    for _, value in pairs(t) do
+        if type(value) == "table" and not rodScanSeen[value] then
+            rodScanSeen[value] = true
+            if isOverlay(value) then
+                overlays[#overlays + 1] = value
+                overlaySet[value] = true
+            elseif depth > 0 then
+                scanRodOverlays(value, depth - 1, overlays, overlaySet)
             end
         end
     end
-    look(spec, 0)
-    if type(spec.state) == "table" then look(spec.state, 1) end
-    return found
+end
+
+local function rodOverlays(tool, spec, layout)
+    local cached = rodOverlayCache[layout]
+    if cached ~= nil and cached.spec == spec then
+        return cached.overlays, cached.overlaySet
+    end
+    local overlays, overlaySet = {}, {}
+    table.clear(rodScanSeen)
+    rodScanSeen[tool] = true
+    if type(spec.states) == "table" then rodScanSeen[spec.states] = true end
+    scanRodOverlays(spec, 0, overlays, overlaySet)
+    scanRodOverlays(layout, 1, overlays, overlaySet)
+    table.clear(rodScanSeen)
+    rodOverlayCache[layout] = { spec = spec, overlays = overlays, overlaySet = overlaySet }
+    return overlays, overlaySet
 end
 
 local function layoutShift(layout)
@@ -749,7 +780,7 @@ end
 local function renderOverlayNoted(original, overlay, ...)
     local notes = rodDrawNotes
     if notes ~= nil and type(overlay) == "table" and type(overlay.x) == "number" and type(overlay.y) == "number" then
-        local moved = notes.moving[overlay] == true
+        local moved = notes.moving ~= nil and notes.moving[overlay] == true
         local x = overlay.x + (tonumber(overlay.offsetX) or 0) - (moved and notes.dx or 0)
         local y = overlay.y + (tonumber(overlay.offsetY) or 0) - (moved and notes.dy or 0)
         local width, height = tonumber(overlay.width) or 0, tonumber(overlay.height) or 0
@@ -761,56 +792,81 @@ local function renderOverlayNoted(original, overlay, ...)
     return original(overlay, ...)
 end
 
-local function moveNumber(moved, t, key, by)
+local moveTables, moveKeys, moveWas, moveBy = {}, {}, {}, {}
+local moveCount = 0
+
+local function moveNumber(t, key, by)
     local value = t[key]
     if type(value) ~= "number" then return end
     t[key] = value + by
-    moved[#moved + 1] = { t = t, key = key, was = value, by = by }
+    moveCount = moveCount + 1
+    moveTables[moveCount] = t
+    moveKeys[moveCount] = key
+    moveWas[moveCount] = value
+    moveBy[moveCount] = by
 end
 
-local function takeMovesOff(moved)
-    for _, move in ipairs(moved) do
-        local value = move.t[move.key]
-        if value == move.was + move.by then
-            move.t[move.key] = move.was
+local function takeMovesOff(fromIndex)
+    for i = fromIndex + 1, moveCount do
+        local t, key, was, by = moveTables[i], moveKeys[i], moveWas[i], moveBy[i]
+        local value = t[key]
+        if value == was + by then
+            t[key] = was
         elseif type(value) == "number" then
-            move.t[move.key] = value - move.by
+            t[key] = value - by
         end
+        moveTables[i], moveKeys[i], moveWas[i], moveBy[i] = nil, nil, nil, nil
     end
+    moveCount = fromIndex
 end
 
 -- Runs the rod's own onDraw with its minigame moved (see above) and notes what it drew: { calls, unmoved, from, to, bottom, top
 -- (the area rendered, as the rod placed it), overlays, numbers (how many were moved), dx, dy (by how much) }.
+local function finishRodDraw(outerNotes, moveStart, ok, ...)
+    local notes = rodDrawNotes
+    rodDrawNotes = outerNotes
+    takeMovesOff(moveStart)
+    if notes ~= nil then
+        notes.moving = nil
+    end
+    if not ok then error((...), 0) end
+    return ...
+end
+
 local function drawPulledIn(original, tool, ...)
     local _, entry = fishingRodOf(tool)
     local spec = tool[entry.spec]
-    local notes = { calls = 0, unmoved = 0, overlays = 0, numbers = 0, moving = {}, dx = 0, dy = 0 }
-    local moved = {}
+    local rodStateKey = VRCompanion:getFishingRodState(tool) or "unknown"
+    local notes = state.fishingRod.draws[rodStateKey]
+    if notes == nil then
+        notes = { calls = 0, unmoved = 0, overlays = 0, numbers = 0, dx = 0, dy = 0, from = nil, to = nil, bottom = nil, top = nil, moving = nil }
+        state.fishingRod.draws[rodStateKey] = notes
+    else
+        notes.calls, notes.unmoved, notes.overlays, notes.numbers, notes.dx, notes.dy = 0, 0, 0, 0, 0, 0
+        notes.from, notes.to, notes.bottom, notes.top, notes.moving = nil, nil, nil, nil, nil
+    end
+    local moveStart = moveCount
     local layout = type(spec) == "table" and spec.state or nil
     local dx, dy = nil, nil
     if type(layout) == "table" then dx, dy = layoutShift(layout) end
     if dx ~= nil then
         notes.dx, notes.dy = dx, dy
-        for _, key in ipairs(FISHING_ROD_LAYOUT_X) do moveNumber(moved, layout, key, dx) end
-        for _, key in ipairs(FISHING_ROD_LAYOUT_Y) do moveNumber(moved, layout, key, dy) end
-        notes.numbers = #moved
-        local ok, overlays = pcall(rodOverlays, tool, spec)
-        for _, overlay in ipairs(ok and overlays or {}) do
-            moveNumber(moved, overlay, "x", dx)
-            moveNumber(moved, overlay, "y", dy)
-            notes.moving[overlay] = true
-            notes.overlays = notes.overlays + 1
+        for _, key in ipairs(FISHING_ROD_LAYOUT_X) do moveNumber(layout, key, dx) end
+        for _, key in ipairs(FISHING_ROD_LAYOUT_Y) do moveNumber(layout, key, dy) end
+        notes.numbers = moveCount - moveStart
+        local ok, overlays, overlaySet = pcall(rodOverlays, tool, spec, layout)
+        if ok and overlays ~= nil then
+            for _, overlay in ipairs(overlays) do
+                moveNumber(overlay, "x", dx)
+                moveNumber(overlay, "y", dy)
+                notes.overlays = notes.overlays + 1
+            end
+            notes.moving = overlaySet
         end
     end
     local outer = rodDrawNotes
     rodDrawNotes = notes
-    local results = table.pack(pcall(original, tool, ...))
-    rodDrawNotes = outer
-    takeMovesOff(moved)
-    notes.moving = nil
-    state.fishingRod.draws[VRCompanion:getFishingRodState(tool) or "unknown"] = notes
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    return finishRodDraw(outer, moveStart, pcall(original, tool, ...))
 end
 
 local function pullsRodOverlaysIn(tool)
@@ -827,18 +883,28 @@ local function wrapFunctionOn(held, class, name, make)
     return { class = class, original = original, wrapper = wrapper }
 end
 
+local function makeRodDrawWrapper(original)
+    return function(drawn, ...)
+        if pullsRodOverlaysIn(drawn) then return drawPulledIn(original, drawn, ...) end
+        return original(drawn, ...)
+    end
+end
+
+local function makeOverlayRenderWrapper(original)
+    return function(...) return renderOverlayNoted(original, ...) end
+end
+
+local function wrapOverlayRender()
+    overlayRenderWrap = wrapFunctionOn(overlayRenderWrap, engine("Overlay"), "render", makeOverlayRenderWrapper)
+end
+
 local function wrapRodDraw(tool)
     local _, entry = fishingRodOf(tool)
     local class = entry ~= nil and specializationClass(tool, entry.useHandlerSpecialization) or nil
-    rodDrawWrap = wrapFunctionOn(rodDrawWrap, class, "onDraw", function(original)
-        return function(drawn, ...)
-            if pullsRodOverlaysIn(drawn) then return drawPulledIn(original, drawn, ...) end
-            return original(drawn, ...)
-        end
-    end)
-    overlayRenderWrap = wrapFunctionOn(overlayRenderWrap, engine("Overlay"), "render", function(original)
-        return function(...) return renderOverlayNoted(original, ...) end
-    end)
+    rodDrawWrap = wrapFunctionOn(rodDrawWrap, class, "onDraw", makeRodDrawWrapper)
+    if state.fishingRod.traceDraws then
+        wrapOverlayRender()
+    end
 end
 
 local function liftWrapOn(held, name)
@@ -1102,6 +1168,14 @@ local function barYaw(tool)
     return math.atan2(dx, dz)
 end
 
+local activeChainsawGameGetRotation = nil
+local activeChainsawYaw = nil
+
+local function chainsawCameraGetRotation(camSelf, ...)
+    local pitch, _, roll = activeChainsawGameGetRotation(camSelf, ...)
+    return pitch, activeChainsawYaw, roll
+end
+
 local function updateChainsawFromTheTool(original, tool, dt, ...)
     local spec = tool.spec_chainsaw
     local states = engine("ChainsawCutState")
@@ -1122,12 +1196,16 @@ local function updateChainsawFromTheTool(original, tool, dt, ...)
     if yaw ~= nil and type(camera) == "table" and type(camera.getRotation) == "function" then
         local own = rawget(camera, "getRotation")
         local gameGetRotation = camera.getRotation
-        camera.getRotation = function(self, ...)
-            local pitch, _, roll = gameGetRotation(self, ...)
-            return pitch, yaw, roll
+        local prevGetRot, prevYaw = activeChainsawGameGetRotation, activeChainsawYaw
+        if gameGetRotation ~= chainsawCameraGetRotation then
+            activeChainsawGameGetRotation, activeChainsawYaw = gameGetRotation, yaw
+            camera.getRotation = chainsawCameraGetRotation
+        else
+            activeChainsawYaw = yaw
         end
         local ok, err = pcall(original, tool, dt, ...)
         camera.getRotation = own
+        activeChainsawGameGetRotation, activeChainsawYaw = prevGetRot, prevYaw
         if not ok then error(err, 0) end
     else
         original(tool, dt, ...)
@@ -1167,22 +1245,24 @@ local function stopCutOutOfReach(tool)
     if math.sqrt(dx * dx + dy * dy + dz * dz) > reach then tool:stopCutting(false) end
 end
 
+local function hideOutOfReachChainsawTarget(tool)
+    local player = tool:getCarryingPlayer()
+    local targeter = type(player) == "table" and player.targeter or nil
+    local closestTargets = type(targeter) == "table" and targeter.closestTargetsByKey or nil
+    local chainsawClass = engine("HandToolChainsaw")
+    local closestTree = type(closestTargets) == "table" and chainsawClass ~= nil and closestTargets[chainsawClass] or nil
+    local limit = chainsawTargetLimit(tool)
+    local states = engine("ChainsawCutState")
+    local cutting = type(states) == "table" and tool.spec_chainsaw.currentCutState == states.CUTTING
+    if cutting then return nil end
+    if type(closestTree) ~= "table" or limit == nil or (tonumber(closestTree.distance) or 0) <= limit then return nil end
+    closestTargets[chainsawClass] = nil
+    return closestTargets, chainsawClass, closestTree
+end
+
 local function updateChainsawWithinReach(original, tool, ...)
     pcall(stopCutOutOfReach, tool)
-    local ok, targeterAnswers, chainsawType, hiddenTree = pcall(function()
-        local player = tool:getCarryingPlayer()
-        local targeter = type(player) == "table" and player.targeter or nil
-        local closestTargets = type(targeter) == "table" and targeter.closestTargetsByKey or nil
-        local chainsawClass = engine("HandToolChainsaw")
-        local closestTree = type(closestTargets) == "table" and chainsawClass ~= nil and closestTargets[chainsawClass] or nil
-        local limit = chainsawTargetLimit(tool)
-        local states = engine("ChainsawCutState")
-        local cutting = type(states) == "table" and tool.spec_chainsaw.currentCutState == states.CUTTING
-        if cutting then return nil end
-        if type(closestTree) ~= "table" or limit == nil or (tonumber(closestTree.distance) or 0) <= limit then return nil end
-        closestTargets[chainsawClass] = nil
-        return closestTargets, chainsawClass, closestTree
-    end)
+    local ok, targeterAnswers, chainsawType, hiddenTree = pcall(hideOutOfReachChainsawTarget, tool)
     if not ok or targeterAnswers == nil then return updateChainsawFromTheTool(original, tool, ...) end
     local done, result = pcall(updateChainsawFromTheTool, original, tool, ...)
     targeterAnswers[chainsawType] = hiddenTree
@@ -1209,8 +1289,14 @@ local function placeFlashlightBeam(tool)
     if spec == nil or spec.lightNode == nil or heldTool() ~= tool then return end
     local x, y, z, dx, dy, dz = VRCompanion:getHandToolRay()
     if x == nil then return end
+    local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length < 1e-6 then return end
+    local ux, uy, uz = 0, 1, 0
+    if math.abs(dy) > 0.99 * length then
+        uy, uz = 0, 1
+    end
     engine("setWorldTranslation")(spec.lightNode, x, y, z)
-    engine("setDirection")(spec.lightNode, dx, dy, dz, 0, 1, 0)
+    engine("setDirection")(spec.lightNode, dx, dy, dz, ux, uy, uz)
 end
 
 WRAP_SPECS.flashlightBeam.make = function(original)
@@ -1383,10 +1469,14 @@ end
 local function updateSprayCanFeedback(self)
     local feedback = state.sprayCan
     local tool = heldTool()
-    local hand = tool ~= nil and toolHandFor(self, tool) or nil
-    local spec = (hand ~= nil and supportedKind(tool) == "spraycan") and tool.spec_sprayCan or nil
-    if spec == nil then
+    if tool == nil or supportedKind(tool) ~= "spraycan" then
         feedback.tool, feedback.typeIndex, feedback.treeNode = nil, nil, nil
+        return
+    end
+    local hand = toolHandFor(self, tool)
+    local spec = hand ~= nil and tool.spec_sprayCan or nil
+    if spec == nil then
+        feedback.treeNode = nil
         return
     end
     if feedback.tool ~= tool then feedback.tool, feedback.typeIndex, feedback.treeNode = tool, nil, nil end
@@ -1516,7 +1606,7 @@ end
 
 local function describeLookRay(tool)
     local player = tool ~= nil and type(tool.getCarryingPlayer) == "function" and tool:getCarryingPlayer() or nil
-    player = player or (g_currentMission or _G.g_currentMission or {}).player
+    player = player or localPlayer()
     if player == nil or type(player.getLookRay) ~= "function" then return "look ray: unknown (no player)" end
     local ok, x, y, z = pcall(player.getLookRay, player)
     if not ok or type(x) ~= "number" then return "look ray: unknown (getLookRay failed)" end
@@ -1874,6 +1964,12 @@ function VRCompanion:getHandToolsDiagnostics()
 end
 
 function VRCompanion:consoleCommandHandToolsDiagnostics()
+    if fishingRodInTheHand(self) ~= nil then
+        state.fishingRod.traceDraws = true
+        if self.handToolsEnabled ~= false then
+            pcall(wrapOverlayRender)
+        end
+    end
     for _, field in ipairs(diagnosticFields(self)) do
         print("[FS25_VR] " .. field)
     end
@@ -1939,16 +2035,18 @@ function VRCompanion:consoleCommandHandToolOffset(kind, action, a, b, c)
     elseif action == "reset" then
         offsets[name] = copyOffset(DEFAULT_HANDLE_OFFSETS[name])
     elseif action == "nudge" then
-        local dx, dy, dz = tonumber(a), tonumber(b), tonumber(c)
-        if dx == nil or dy == nil or dz == nil or math.abs(dx) > MAX_NUDGE_METRES or math.abs(dy) > MAX_NUDGE_METRES
-            or math.abs(dz) > MAX_NUDGE_METRES then
+        local dx = VRCompanion.parseFiniteNumber(a, -MAX_NUDGE_METRES, MAX_NUDGE_METRES)
+        local dy = VRCompanion.parseFiniteNumber(b, -MAX_NUDGE_METRES, MAX_NUDGE_METRES)
+        local dz = VRCompanion.parseFiniteNumber(c, -MAX_NUDGE_METRES, MAX_NUDGE_METRES)
+        if dx == nil or dy == nil or dz == nil then
             return TUNING_USAGE
         end
         offset.position.x, offset.position.y, offset.position.z = offset.position.x + dx, offset.position.y + dy, offset.position.z + dz
     elseif action == "turn" then
-        local rx, ry, rz = tonumber(a), tonumber(b), tonumber(c)
-        if rx == nil or ry == nil or rz == nil or math.abs(rx) > MAX_TURN_DEGREES or math.abs(ry) > MAX_TURN_DEGREES
-            or math.abs(rz) > MAX_TURN_DEGREES then
+        local rx = VRCompanion.parseFiniteNumber(a, -MAX_TURN_DEGREES, MAX_TURN_DEGREES)
+        local ry = VRCompanion.parseFiniteNumber(b, -MAX_TURN_DEGREES, MAX_TURN_DEGREES)
+        local rz = VRCompanion.parseFiniteNumber(c, -MAX_TURN_DEGREES, MAX_TURN_DEGREES)
+        if rx == nil or ry == nil or rz == nil then
             return TUNING_USAGE
         end
         local turn = quaternionProduct(quaternionAbout("z", rz), quaternionProduct(quaternionAbout("y", ry), quaternionAbout("x", rx)))
@@ -1980,6 +2078,13 @@ function VRCompanion:resetHandTools()
     liftRodEventWraps()
     liftRodDrawWrap()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
+    rodOverlayCache = setmetatable({}, { __mode = "k" })
+    table.clear(rodScanSeen)
+    table.clear(moveTables)
+    table.clear(moveKeys)
+    table.clear(moveWas)
+    table.clear(moveBy)
+    moveCount = 0
     state = newState()
 end
 
@@ -1993,6 +2098,11 @@ VRCompanion:registerSubsystem("handTools", {
     mapUnload = function(self) self:resetHandTools() end,
     saveSettings = function(self, xmlFile, xml) self:saveHandToolsSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadHandToolsSetting(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.handToolsEnabled = self.DEFAULT_HAND_TOOLS_ENABLED
+        self.toolHand = nil
+        self.chainsawReach = nil
+    end,
     consoleCommands = {
         { name = "vrHandToolOffset", description = "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", method = "consoleCommandHandToolOffset" },
         { name = "vrHandTools", description = "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", method = "consoleCommandSetHandTools" },

@@ -303,6 +303,8 @@ test("PrintingAndRejectedConsoleInputSaveNothing", function()
     VRCompanion:consoleCommandSeatOffset()
     VRCompanion:consoleCommandSeatOffset("nonsense")
     VRCompanion:consoleCommandSeatOffset("a", "b", "c")
+    VRCompanion:consoleCommandSeatOffset("nan", "0", "0")
+    VRCompanion:consoleCommandSeatOffset("0", "inf", "0")
     _G.g_currentMission = { controlledVehicle = nil }
     VRCompanion:consoleCommandSeatOffset("0.1", "0.1", "0.1")
     local saves = saveCount - before

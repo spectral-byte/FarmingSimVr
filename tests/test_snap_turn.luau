@@ -122,8 +122,9 @@ test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
         string.format("headTrackingNode yaw must equal +pi/2, got %f", headRotR.ry))
     assert(math.abs(headRotR.rx) < 0.0001 and math.abs(headRotR.rz) < 0.0001, "Pitch and roll must remain 0")
 
-    assert(VRCompanion.vehicleRotationStates[veh] ~= nil, "Vehicle rotation state must exist")
-    assert(math.abs(VRCompanion.vehicleRotationStates[veh].rotY - (math.pi * 0.5)) < 0.0001,
+    local savedState = VRCompanion:getVehicleRotationState(veh, testCam)
+    assert(savedState ~= nil, "Vehicle rotation state must exist")
+    assert(math.abs(savedState.rotY - (math.pi * 0.5)) < 0.0001,
         "Vehicle rotation state must track snapped rotY")
 
     local okL, newRotL = VRCompanion:snapTurnLeft(nil, 1300)
@@ -1132,7 +1133,7 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     end
 
     VRCompanion:loadConfiguration("mockSettings.xml")
-    assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
+    assert(math.abs(VRCompanion:getSnapTurnAngle() - VRCompanion.DEFAULT_SNAP_TURN_ANGLE) < 0.0001,
         "modDesc.vrSettings.snapTurnAngle must not be read as a settings key")
 
     _G.getUserProfileAppPath = nil
@@ -1212,6 +1213,12 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     local inv4 = VRCompanion:consoleCommandSetSnapTurnAngle("400")
     assert(string.find(inv4, "Usage:") ~= nil, "Angle > 360 must return usage error")
     assert(VRCompanion:getSnapTurnAngle() == prevAngle, "Angle must not change on > 360")
+
+    for _, bad in ipairs({ "nan", "inf", "-inf" }) do
+        local invNonFinite = VRCompanion:consoleCommandSetSnapTurnAngle(bad)
+        assert(string.find(invNonFinite, "Usage:") ~= nil, bad .. " must return usage error")
+        assert(VRCompanion:getSnapTurnAngle() == prevAngle, "Angle must not change on " .. bad)
+    end
 
     _G.getUserProfileAppPath = nil
     _G.createFolder = nil

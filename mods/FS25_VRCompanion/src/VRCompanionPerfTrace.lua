@@ -36,7 +36,7 @@ end
 function VRCompanion:consoleCommandPerfTrace(arg)
     local b = bridge()
     if b == nil then
-        return "vrPerfTrace needs the Injector (dxgi.dll), which is not loaded"
+        return "vrPerfTrace needs the Injector (version.dll), which is not loaded"
     end
     if arg ~= nil and string.lower(tostring(arg)) == "stop" then
         if not self.perfTracing then return "No frame timing trace is running" end
@@ -46,16 +46,16 @@ function VRCompanion:consoleCommandPerfTrace(arg)
     end
     local seconds = self.PERF_TRACE_DEFAULT_SECONDS
     if arg ~= nil and arg ~= "" then
-        seconds = tonumber(arg)
-        if seconds == nil or seconds < 1 or seconds > self.PERF_TRACE_MAX_SECONDS then
+        seconds = VRCompanion.parseFiniteNumber(arg, 1, self.PERF_TRACE_MAX_SECONDS)
+        if seconds == nil then
             return USAGE
         end
         seconds = math.floor(seconds)
     end
     b.startPerfTrace(seconds)
     self.perfTracing = true
-    print(string.format("[FS25_VR] Frame timing trace started for %d s; results go to fs25_vr.log next to dxgi.dll.", seconds))
-    return string.format("Tracing frame timing for %d s into fs25_vr.log (next to the game's dxgi.dll)", seconds)
+    print(string.format("[FS25_VR] Frame timing trace started for %d s; results go to fs25_vr.log next to version.dll.", seconds))
+    return string.format("Tracing frame timing for %d s into fs25_vr.log (next to the game's version.dll)", seconds)
 end
 
 VRCompanion:registerSubsystem("perfTrace", {

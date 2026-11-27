@@ -1335,7 +1335,7 @@ test("VrHudGroupAppliesSavesAndConfirmsOnScreen", function()
     assert(near(saved.store["vrSettings.hudGroupMapMarginHorizontal"], 0.12), "saved horizontal margin")
     assert(near(saved.store["vrSettings.hudGroupMapMarginVertical"], 0.34), "saved vertical margin")
     assert(near(saved.store["vrSettings.hudGroupMapScale"], 0.70), "saved scale")
-    assert(#warnings == 1 and string.find(warnings[1], "map", 1, true) and string.find(warnings[1], "Saved", 1, true),
+    assert(#warnings == 1 and string.find(warnings[1], "Map", 1, true) and string.find(warnings[1], "Saved", 1, true),
         "shows an on-screen confirmation")
     assert(string.find(result, "map", 1, true) and not string.find(result, "Usage", 1, true), "console reply confirms the change")
 
@@ -1703,6 +1703,346 @@ test("TwoDFloatingWindowModeDrawsTheGroupsAtTheirOwnSizeWhateverTheHudDepth", fu
         VRCompanion.is2DViewActive = false
         assert(near(scale, 0.82), "2D Floating Window Mode ignores the HUD depth, got " .. scale)
     end)
+end)
+
+test("MapDrawShiftReadsSafeFrameOffsetsDynamically", function()
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.01, 0.01
+    _G.IngameMap = { draw = function() end, getIsVisible = function() return true end }
+    local hud = makeHud()
+    hud.ingameMap = _G.IngameMap
+    loadMapWith(hud)
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    VRCompanion:setHudGroupLayout("map", 0.20, 0.25)
+    VRCompanion.currentConvergenceOffset = 0.0
+
+    local dx1, dy1 = VRCompanion:getMapDrawShift()
+    assert(near(dx1, 0.20 - 0.01) and near(dy1, 0.25 - 0.01), "uses initial safe frame offsets")
+
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.05, 0.04
+    local dx2, dy2 = VRCompanion:getMapDrawShift()
+    assert(near(dx2, 0.20 - 0.05) and near(dy2, 0.25 - 0.04), "reads updated g_safeFrameOffsetX/Y dynamically")
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+    _G.IngameMap = nil
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil
+end)
+
+test("FiniteNumberValidatorAndConsoleCommandsRejectNaNInfinityAndBadTokens", function()
+    assert(type(VRCompanion.isFiniteNumber) == "function", "isFiniteNumber must be defined")
+    assert(type(VRCompanion.parseFiniteNumber) == "function", "parseFiniteNumber must be defined")
+    assert(VRCompanion.isFiniteNumber(0) == true and VRCompanion.isFiniteNumber(-1.5) == true)
+    assert(VRCompanion.isFiniteNumber(0 / 0) == false, "NaN is not finite")
+    assert(VRCompanion.isFiniteNumber(math.huge) == false, "inf is not finite")
+    assert(VRCompanion.isFiniteNumber(-math.huge) == false, "-inf is not finite")
+    assert(VRCompanion.isFiniteNumber("1") == false, "strings are not finite numbers")
+    assert(VRCompanion.parseFiniteNumber("nan") == nil)
+    assert(VRCompanion.parseFiniteNumber("inf") == nil)
+    assert(VRCompanion.parseFiniteNumber("-inf") == nil)
+    assert(VRCompanion.parseFiniteNumber("1.5", 0, 2, true) == nil, "non-integer rejected when integerOnly")
+    assert(VRCompanion.parseFiniteNumber("2", 0, 2, true) == 2)
+    assert(VRCompanion:clamp(0 / 0, 1.0, 5.0) == 1.0, "clamp rejects NaN to minVal")
+    assert(VRCompanion:clamp(math.huge, 1.0, 5.0) == 1.0, "clamp rejects +inf to minVal")
+    assert(VRCompanion:clamp(-math.huge, 1.0, 5.0) == 1.0, "clamp rejects -inf to minVal")
+
+    local savedArea = VRCompanion:getHudSafeArea()
+    for _, bad in ipairs({ "nan", "inf", "-inf" }) do
+        local safeReply = VRCompanion:consoleCommandSetHudSafeArea(bad, "0.2")
+        assert(string.find(safeReply, "Usage:", 1, true) ~= nil, "vrHudSafeArea " .. bad)
+        local groupReply = VRCompanion:consoleCommandSetHudGroup("map", bad, "0.2")
+        assert(string.find(groupReply, "Usage:", 1, true) ~= nil, "vrHudGroup " .. bad)
+        local groupScaleReply = VRCompanion:consoleCommandSetHudGroup("map", "0.2", "0.2", bad)
+        assert(string.find(groupScaleReply, "Usage:", 1, true) ~= nil, "vrHudGroup scale " .. bad)
+        local depthReply = VRCompanion:consoleCommandSetHudDepth(bad)
+        assert(string.find(depthReply, "Usage:", 1, true) ~= nil, "vrHudDepth " .. bad)
+        local hudTraceReply = VRCompanion:consoleCommandHudTrace(bad)
+        assert(string.find(hudTraceReply, "Usage:", 1, true) ~= nil, "vrHudTrace " .. bad)
+    end
+    assert(string.find(VRCompanion:consoleCommandHudTrace("1.5"), "Usage:", 1, true) ~= nil, "vrHudTrace rejects float")
+    assert(near(VRCompanion:getHudSafeArea().horizontal, savedArea.horizontal), "rejected safe area leaves value intact")
+
+    VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
+    for _, bad in ipairs({ "nan", "inf", "-inf", "1.5", "-1", "3", "abc" }) do
+        local reply = VRCompanion:consoleCommandSetHudState(bad)
+        assert(string.find(reply, "Usage:", 1, true) ~= nil, "vrHudState " .. bad .. ": " .. tostring(reply))
+    end
+    assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_FULL, "rejected vrHudState keeps current state")
+
+    local saved = installSaveMocks()
+    VRCompanion.showHudLoadNotification = true
+    for _, bad in ipairs({ "maybe", "abc", "2", "nan" }) do
+        local reply = VRCompanion:consoleCommandSetHudLoadNotification(bad)
+        assert(string.find(reply, "Usage:", 1, true) ~= nil, "vrHudLoadNotification " .. bad .. ": " .. tostring(reply))
+    end
+    assert(VRCompanion.showHudLoadNotification == true, "invalid token must not flip showHudLoadNotification to false")
+    assert(saved.count == 0, "invalid vrHudLoadNotification must not save")
+    removeSaveMocks()
+
+    local dlssCalls = {}
+    local savedBridge = _G.VRBridge
+    _G.VRBridge = {
+        setDlssMvScale = function(x, y) table.insert(dlssCalls, "mv:" .. x .. "," .. y) end,
+        setDlssSharpness = function(s) table.insert(dlssCalls, "sharp:" .. s) end,
+        setDlssPreset = function(p) table.insert(dlssCalls, "preset:" .. p) end,
+        setDlssSdpMvScale = function(x, y) table.insert(dlssCalls, "sdp:" .. x .. "," .. y) end,
+        setDlssNearClip = function(m) table.insert(dlssCalls, "near:" .. m); return true end,
+        dlssDiag = function(c) table.insert(dlssCalls, "diag:" .. c); return true end,
+    }
+    for _, bad in ipairs({ "nan", "inf", "-inf", "abc" }) do
+        assert(string.find(VRCompanion:consoleCommandSetDlssMvScale(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetDlssMvScale("1.0", bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetDlssSharpness(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetDlssPreset(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetDlssSdpMvScale(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetDlssSdpMvScale("1.0", bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandDlssNearClipCab(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandDlssDiag(bad), "Usage:", 1, true) ~= nil)
+    end
+    assert(string.find(VRCompanion:consoleCommandSetDlssSharpness("-0.1"), "Usage:", 1, true) ~= nil)
+    assert(string.find(VRCompanion:consoleCommandSetDlssSharpness("1.5"), "Usage:", 1, true) ~= nil)
+    assert(string.find(VRCompanion:consoleCommandSetDlssPreset("1.5"), "Usage:", 1, true) ~= nil)
+    assert(string.find(VRCompanion:consoleCommandSetDlssPreset("-1"), "Usage:", 1, true) ~= nil)
+    assert(string.find(VRCompanion:consoleCommandDlssDiag("0"), "Usage:", 1, true) ~= nil)
+    assert(string.find(VRCompanion:consoleCommandDlssDiag("2.5"), "Usage:", 1, true) ~= nil)
+    assert(#dlssCalls == 0, "invalid DLSS args must not reach VRBridge: " .. table.concat(dlssCalls, ","))
+
+    for _, bad in ipairs({ "nan", "inf", "-inf", "abc", "0", "-1", "1.5" }) do
+        assert(string.find(VRCompanion:consoleCommandVirtualHandsTrace(bad), "Usage:", 1, true) ~= nil, "vrVirtualHandsTrace " .. bad)
+    end
+    for _, bad in ipairs({ "nan", "inf", "-inf", "abc" }) do
+        assert(string.find(VRCompanion:consoleCommandHandToolOffset("flashlight", "nudge", bad, "0", "0"), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandHandToolOffset("flashlight", "turn", "0", bad, "0"), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetChainsawReach(bad), "Usage:", 1, true) ~= nil)
+        assert(string.find(VRCompanion:consoleCommandSetPointerCone(bad), "Usage:", 1, true) ~= nil)
+    end
+
+    _G.VRBridge = savedBridge
+    VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
+    VRCompanion.persistedHudState = VRCompanion.DEFAULT_HUD_STATE
+end)
+
+test("LoadConfigurationResetsAllScalarAndSubsystemSettingsBeforeReadingXml", function()
+    VRCompanion.showHudLoadNotification = true
+    VRCompanion.recenterVrTrackingSpace = false
+    VRCompanion.snapTurnAngle = math.rad(30)
+    VRCompanion.hudConvergenceDepth = 4.2
+    VRCompanion.dlssNearClipCab = 0.5
+    VRCompanion.dlssNearClipOutside = 0.7
+    VRCompanion.dlssNearClipOnFoot = 0.9
+    VRCompanion.desktopMirror = false
+    VRCompanion.fovOverscan = 15
+    VRCompanion.menuDistance = 3.5
+    VRCompanion.mouseConfinement = false
+    VRCompanion.fishCatchAnswer = "sell"
+    VRCompanion.stereoDialogDepth = 4.0
+    VRCompanion.motionControllersEnabled = false
+    VRCompanion.pointerConeDegrees = 12
+    VRCompanion.wheelGrabEnabled = false
+    VRCompanion.virtualGamepadEnabled = false
+    VRCompanion.virtualGamepadDefaultsWritten = true
+    VRCompanion.virtualGamepadRecenterMigrated = true
+    VRCompanion.handToolsEnabled = false
+    VRCompanion.toolHand = VRCompanion.MOTION_HAND_LEFT
+    VRCompanion.chainsawReach = 0.2
+    VRCompanion.objectGrabEnabled = false
+    VRCompanion.seatOffsets = { ["data/tractor.xml"] = { [1] = { forward = 0.2, up = 0.1, right = -0.1 } } }
+
+    local store = {
+        ["vrSettings.hudSafeAreaHorizontal"] = 0 / 0,
+        ["vrSettings.hudGroupMapMarginHorizontal"] = math.huge,
+        ["vrSettings.hudConvergenceDepth"] = -math.huge,
+        ["vrSettings.snapTurnAngle"] = 0 / 0,
+        ["vrSettings.dlssNearClipCab"] = math.huge,
+    }
+    withMockedSettingsFile(store, function()
+        VRCompanion:loadConfiguration("settings.xml")
+    end)
+
+    assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION)
+    assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE)
+    assert(near(VRCompanion.snapTurnAngle, VRCompanion.DEFAULT_SNAP_TURN_ANGLE))
+    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_HUD_DEPTH)
+    assert(near(VRCompanion:getHudSafeArea().horizontal, VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL))
+    assert(near(VRCompanion:getHudGroupLayout("map").marginX, VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS.map.marginX))
+    assert(VRCompanion.dlssNearClipCab == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB)
+    assert(VRCompanion.dlssNearClipOutside == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE)
+    assert(VRCompanion.dlssNearClipOnFoot == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT)
+    assert(VRCompanion.desktopMirror == VRCompanion.DEFAULT_DESKTOP_MIRROR)
+    assert(VRCompanion.fovOverscan == VRCompanion.DEFAULT_FOV_OVERSCAN)
+    assert(VRCompanion.menuDistance == VRCompanion.DEFAULT_MENU_DISTANCE)
+    assert(VRCompanion.mouseConfinement == VRCompanion.DEFAULT_MOUSE_CONFINEMENT)
+    assert(VRCompanion.fishCatchAnswer == VRCompanion.DEFAULT_FISH_CATCH_ANSWER)
+    assert(VRCompanion.stereoDialogDepth == VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH)
+    assert(VRCompanion.motionControllersEnabled == VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED)
+    assert(VRCompanion.pointerConeDegrees == VRCompanion.DEFAULT_POINTER_CONE_DEGREES)
+    assert(VRCompanion.wheelGrabEnabled == VRCompanion.DEFAULT_WHEEL_GRAB_ENABLED)
+    assert(VRCompanion.virtualGamepadEnabled == VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED)
+    assert(VRCompanion.virtualGamepadDefaultsWritten == VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN)
+    assert(VRCompanion.virtualGamepadRecenterMigrated == VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_RECENTER_MIGRATED)
+    assert(VRCompanion.handToolsEnabled == VRCompanion.DEFAULT_HAND_TOOLS_ENABLED)
+    assert(VRCompanion:getToolHand() == VRCompanion.MOTION_HAND_RIGHT)
+    assert(VRCompanion.chainsawReach == nil)
+    assert(VRCompanion.objectGrabEnabled == VRCompanion.DEFAULT_OBJECT_GRAB_ENABLED)
+    assert(next(VRCompanion.seatOffsets) == nil)
+
+    VRCompanion.showHudLoadNotification = true
+    VRCompanion.desktopMirror = false
+    withMockedSettingsFile({}, function()
+        _G.loadXMLFile = function() return 0 end
+        VRCompanion:loadConfiguration("missing.xml")
+    end)
+    assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION)
+    assert(VRCompanion.desktopMirror == VRCompanion.DEFAULT_DESKTOP_MIRROR)
+    resetHudSettings()
+end)
+
+test("SaveConfigurationReportsFailureAndDoesNotLogSuccessWhenXmlWriteFails", function()
+    local printed = {}
+    local origPrint = _G.print
+    _G.print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
+        table.insert(printed, table.concat(parts, "\t"))
+    end
+    local function runSaveWith(createFn, saveFn)
+        printed = {}
+        local deleted = false
+        _G.getUserProfileAppPath = function() return "C:/Users/test/" end
+        _G.createFolder = function() end
+        _G.createXMLFile = createFn
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.setXMLInt = function() end
+        _G.saveXMLFile = saveFn
+        _G.delete = function() deleted = true end
+        local ok, result = pcall(VRCompanion.saveConfiguration, VRCompanion, "settings.xml")
+        for _, name in ipairs({ "getUserProfileAppPath", "createFolder", "createXMLFile", "setXMLFloat", "setXMLBool",
+                "setXMLString", "setXMLInt", "saveXMLFile", "delete" }) do
+            _G[name] = nil
+        end
+        assert(ok, tostring(result))
+        return result, deleted, table.concat(printed, "\n")
+    end
+
+    local resFalse, delFalse, logFalse = runSaveWith(function() return 10 end, function() return false end)
+    _G.print = origPrint
+    assert(resFalse == false, "saveXMLFile returning false must return false")
+    assert(delFalse == true, "XML handle must still be deleted on save failure")
+    assert(string.find(logFalse, "Saved VR HUD configuration", 1, true) == nil, "must not log success: " .. logFalse)
+    assert(string.find(logFalse, "Failed to save", 1, true) ~= nil, "must log failure: " .. logFalse)
+
+    _G.print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
+        table.insert(printed, table.concat(parts, "\t"))
+    end
+    local resRaise, delRaise, logRaise = runSaveWith(function() return 10 end, function() error("disk full") end)
+    local resBadHandle, _, logBadHandle = runSaveWith(function() return 0 end, function() return true end)
+    _G.print = origPrint
+    assert(resRaise == false and delRaise == true, "saveXMLFile throwing must return false and delete handle")
+    assert(string.find(logRaise, "Saved VR HUD configuration", 1, true) == nil)
+    assert(string.find(logRaise, "disk full", 1, true) ~= nil, "must include error reason: " .. logRaise)
+    assert(resBadHandle == false, "createXMLFile returning 0 must return false")
+    assert(string.find(logBadHandle, "Failed to create", 1, true) ~= nil)
+end)
+
+test("RestoreHudSafeAreaRestoresFillLevelsScaleBeforeStoreAndClearsVrUiScale", function()
+    _G.GameSettings = { SETTING = { UI_SCALE = "uiScale" } }
+    _G.g_gameSettings = { getValue = function() return 1.20 end }
+    local calls = {}
+    local function makeTracked(name)
+        return {
+            width = 0.12,
+            height = 0.04,
+            scale = 1.20,
+            setPosition = function(self, x, y) self.position = { x = x, y = y } end,
+            setScale = function(self, s)
+                self.scale = s
+                table.insert(calls, name .. ":setScale:" .. string.format("%.2f", s))
+            end,
+            storeScaledValues = function(self)
+                table.insert(calls, name .. ":storeScaledValues:" .. string.format("%.2f", self.scale))
+            end,
+            reposition = function(self)
+                self.repositioned = true
+                table.insert(calls, name .. ":reposition")
+            end,
+        }
+    end
+    local hud = {
+        speedMeter = makeTracked("speedMeter"),
+        fillLevels = makeTracked("fillLevels"),
+        inputHelp = makeTracked("inputHelp"),
+        gameInfo = makeTracked("gameInfo"),
+        contextAction = makeTracked("contextAction"),
+        ingameMap = makeTracked("ingameMap"),
+    }
+    loadMapWith(hud)
+    assert(hud.fillLevels.vrUiScale ~= nil, "fillLevels has vrUiScale in VR")
+
+    calls = {}
+    VRCompanion:set2DViewActive(true)
+    assert(hud.fillLevels.vrUiScale == nil, "2D mode clears fillLevels.vrUiScale")
+    assert(near(hud.fillLevels.scale, 1.20), "2D mode restores fillLevels scale to base 1.20")
+    assert(hud.fillLevels.repositioned == true, "2D mode repositions fillLevels")
+
+    local function indexOf(needle)
+        for i, entry in ipairs(calls) do
+            if entry == needle then return i end
+        end
+        return nil
+    end
+    for _, name in ipairs({ "speedMeter", "fillLevels", "inputHelp", "gameInfo", "contextAction", "ingameMap" }) do
+        local setIdx = indexOf(name .. ":setScale:1.20")
+        local storeIdx = indexOf(name .. ":storeScaledValues:1.20")
+        local repoIdx = indexOf(name .. ":reposition")
+        assert(setIdx ~= nil and storeIdx ~= nil and repoIdx ~= nil, name .. " missing restore calls")
+        assert(setIdx < storeIdx and storeIdx < repoIdx, name .. " must call setScale before storeScaledValues before reposition")
+    end
+
+    VRCompanion:set2DViewActive(false)
+    assert(hud.fillLevels.vrUiScale ~= nil, "returning to VR re-applies fillLevels.vrUiScale")
+    unloadMap()
+    assert(hud.fillLevels.vrUiScale == nil, "map unload clears fillLevels.vrUiScale")
+    assert(near(hud.fillLevels.scale, 1.20), "map unload restores fillLevels scale")
+    _G.GameSettings = nil
+    _G.g_gameSettings = nil
+end)
+
+test("FillLevelsSetsScaleBeforeMeasuringPositionAndDeduplicatesSameFrameDraw", function()
+    local setPosCalls = 0
+    local hud = makeStackHud(1)
+    hud.fillLevels.getWidth = function(self) return 0.16 * (self.scale or 1.0) end
+    hud.fillLevels.getHeight = function(self) return 0.06 * (self.scale or 1.0) end
+    hud.fillLevels.setScale = function(self, s) self.scale = s end
+    hud.fillLevels.scale = 1.0
+    local origSetPos = hud.fillLevels.setPosition
+    hud.fillLevels.setPosition = function(self, x, y)
+        setPosCalls = setPosCalls + 1
+        return origSetPos(self, x, y)
+    end
+    _G.FillLevelsDisplay = { draw = function() end }
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(near(hud.fillLevels.position.x, 0.65 - 0.16 * 0.50),
+        "FillLevels position must use width measured after setScale, got " .. tostring(hud.fillLevels.position.x))
+
+    VRCompanion:update(16)
+    local callsAfterUpdate = setPosCalls
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(setPosCalls == callsAfterUpdate, "same-frame draw after updateHudConvergence skips redundant repositioning")
+
+    hud.fillLevels.fillLevelData = { {}, {} }
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(setPosCalls == callsAfterUpdate + 1, "changing fillLevelData in draw triggers restack")
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+    _G.FillLevelsDisplay = nil
+    VRCompanion.activeFillLevelsDisplay = nil
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

@@ -19,7 +19,68 @@ if VRCompanion.snapTurnDebounceMs == nil then
     VRCompanion.snapTurnDebounceMs = VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS
 end
 VRCompanion.lastSnapTurnTime = nil
-VRCompanion.vehicleRotationStates = VRCompanion.vehicleRotationStates or {}
+local WEAK_KEYS_MT = { __mode = "k" }
+VRCompanion.vehicleRotationStates = setmetatable(VRCompanion.vehicleRotationStates or {}, WEAK_KEYS_MT)
+
+local function ensureVehicleRotationStates(self)
+    if self.vehicleRotationStates == nil then
+        self.vehicleRotationStates = setmetatable({}, WEAK_KEYS_MT)
+    elseif getmetatable(self.vehicleRotationStates) == nil then
+        setmetatable(self.vehicleRotationStates, WEAK_KEYS_MT)
+    end
+    return self.vehicleRotationStates
+end
+
+function VRCompanion:getVehicleCameraRotationKey(veh, cam, camIndex)
+    if camIndex ~= nil then
+        return camIndex
+    end
+    local enterable = type(veh) == "table" and veh.spec_enterable or nil
+    if enterable ~= nil then
+        if type(enterable.cameras) == "table" and cam ~= nil then
+            local activeIdx = enterable.camIndex
+            if activeIdx ~= nil and enterable.cameras[activeIdx] == cam then
+                return activeIdx
+            end
+            for index, candidate in ipairs(enterable.cameras) do
+                if candidate == cam or (cam.cameraNode ~= nil and candidate.cameraNode == cam.cameraNode) then
+                    return index
+                end
+            end
+        end
+        if enterable.camIndex ~= nil then
+            return enterable.camIndex
+        end
+    end
+    return (type(cam) == "table" and cam.cameraNode) or 1
+end
+
+function VRCompanion:getVehicleRotationState(veh, cam, camIndex)
+    if veh == nil or self.vehicleRotationStates == nil then return nil end
+    local perVehicle = self.vehicleRotationStates[veh]
+    if perVehicle == nil then return nil end
+    local key = self:getVehicleCameraRotationKey(veh, cam, camIndex)
+    return perVehicle[key]
+end
+
+function VRCompanion:setVehicleRotationState(veh, cam, state, camIndex)
+    if veh == nil then return end
+    local states = ensureVehicleRotationStates(self)
+    local perVehicle = states[veh]
+    if perVehicle == nil then
+        perVehicle = {}
+        states[veh] = perVehicle
+    end
+    local key = self:getVehicleCameraRotationKey(veh, cam, camIndex)
+    perVehicle[key] = state
+end
+
+function VRCompanion:updateVehicleRotationState(veh, cam, rotY, rotX, camIndex)
+    local saved = self:getVehicleRotationState(veh, cam, camIndex)
+    if saved == nil then return end
+    if rotY ~= nil then saved.rotY = rotY end
+    if rotX ~= nil then saved.rotX = rotX end
+end
 
 function VRCompanion:getRecenterMode()
     if self.recenterVrTrackingSpace == false then
@@ -61,7 +122,7 @@ function VRCompanion:getSnapTurnAngle()
 end
 
 function VRCompanion:setSnapTurnAngle(angle, inDegrees, saveConfig)
-    if type(angle) == "number" and angle > 0 then
+    if VRCompanion.isFiniteNumber(angle) and angle > 0 then
         if inDegrees == true then
             self.snapTurnAngle = math.rad(angle)
         elseif inDegrees == false then
@@ -175,16 +236,14 @@ function VRCompanion:recordOutsideCameraDefaults(cam)
     end
 end
 
-function VRCompanion:saveVehicleRotationState(veh)
+function VRCompanion:saveVehicleRotationState(veh, camOverride, camIndex)
     if veh == nil then return end
-    if self.vehicleRotationStates == nil then
-        self.vehicleRotationStates = {}
-    end
+    ensureVehicleRotationStates(self)
 
-    local cam = self:getVehicleActiveCamera(veh)
+    local cam = camOverride or self:getVehicleActiveCamera(veh)
     if cam ~= nil and cam.isInside then
         self:initVehicleCameraState(veh, cam)
-        self.vehicleRotationStates[veh] = {
+        self:setVehicleRotationState(veh, cam, {
             rotY = cam.rotY,
             rotX = cam.rotX,
             origRotY = cam.origRotY,
@@ -192,17 +251,15 @@ function VRCompanion:saveVehicleRotationState(veh)
             origHeadTrackingRotX = cam.origHeadTrackingRotX,
             origHeadTrackingRotY = cam.origHeadTrackingRotY,
             origHeadTrackingRotZ = cam.origHeadTrackingRotZ,
-        }
+        }, camIndex)
     end
 end
 
-function VRCompanion:restoreVehicleRotationState(veh)
+function VRCompanion:restoreVehicleRotationState(veh, camOverride, camIndex)
     if veh == nil then return end
-    if self.vehicleRotationStates == nil then
-        self.vehicleRotationStates = {}
-    end
+    ensureVehicleRotationStates(self)
 
-    local cam = self:getVehicleActiveCamera(veh)
+    local cam = camOverride or self:getVehicleActiveCamera(veh)
     if cam == nil then return end
     if not cam.isInside then
         self:recordOutsideCameraDefaults(cam)
@@ -211,7 +268,7 @@ function VRCompanion:restoreVehicleRotationState(veh)
 
     self:initVehicleCameraState(veh, cam)
 
-    local saved = self.vehicleRotationStates[veh]
+    local saved = self:getVehicleRotationState(veh, cam, camIndex)
     if saved ~= nil then
         if saved.origRotY ~= nil then cam.origRotY = saved.origRotY end
         if saved.origRotX ~= nil then cam.origRotX = saved.origRotX end
@@ -224,7 +281,7 @@ function VRCompanion:restoreVehicleRotationState(veh)
         if cam.origRotY ~= nil and cam.rotY == nil then
             cam.rotY = cam.origRotY
         end
-        self:saveVehicleRotationState(veh)
+        self:saveVehicleRotationState(veh, cam, camIndex)
     end
 end
 
@@ -267,6 +324,7 @@ function VRCompanion:onEnterVehicle(veh, isControlling, player)
     end
 
     self.lastControlledVehicle = veh
+    self.outsideCameraHeading = nil
     self:restoreVehicleRotationState(veh)
     self:resetSnapTurnDebounce()
     self:resetToggleViewDebounce()
@@ -288,6 +346,7 @@ function VRCompanion:onLeaveVehicle(veh)
     end
 
     self.lastControlledVehicle = nil
+    self.outsideCameraHeading = nil
     self:resetSnapTurnDebounce()
     self:resetToggleViewDebounce()
     self:registerActionEvents(true)
@@ -310,6 +369,7 @@ function VRCompanion:onVehicleTransition(oldVeh, newVeh)
     end
 
     self.lastControlledVehicle = newVeh
+    self.outsideCameraHeading = nil
     self:resetSnapTurnDebounce()
     self:resetToggleViewDebounce()
     self:registerActionEvents(true)
@@ -320,18 +380,12 @@ function VRCompanion:onVehicleCameraChanged(veh, camIndex)
     if veh ~= nil then
         if veh == self:getControlledVehicle() then
             self:signalDiscontinuityFlush()
+            self.outsideCameraHeading = nil
         end
 
         local cam = self:getVehicleActiveCamera(veh)
-        if cam ~= nil and cam.isInside then
-            self:initVehicleCameraState(veh, cam)
-            local saved = self.vehicleRotationStates and self.vehicleRotationStates[veh]
-            if saved ~= nil and saved.rotY ~= nil then
-                cam.rotY = saved.rotY
-                if saved.rotX ~= nil then cam.rotX = saved.rotX end
-            end
-        elseif cam ~= nil then
-            self:recordOutsideCameraDefaults(cam)
+        if cam ~= nil then
+            self:restoreVehicleRotationState(veh, cam, camIndex)
         end
     end
 end
@@ -425,8 +479,8 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
         vehCam.rotY = self:normalizeAngle(currentRotY + delta)
 
         local curVehicle = self:getControlledVehicle()
-        if curVehicle ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVehicle] ~= nil then
-            self.vehicleRotationStates[curVehicle].rotY = vehCam.rotY
+        if curVehicle ~= nil then
+            self:updateVehicleRotationState(curVehicle, vehCam, vehCam.rotY, nil)
         end
 
         self:updateVehicleCameraTrackingNode(vehCam)
@@ -503,7 +557,7 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, def
     rest.yaw = targetHeadRotY
     rest.qx, rest.qy, rest.qz, rest.qw = nil, nil, nil, nil
 
-    if cam.headTrackingNode ~= nil and camParent ~= 0 then
+    if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 and camParent ~= 0 then
         rest.node = cam.headTrackingNode
         rest.x, rest.y, rest.z = 0, 0, 0
         if type(localToLocalFn) == "function" then
@@ -553,9 +607,8 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
     end
 
     local curVehicle = self:getControlledVehicle()
-    if curVehicle ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVehicle] ~= nil then
-        self.vehicleRotationStates[curVehicle].rotY = cam.rotY
-        self.vehicleRotationStates[curVehicle].rotX = cam.rotX
+    if curVehicle ~= nil then
+        self:updateVehicleRotationState(curVehicle, cam, cam.rotY, cam.rotX)
     end
 
     local getParentFn = getParent or (_G and _G.getParent)
@@ -626,7 +679,7 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
     local finalTx, finalTy, finalTz = 0, 0, 0
     local finalQx, finalQy, finalQz, finalQw = nil, nil, nil, nil
 
-    if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
+    if cam.vrHeadTrackingNode ~= nil and cam.vrHeadTrackingNode ~= 0 and camParent ~= 0 then
         if type(localToLocal) == "function" then
             finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, 0, 0, 0)
         end
@@ -701,17 +754,15 @@ function VRCompanion:recenterView(alwaysRecenterTracking)
                 vehCam.rotY = vehCam.origRotY
             end
             local curVehicle = self:getControlledVehicle()
-            if curVehicle ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVehicle] ~= nil then
-                self.vehicleRotationStates[curVehicle].rotY = vehCam.rotY
+            if curVehicle ~= nil then
+                self:updateVehicleRotationState(curVehicle, vehCam, vehCam.rotY, nil)
             end
             self:updateVehicleCameraTrackingNode(vehCam)
             print("[FS25_VR] VehicleOnly mode: Cockpit vehicle camera look yaw reset to origRotY.")
         end
     elseif vehCam and vehCam.isRotatable then
         self:resetOutsideCameraOrbit(vehCam)
-    end
-
-    if recenterTracking then
+    elseif vehCam == nil and recenterTracking then
         local playerCam = self:getPlayerCamera()
         if playerCam and playerCam.firstPersonCamera ~= nil then
             self:realignPlayerCameraToRoot(playerCam)
@@ -732,6 +783,7 @@ end
 
 VRCompanion:registerSubsystem("locomotion", {
     mapUnload = function(self)
-        self.vehicleRotationStates = {}
+        self.vehicleRotationStates = setmetatable({}, WEAK_KEYS_MT)
+        self:resetSnapTurnDebounce()
     end,
 })

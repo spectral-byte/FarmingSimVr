@@ -14,9 +14,12 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
 - **`VRCompanion.HUD_FILL_LEVEL_GAP`**: Speedometer group stacking: the fixed gap between the speedometer and the fill levels, and between fill level rows, at scale 1.0. It is multiplied by the group's scale and is not adjustable.
 - **`VRCompanion.DEFAULT_HUD_STATE`**: The HUD state (Hidden, Streamlined or Full) a map starts in: the one the player last chose, saved between sessions. A first install starts Hidden (VRCompanion.HUD_STATE_HIDDEN).
 - **`VRCompanion.DLSS_NEAR_CLIP_CAB`**: DLSS near plane per camera mode (vrDlssNearClipCab / Outside / OnFoot), in metres; 0 = auto, which the Injector estimates from the engine's motion vectors. The renderer's near differs between a vehicle's inside camera, its other cameras and the on-foot camera, so each can be fixed on its own. The cab and on-foot defaults are the renderer's known nears; the outside cameras vary, so they default to auto.
+- **`VRCompanion.isFiniteNumber`, `VRCompanion.parseFiniteNumber`**: Shared finite-number validation rejecting `NaN`, positive/negative infinity, and (in `parseFiniteNumber`) out-of-range or non-integer values across `VRCompanion:clamp`, XML float reads, and console commands.
+- **`VRCompanion:saveConfiguration`**: Checks both the `pcall` result and `saveXMLFile`'s return value (`false` or raise logs `[FS25_VR] [Error]` and returns `false`, while `nil` from void test stubs still succeeds); invalid handles from `createXMLFile` also log an error and return `false`.
 - **`VRCompanion:saveConfiguration`, `modeStr`**: Persist the mode last requested, not VRBridge's: while the compositor is active the bridge only queues a change until the next frame boundary, so it still reports the old mode here.
 - **`readSettingsFromXml`, `loadedSafeAreaHorizontal`**: The old hudInsetHorizontal, hudInsetVertical and hudInsetTop keys are ignored (ADR-0022)
-- **`readSettingsFromXml`, `if loadedDepth ~= nil and loadedDepth == loadedDepth then`**: A depth out of vrHudDepth's range (older versions allowed 0.5 m) loads as the nearest one allowed
+- **`readSettingsFromXml`, `if loadedDepth ~= nil then`**: A depth out of vrHudDepth's range (older versions allowed 0.5 m) loads as the nearest one allowed; non-finite values are rejected by `readXmlFloat` so the default remains.
+- **`VRCompanion:loadConfiguration`, `runSubsystemResetSettings`**: When `loadXMLFile` is present, resets all core scalar settings and invokes every subsystem's `resetSettings` hook before reading XML, so missing files or missing/non-finite keys cannot retain stale in-memory values across map reloads while direct calls to a subsystem's `loadSettings` hook still preserve current values on missing keys (and tests that pre-seed fields without XML stubs are unaffected).
 - **`VRCompanion:loadConfiguration`, `if not renderingModeLoaded and not self.renderingModeExplicit then`**: No saved Stereo Presentation Mode and none chosen this session: apply the default through setRenderingMode so it reaches VRBridge and is marked explicit (otherwise a parity-only bridge reads as AFR).
 
 ### `mods/FS25_VRCompanion/src/VRCompanionCore.lua`
@@ -26,6 +29,9 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
 - **`VRCompanion.VERSION_WARNING_MS`**: How long the version warning blinks, in milliseconds: long enough to read in the headset.
 - **`VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS`**: Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late Ferry class or newly spawned vehicles are picked up without scanning \_G every frame.
 - **`VRCompanion.getEngineGlobal`**: An engine global by name, or nil when the game does not have it: the engine's functions and tables are read through this, so that one that is missing is a nil to test for and not an error. Virtual Hands and Wheel Grab alias it as their local `engine`; this file loads before both.
+- **`VRCompanion.getLocalPlayer`**: The local player (`g_localPlayer`, falling back to `g_currentMission.player`). Shared across Hand Tools (including `describeLookRay`), Object Grab, Animated Objects, and Manual Attach.
+- **`VRCompanion.rotateVectorByQuaternion`**: Rotates `(x, y, z)` by unit quaternion `(qx, qy, qz, qw)`. Shared across Stereo, Motion Controllers, Virtual Hands, and Object Grab.
+- **`VRCompanion.nodeExists`**: Returns whether a node id is non-nil, non-zero, and still exists according to `entityExists` (when the engine provides it). Shared across Stereo, Motion Controllers, Virtual Hands, Wheel Grab, and Object Grab.
 - **`VRCompanion.LOOK_RAY_AIMER_ORDER`**: Who aims the look ray The game's Player:getLookRay is wrapped once, as the shared wrap "lookRay" of VRCompanionGameWraps.lua, for as long as a subsystem that aims holds the wrap (Hand Tools and Object Grab each hold it, so that one giving up leaves the other aiming). The wrap asks each subsystem that can aim, in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem registers by name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for that player (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand points).
 - **`aimersLoggedAsRaising`**: The ray the first aiming subsystem answers for `player`, or nil (the game's own ray). An aimer that raises is not aiming: it is logged once, by name, with its error, and the next one is asked.
 - **`subsystems`**:
@@ -45,6 +51,7 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
                                                               -- setString / setInt (the engine's setters, any may be nil)
         loadSettings    = function(self, xmlFile, xml) end,   -- loadConfiguration: read them back with xml.has / getBool / getFloat
                                                               -- / getString / getInt; a key that is missing keeps the current value
+        resetSettings   = function(self) end,                 -- loadConfiguration: reset its settings to defaults before reading XML
         consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
     })
 
@@ -84,10 +91,10 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
                                          console commands, then runs its mapUnload, subsystems in reverse order
     saveConfiguration runSubsystemSaveSettings   after the core's HUD settings, before the Stereo Presentation Mode, the HUD
                                          state, the Snap Turn angle and the DLSS near planes, in registration order
-    loadConfiguration runSubsystemLoadSettings   at the same place in the load (after the HUD Groups, before the Snap Turn angle,
-                                         the DLSS near planes, the HUD state and the Stereo Presentation Mode), in registration
-                                         order. Every load hook stores only its own fields, so none needs another's to have run
-                                         first; one that does says so in a comment at its registration
+    loadConfiguration runSubsystemResetSettings then runSubsystemLoadSettings at the same place in the load (after the HUD Groups,
+                                         before the Snap Turn angle, the DLSS near planes, the HUD state and the Stereo Presentation
+                                         Mode), in registration order. resetSettings runs before reading XML so missing keys revert to
+                                         defaults, while direct calls to a load hook keep existing values when a key is missing.
   Two steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
   (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace) and the menu's
   background camera (right after the GUI poll).
@@ -99,7 +106,7 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
   logged once per subsystem instead of reaching the caller of update.
 
   A hook that raises is caught: it is logged once per subsystem and hook, as
-    [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|updateBeforeActions|update|mapUnload|saveSettings|loadSettings> hook raised: <error>
+    [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|updateBeforeActions|update|mapUnload|saveSettings|loadSettings|resetSettings> hook raised: <error>
   and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
   raise in a hook, the Motion Controllers' update included, does not reach the caller of update or of loadMap; the log line is
   how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
@@ -142,7 +149,7 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
 - **`VRCompanion:isStereoDialogShowing`**: A Stereo Dialog is showing in the stereoscopic view: a menu takes the input but the quad is not shown. The dialog is answered with the gamepad's own menu buttons through the Virtual Gamepad, so the Companion Mod's quad menu (the Pointer Ray, the grip and lower face button as back, the thumbstick scroll) and the Virtual Gamepad's taking of every input are not engaged.
 - **`VRCompanion:applyDlssNearClip`**: Sends the current camera's near plane to the Injector when it differs from the one last sent, so entering or leaving a vehicle or switching its camera takes effect on the next update. force resends it anyway. Returns the bridge's result when it sends, otherwise false.
 - **`VRCompanion:applyDlssNearClip`, `self.appliedDlssNearClip`**: Recorded even when the bridge has no NGX interceptor, so that is not retried every frame
-- **`VRCompanion:hookTableSpeed`**: Wraps target.updateVehicleSpeed with the dt=0 guard. Vehicle instances keep their original in a weak-keyed table so a vehicle that is gone can be collected; classes are kept strongly (they live as long as the game).
+- **`VRCompanion:hookTableSpeed`**: Wraps target.updateVehicleSpeed through a `GameWraps.newGroup({ weakTargets = true })` pool with the dt=0 guard, skipping instances that already inherit an active wrapper from a wrapped class and restoring only untouched wrappers on unload (weak-keyed so gone vehicles can be collected).
 - **`VRCompanion:installVehicleSpeedGuards`**: Installs the dt=0 guards on the named classes, the mission's vehicles and Ferry. scanGlobals additionally walks every global table for classes with updateVehicleSpeed, which only the map load install does: it is too slow to repeat during play.
 - **`VRCompanion:installVehicleSpeedGuards`, `self.lastVehicleSpeedHookTick`**: Recorded here so the install from loadMap also restarts the slow retry cadence.
 - **`withRaiseTraceback`**: Appends the traceback from where an error was raised, so rethrowing it from the outermost frame-check scope does not hide its origin.
@@ -304,7 +311,8 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
   ```
 
 - **`sortedNames`**: The declared names, sorted, so that the first reason found does not depend on the table's order.
-- **`Set:wrapInstance`**: Wraps the target's own copies of the named functions (each with its declared `make`), for as long as it is the target. A copy that is the class wrapper (the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since is wrapped again.
+- **`Set:wrapInstance`**: Wraps the target's own copies of the named functions (each with its declared `make`), for as long as it is the target. A copy that is the class wrapper (or matches the class's current method while the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since is wrapped again.
+- **`GameWraps.newGroup`**: Multi-target wrap pool (optionally weak-keyed via `{ weakTargets = true }`) for core and HUD hooks that wrap dynamic classes and live instances without giving up: skips targets that already inherit an active wrapped method from a base prototype (`rawget` + `__index` chain), tracks `hadOwn` so inherited methods are cleared back to `nil` on `liftAll()`, checks `rawget(target, methodName) == entry.wrapper` before restoring so downstream third-party wraps stay intact, and marks `entry.active = false` on lift so any remaining outer wrap passes straight through.
 
 ### `mods/FS25_VRCompanion/src/VRCompanionLocalisedTexts.lua`
 

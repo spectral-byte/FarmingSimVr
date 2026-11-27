@@ -111,6 +111,50 @@ test("HudConvergenceLockedToEyeIndexInDualPass", function()
     _G.VRBridge = nil
 end)
 
+test("SubPass1ZeroDtDoesNotAdvanceHudConvergenceSmoothing", function()
+    local curSubPass = 0
+    _G.VRBridge = {
+        isReady = function() return true end,
+        isCompanionActive = true,
+        getIpd = function() return 0.064 end,
+        getFrameParity = function() return 0 end,
+        getRenderingMode = function() return "SequentialDualPass" end,
+        getSubPassIndex = function() return curSubPass end,
+        setSubPassIndex = function(idx) curSubPass = idx end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.headTrackingEnabled = true
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion.is2DViewActive = false
+    VRCompanion.isMenuVisible = false
+    VRCompanion.hudConvergenceDepth = 1.8
+    VRCompanion.currentConvergenceDisparity = 0.0
+
+    curSubPass = 1
+    VRCompanion:setSubPassIndex(1)
+    VRCompanion:updateHudConvergence(0.0)
+    assert(VRCompanion.currentConvergenceDisparity == 0.0,
+        "dt == 0.0 must not advance convergence smoothing, got " .. tostring(VRCompanion.currentConvergenceDisparity))
+
+    curSubPass = 0
+    VRCompanion:setSubPassIndex(0)
+    VRCompanion:updateHudConvergence(16.0)
+    local afterPass0 = VRCompanion.currentConvergenceDisparity
+    assert(afterPass0 > 0.001, "sub-pass 0 with real dt advances smoothing")
+
+    curSubPass = 1
+    VRCompanion:setSubPassIndex(1)
+    VRCompanion:updateHudConvergence(0.0)
+    assert(VRCompanion.currentConvergenceDisparity == afterPass0,
+        "sub-pass 1 with dt == 0.0 must hold sub-pass 0 smoothed disparity")
+    assert(math.abs(VRCompanion.currentConvergenceOffset - (-afterPass0)) < 1e-9,
+        "sub-pass 1 still flips offset sign to right eye")
+
+    VRCompanion:setRenderingMode("AFR")
+    VRCompanion:setSubPassIndex(0)
+    _G.VRBridge = nil
+end)
+
 test("HooksAndUnhooksMissionUpdate", function()
     local origCalled = 0
     _G.FSBaseMission = {
@@ -870,6 +914,44 @@ test("UnloadRestoresTheClassesAndTheVehiclesStillAlive", function()
     _G.g_currentMission = nil
 end)
 
+test("InheritedVehicleInstancesAreNotDoubleWrappedAndLeaveNoWrapperAfterUnload", function()
+    local calls = 0
+    local origClassSpeed = function(self, dt) calls = calls + 1; return 10 / dt end
+    _G.Vehicle = { updateVehicleSpeed = origClassSpeed }
+    local veh = setmetatable({}, { __index = _G.Vehicle })
+    _G.g_currentMission = { vehicles = { veh } }
+
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion:hookVehicleSpeed()
+    assert(rawget(veh, "updateVehicleSpeed") == nil, "inherited vehicle must not get an own wrapper copy")
+
+    assert(veh:updateVehicleSpeed(0.0) == nil, "dt=0 blocked via Vehicle class guard")
+    assert(calls == 0)
+    assert(math.abs(veh:updateVehicleSpeed(2.0) - 5.0) < 1e-6, "valid dt runs original once")
+    assert(calls == 1)
+
+    local wrappedClass = _G.Vehicle.updateVehicleSpeed
+    local thirdPartyCalls = 0
+    local thirdPartyWrap = function(self, dt)
+        thirdPartyCalls = thirdPartyCalls + 1
+        return wrappedClass(self, dt)
+    end
+    _G.Vehicle.updateVehicleSpeed = thirdPartyWrap
+
+    VRCompanion:refreshVehicleSpeedGuards()
+    assert(rawget(veh, "updateVehicleSpeed") == nil, "refresh must not double-wrap inheriting vehicle under third-party wrap")
+
+    VRCompanion:unhookVehicleSpeed()
+    assert(_G.Vehicle.updateVehicleSpeed == thirdPartyWrap, "unhookVehicleSpeed must preserve downstream third-party wrapper")
+    assert(rawget(veh, "updateVehicleSpeed") == nil, "live vehicle must have no VRCompanion wrapper pinned on unload")
+
+    assert(math.abs(veh:updateVehicleSpeed(2.0) - 5.0) < 1e-6)
+    assert(thirdPartyCalls == 1 and calls == 2)
+
+    _G.Vehicle = nil
+    _G.g_currentMission = nil
+end)
+
 test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
     local setTransCalls = {}
 
@@ -1602,6 +1684,16 @@ test("EyePairTraceLogsTheDtsAndTimeScaleBehindTheMove", function()
     assert(not second:find("predicted", 1, true), "nothing is predicted before the first pair: " .. second)
     assert(lines[4]:find("rawDt 12.00 (predicted 12.00)", 1, true),
         "a second sub-pass's line must give the dt its time scale was set for: " .. lines[4])
+end)
+
+test("EyePairTraceRejectsNaNInfinityNonIntegersAndInvalidTokens", function()
+    _G.getWorldTranslation = function() return 0, 0, 0 end
+    for _, bad in ipairs({ "nan", "inf", "-inf", "abc", "1.5", "0", "-3" }) do
+        local reply = VRCompanion:consoleCommandEyePairTrace(bad)
+        assert(string.find(reply, "Usage: vrEyePairTrace", 1, true) ~= nil, bad .. ": " .. tostring(reply))
+        assert(VRCompanion:traceEyeFrame(0, 2001, 0) == nil, bad .. " must not start tracing")
+    end
+    _G.getWorldTranslation = nil
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

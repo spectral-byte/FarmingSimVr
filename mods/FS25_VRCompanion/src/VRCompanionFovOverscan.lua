@@ -9,10 +9,7 @@ local SETTING_KEY = "vrSettings.fovOverscan"
 local USAGE = "Usage: vrFovOverscan [0-20] (saved, 0 by default)"
 
 local function parseArgument(arg)
-    local percent = tonumber(arg)
-    if percent == nil or percent ~= percent then return nil end
-    if percent < VRCompanion.MIN_FOV_OVERSCAN or percent > VRCompanion.MAX_FOV_OVERSCAN then return nil end
-    return percent
+    return VRCompanion.parseFiniteNumber(arg, VRCompanion.MIN_FOV_OVERSCAN, VRCompanion.MAX_FOV_OVERSCAN)
 end
 
 local function describe(percent)
@@ -83,6 +80,7 @@ VRCompanion:registerSubsystem("fovOverscan", {
     mapLoad = function(self) self:applyFovOverscan() end,
     saveSettings = function(self, xmlFile, xml) self:saveFovOverscanSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadFovOverscanSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.fovOverscan = self.DEFAULT_FOV_OVERSCAN end,
     consoleCommands = {
         { name = "vrFovOverscan", description = "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (saved; 0 by default; a higher value softens the picture): vrFovOverscan [0-20]", method = "consoleCommandSetFovOverscan" },
     },

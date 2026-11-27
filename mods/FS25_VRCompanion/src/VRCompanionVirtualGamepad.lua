@@ -47,6 +47,9 @@ local function newState()
         sentLive = nil,
         seenKey = nil,       -- the last (present, slot, reason) the game log was told about
         update = 0,
+        gripUpdate = -1,
+        leftGripHeld = false,
+        rightGripHeld = false,
         dialogShowing = false,
         uses = newUses(),
         sentUse = { [0] = 0, [1] = 0 },
@@ -80,7 +83,10 @@ function VRCompanion:updateVirtualGamepad(dt)
     end
 
     if type(b.getVirtualGamepad) ~= "function" then return end
-    local present, slot, reason = b.getVirtualGamepad()
+    local present, slot, reason, leftHeld, rightHeld = b.getVirtualGamepad()
+    state.gripUpdate = state.update
+    state.leftGripHeld = leftHeld == true
+    state.rightGripHeld = rightHeld == true
     local key = present and ("slot" .. tostring(slot)) or reason
     if key ~= state.seenKey then
         if state.seenKey ~= nil or present or reason ~= "off" then
@@ -92,14 +98,25 @@ function VRCompanion:updateVirtualGamepad(dt)
     self:updateVirtualGamepadDefaults(dt, present, slot)
 end
 
+function VRCompanion:isVirtualGamepadGripHeld(hand)
+    if state.gripUpdate == state.update then
+        if hand == 0 then
+            return state.leftGripHeld == true
+        end
+        return state.rightGripHeld == true
+    end
+    local b = bridge()
+    if b == nil or type(b.getVirtualGamepad) ~= "function" then return false end
+    local _, _, _, leftHeld, rightHeld = b.getVirtualGamepad()
+    if hand == 0 then
+        return leftHeld == true
+    end
+    return rightHeld == true
+end
+
 local function isHeld(self, hand, input, wasDown)
     if input == "grip" then
-        local b = bridge()
-        if b == nil or type(b.getVirtualGamepad) ~= "function" then return false end
-        local _, _, _, leftHeld, rightHeld = b.getVirtualGamepad()
-        local held = leftHeld
-        if hand ~= 0 then held = rightHeld end
-        return held == true
+        return self:isVirtualGamepadGripHeld(hand)
     end
     local hands = self:getHandState(hand)
     if hands == nil or hands.tracked ~= true then return false end
@@ -146,37 +163,19 @@ local function describeUse()
     return #names > 0 and table.concat(names, ", ") or "none"
 end
 
-local function isSettingsPageShowing()
-    local ok, showing = pcall(function()
-        local gui = g_gui or (_G and _G.g_gui)
-        local menu = g_inGameMenu or (_G and _G.g_inGameMenu)
-        if type(gui) ~= "table" or gui.currentGuiName ~= "InGameMenu" then return false end
-        if type(menu) ~= "table" then return false end
-        local page = menu.currentPage
-        if type(page) ~= "table" then return false end
-        return page.id == "pageSettings" or (menu.pageSettings ~= nil and page == menu.pageSettings)
-    end)
-    return ok and showing == true
-end
-
 function VRCompanion:updateVirtualGamepadUse(dt)
     local dialogShowing = self:doesMenuTakeInput() and self:isStereoDialogShowing()
     local dialogOpening = dialogShowing and not state.dialogShowing
     state.dialogShowing = dialogShowing
 
     if self.motionControllersEnabled ~= false then
-        if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not isSettingsPageShowing() then
+        if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not self:isSettingsPageShowing() then
             for _, hand in ipairs(HANDS) do
                 for _, input in ipairs(INPUTS) do
                     if not (hand == 1 and input == "menu") then
                         self:takeVirtualGamepadInput(hand, input)
                     end
                 end
-            end
-        end
-        for _, hand in ipairs(HANDS) do
-            if self:isHandHoldingSteeringWheel(hand) == true then
-                self:takeVirtualGamepadInput(hand, "grip")
             end
         end
     end
@@ -536,6 +535,11 @@ VRCompanion:registerSubsystem("virtualGamepad", {
     mapUnload = function(self) self:resetVirtualGamepad() end,
     saveSettings = function(self, xmlFile, xml) self:saveVirtualGamepadSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadVirtualGamepadSetting(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.virtualGamepadEnabled = self.DEFAULT_VIRTUAL_GAMEPAD_ENABLED
+        self.virtualGamepadDefaultsWritten = self.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN
+        self.virtualGamepadRecenterMigrated = self.DEFAULT_VIRTUAL_GAMEPAD_RECENTER_MIGRATED
+    end,
     consoleCommands = {
         { name = "vrVirtualGamepad", description = "Turn the Virtual Gamepad (the Motion Controllers as an Xbox pad bound in the Controls screen) on or off (saved): vrVirtualGamepad [on|off]", method = "consoleCommandSetVirtualGamepad" },
     },

@@ -4,7 +4,7 @@ VRCompanion.DEFAULT_WHEEL_GRAB_ENABLED = true
 VRCompanion.wheelGrabEnabled = VRCompanion.DEFAULT_WHEEL_GRAB_ENABLED
 
 VRCompanion.WHEEL_GRAB_GRIP_PRESS = 0.6
-VRCompanion.WHEEL_GRAB_GRIP_RELEASE = 0.3
+VRCompanion.WHEEL_GRAB_GRIP_RELEASE = 0.4
 
 VRCompanion.WHEEL_GRAB_RING_INNER = 0.10
 VRCompanion.WHEEL_GRAB_RING_OUTER = 0.25
@@ -29,6 +29,8 @@ local function newState()
             [1] = { gripDown = false, pressed = false, holding = false, angle = 0, tracked = false },
         },
         vehicle = nil,
+        wheelNode = nil,
+        direction = nil,
         target = 0,          -- the target angle of the Steering Wheel (radians, unwrapped) while held
         sending = false,
         reason = "not updated yet",
@@ -203,6 +205,8 @@ local function updateGrips(self)
     end
 end
 
+local MEASURE_FUNCTIONS = { "getParent", "worldToLocal", "getTranslation" }
+
 local function measureHand(self, hand, wheel)
     local pose = self:getHandState(hand)
     if pose.tracked ~= true or pose.gripPoseTracked ~= true then return nil, "grip pose not tracked" end
@@ -210,12 +214,19 @@ local function measureHand(self, hand, wheel)
     local ok, why = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
         pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, state.scratch)
     if not ok then return nil, why end
-    for _, name in ipairs({ "getParent", "worldToLocal", "getTranslation" }) do
+    for _, name in ipairs(MEASURE_FUNCTIONS) do
         if type(engine(name)) ~= "function" then return nil, name .. " is not available" end
     end
-    local parent = engine("getParent")(wheel.node)
-    local x, y, z = engine("worldToLocal")(parent, state.scratch.x, state.scratch.y, state.scratch.z)
-    local cx, cy, cz = engine("getTranslation")(wheel.node)
+    if wheel.node == nil or wheel.node == 0 then return nil, "the wheel node is missing" end
+    if not VRCompanion.nodeExists(wheel.node) then return nil, "the wheel node does not exist" end
+    local getParent, worldToLocal, getTranslation = engine("getParent"), engine("worldToLocal"), engine("getTranslation")
+    local okParent, parent = pcall(getParent, wheel.node)
+    if not okParent or parent == nil or parent == 0 then return nil, "the wheel node has no parent" end
+    local okLocal, x, y, z = pcall(worldToLocal, parent, state.scratch.x, state.scratch.y, state.scratch.z)
+    local okTrans, cx, cy, cz = pcall(getTranslation, wheel.node)
+    if not okLocal or not okTrans or type(x) ~= "number" or type(cx) ~= "number" then
+        return nil, "the wheel node transform failed"
+    end
     local dx, dy, dz = x - cx, y - cy, z - cz
     return math.atan2(-dz, dx), math.sqrt(dx * dx + dz * dz), dy
 end
@@ -325,11 +336,11 @@ function VRCompanion:updateWheelGrab(dt)
     updateGrips(self)
     local vehicle, wheel, direction, reason = findSteeringWheel(self)
     reportAvailability(reason)
-    if wheel == nil or (state.vehicle ~= nil and state.vehicle ~= vehicle) then
+    if wheel == nil or (state.vehicle ~= nil and (state.vehicle ~= vehicle or state.wheelNode ~= wheel.node or state.direction ~= direction)) then
         for _, hand in ipairs(HANDS) do releaseHand(hand) end
     end
     if not anyHolding() then
-        state.vehicle, state.sent, state.atFullLock, state.sendFailures = nil, nil, false, 0
+        state.vehicle, state.wheelNode, state.direction, state.sent, state.atFullLock, state.sendFailures = nil, nil, nil, nil, false, 0
     end
     if wheel == nil then
         unwrapInstance()
@@ -342,38 +353,49 @@ function VRCompanion:updateWheelGrab(dt)
         local entry = state.hands[hand]
         if entry.holding and not entry.gripDown then releaseHand(hand) end
         if entry.holding then
-            local angle = measureHand(self, hand, wheel)
-            if angle == nil then
+            if not self:takeVirtualGamepadInput(hand, "grip") then
                 releaseHand(hand)
             else
-                local away = distanceToPin(hand)
-                if away ~= nil and away > self.WHEEL_GRAB_PULL_AWAY_DISTANCE then
+                local angle = measureHand(self, hand, wheel)
+                if angle == nil then
                     releaseHand(hand)
                 else
-                    sum = sum + wrapAngle(angle - entry.angle)
-                    count = count + 1
-                    entry.angle = angle
+                    local away = distanceToPin(hand)
+                    if away ~= nil and away > self.WHEEL_GRAB_PULL_AWAY_DISTANCE then
+                        releaseHand(hand)
+                    else
+                        sum = sum + wrapAngle(angle - entry.angle)
+                        count = count + 1
+                        entry.angle = angle
+                    end
                 end
             end
         elseif entry.pressed then
             local inUse = self:isHandInUse(hand)
             local angle, radial, axial = measureHand(self, hand, wheel)
+            local atRim = inUse and angle ~= nil and ringDistance(self, radial, axial) == 0
+            local mayGrab = atRim and self:takeVirtualGamepadInput(hand, "grip") == true
             reportSqueeze(self, hand, inUse, angle, radial, axial)
-            if inUse and angle ~= nil and ringDistance(self, radial, axial) == 0 then
+            if mayGrab then
                 if not anyHolding() then
                     state.target = actualAngle(vehicle, wheel, direction)
                     state.atFullLock = state.target <= low or state.target >= high
-                    state.vehicle = vehicle
+                    state.vehicle, state.wheelNode, state.direction = vehicle, wheel.node, direction
                 end
                 entry.holding = true
                 entry.angle = angle
                 pinHand(hand, wheel)
                 self:pulseHand(hand, self.WHEEL_GRAB_GRAB_PULSE_MS, self.WHEEL_GRAB_GRAB_PULSE_STRENGTH)
             end
+        elseif self:isHandInUse(hand) and not entry.gripDown then
+            local angle, radial, axial = measureHand(self, hand, wheel)
+            if angle ~= nil and ringDistance(self, radial, axial) == 0 then
+                self:takeVirtualGamepadInput(hand, "grip")
+            end
         end
     end
     if not anyHolding() then
-        state.vehicle, state.sent, state.atFullLock, state.sendFailures = nil, nil, false, 0
+        state.vehicle, state.wheelNode, state.direction, state.sent, state.atFullLock, state.sendFailures = nil, nil, nil, nil, false, 0
         unwrapInstance()
         return
     end
@@ -396,7 +418,7 @@ function VRCompanion:updateWheelGrab(dt)
     state.sent = value
     if value ~= nil and sendSteering(vehicle, value) then
         for _, hand in ipairs(HANDS) do releaseHand(hand) end
-        state.vehicle, state.sent, state.atFullLock = nil, nil, false
+        state.vehicle, state.wheelNode, state.direction, state.sent, state.atFullLock = nil, nil, nil, nil, false
     end
 end
 
@@ -545,6 +567,7 @@ VRCompanion:registerSubsystem("wheelGrab", {
     mapUnload = function(self) self:resetWheelGrab() end,
     saveSettings = function(self, xmlFile, xml) self:saveWheelGrabSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadWheelGrabSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.wheelGrabEnabled = self.DEFAULT_WHEEL_GRAB_ENABLED end,
     consoleCommands = {
         { name = "vrWheelGrab", description = "Turn Wheel Grab, steering by holding the Steering Wheel with a Motion Controller, on or off (saved): vrWheelGrab [on|off]", method = "consoleCommandSetWheelGrab" },
         { name = "vrWheelGrabDiagnostics", description = "Report the Steering Wheel, each hand's distance to the rim ring, the grab and the steering sent: vrWheelGrabDiagnostics", method = "consoleCommandWheelGrabDiagnostics" },

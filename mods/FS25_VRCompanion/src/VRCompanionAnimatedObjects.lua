@@ -41,19 +41,16 @@ local function newState()
         hit = {},
         selected = nil,
         landedOn = nil,    -- the object the ray is on and has pulsed for
+        castMaskValue = nil,
+        castMaskRef = nil,
+        castFlagsRef = nil,
+        castMaskAll = nil,
     }
 end
 
 local state = newState()
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function trackZone(object, otherId, onEnter, onLeave)
     local mission, career = engine("g_currentMission"), engine("FSCareerMissionInfo")
@@ -62,7 +59,10 @@ local function trackZone(object, otherId, onEnter, onLeave)
     if not (onEnter or onLeave) then return end
     local player = localPlayer()
     if player == nil or otherId ~= player.rootNode then return end
-    state.zone[object] = onEnter and true or nil
+    local count = state.zone[object] or 0
+    if onEnter then count = count + 1 end
+    if onLeave then count = count - 1 end
+    state.zone[object] = count > 0 and count or nil
 end
 
 local function anyHandTracked(self)
@@ -142,10 +142,16 @@ end
 local function castMask()
     local mask, flags = engine("CollisionMask"), engine("CollisionFlag")
     if type(mask) ~= "table" or type(flags) ~= "table" or type(mask.ALL) ~= "number" then return nil end
+    if mask == state.castMaskRef and flags == state.castFlagsRef and mask.ALL == state.castMaskAll then
+        return state.castMaskValue
+    end
     local result = mask.ALL
     for _, name in ipairs(IGNORED_FLAGS) do
-        if type(flags[name]) == "number" then result = result - flags[name] end
+        if type(flags[name]) == "number" then
+            result = bit32.band(result, bit32.bnot(flags[name]))
+        end
     end
+    state.castMaskRef, state.castFlagsRef, state.castMaskAll, state.castMaskValue = mask, flags, mask.ALL, result
     return result
 end
 
@@ -154,24 +160,40 @@ local function onHit(hit, node, x, y, z, distance)
     return true
 end
 
--- The object whose animation part the ray is on, with where it hits and how far along the ray from the fingertip, or nil.
+local function findPartObject(node, getParent)
+    for _ = 1, MAX_PARENTS do
+        if node == nil or node == 0 then return nil end
+        local object = state.parts[node]
+        if object ~= nil then return object end
+        local okParent, parent = pcall(getParent, node)
+        if not okParent then return nil end
+        node = parent
+    end
+    return nil
+end
+
 local function objectUnderTheRay(self, ray)
     local rayCast, getParent = engine("raycastClosest"), engine("getParent")
     if type(rayCast) ~= "function" or type(getParent) ~= "function" then return nil end
     local hit = state.hit
-    hit.node, hit.onHit = nil, onHit
+    local mask = castMask()
     local behind = tonumber(self.OBJECT_GRAB_REACH_BEHIND) or DEFAULT_REACH_BEHIND
+    hit.node, hit.onHit = nil, onHit
     local ok = pcall(rayCast, ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind, ray.dx, ray.dy, ray.dz,
-        self.POINTER_RAY_LENGTH + behind, "onHit", hit, castMask())
-    if not ok or hit.node == nil or hit.distance < behind - BEHIND_MARGIN then return nil end
-    local node = hit.node
-    for _ = 1, MAX_PARENTS do
-        if node == nil or node == 0 then return nil end
-        local object = state.parts[node]
+        self.POINTER_RAY_LENGTH + behind, "onHit", hit, mask)
+    if not ok or hit.node == nil then return nil end
+    if hit.distance >= behind - BEHIND_MARGIN then
+        local object = findPartObject(hit.node, getParent)
         if object ~= nil then return object, hit.x, hit.y, hit.z, hit.distance - behind end
-        local okParent, parent = pcall(getParent, node)
-        if not okParent then return nil end
-        node = parent
+    end
+    if hit.distance < behind then
+        hit.node, hit.onHit = nil, onHit
+        local forwardOk = pcall(rayCast, ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz,
+            self.POINTER_RAY_LENGTH, "onHit", hit, mask)
+        if forwardOk and hit.node ~= nil then
+            local forwardObject = findPartObject(hit.node, getParent)
+            if forwardObject ~= nil then return forwardObject, hit.x, hit.y, hit.z, hit.distance end
+        end
     end
     return nil
 end

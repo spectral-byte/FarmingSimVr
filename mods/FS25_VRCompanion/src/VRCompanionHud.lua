@@ -86,8 +86,16 @@ local function findHudGroup(displayName)
 end
 
 function VRCompanion:getHudGroupLayout(groupName)
-    local stored = (self.hudGroupLayout or {})[groupName] or {}
-    return self:sanitizeHudGroupLayout(groupName, stored.marginX, stored.marginY, stored.scale)
+    if self.hudGroupLayout == nil then self.hudGroupLayout = {} end
+    local stored = self.hudGroupLayout[groupName]
+    if stored ~= nil then
+        return stored
+    end
+    local defaults = self.DEFAULT_HUD_GROUP_LAYOUTS and self.DEFAULT_HUD_GROUP_LAYOUTS[groupName]
+    if defaults == nil then return nil end
+    local layout = self:sanitizeHudGroupLayout(groupName, defaults.marginX, defaults.marginY, defaults.scale)
+    self.hudGroupLayout[groupName] = layout
+    return layout
 end
 
 -- Sets a group's margins, and its scale when one is given. Returns the clamped layout, or nil for
@@ -218,9 +226,9 @@ local function setDisplayVisible(display, isVisible)
     if display == nil then return end
     display.isVisible = isVisible
     if type(display.setIsVisible) == "function" then
-        pcall(function() display:setIsVisible(isVisible) end)
+        pcall(display.setIsVisible, display, isVisible)
     elseif type(display.setVisible) == "function" then
-        pcall(function() display:setVisible(isVisible) end)
+        pcall(display.setVisible, display, isVisible)
     end
 end
 
@@ -265,7 +273,7 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
 end
 
 function VRCompanion:setHudConvergenceDepth(depth, save)
-    if type(depth) ~= "number" or depth ~= depth or depth < self.MIN_HUD_DEPTH or depth > self.MAX_HUD_DEPTH then
+    if not VRCompanion.isFiniteNumber(depth) or depth < self.MIN_HUD_DEPTH or depth > self.MAX_HUD_DEPTH then
         return false
     end
     self.hudConvergenceDepth = depth
@@ -280,7 +288,7 @@ function VRCompanion:consoleCommandSetHudDepth(arg)
     if arg == nil or arg == "" then
         return string.format("HUD depth: %g m. %s", self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH, usage)
     end
-    local depth = tonumber(arg)
+    local depth = VRCompanion.parseFiniteNumber(arg)
     if not self:setHudConvergenceDepth(depth, true) then return usage end
     print(string.format("[FS25_VR] HUD depth set to: %g m", depth))
     return string.format("HUD depth set to: %g m (Saved)", depth)
@@ -469,8 +477,8 @@ function VRCompanion:consoleCommandHudTrace(arg)
         HUD_TRACE_MAX_FRAMES, HUD_TRACE_DEFAULT_FRAMES)
     local frames = HUD_TRACE_DEFAULT_FRAMES
     if arg ~= nil and arg ~= "" then
-        frames = tonumber(arg)
-        if frames == nil or frames ~= math.floor(frames) or frames < 1 or frames > HUD_TRACE_MAX_FRAMES then return usage end
+        frames = VRCompanion.parseFiniteNumber(arg, 1, HUD_TRACE_MAX_FRAMES, true)
+        if frames == nil then return usage end
     end
     if not self:startHudTrace(frames) then
         return "HUD trace unavailable: the game's Overlay class was not found"
@@ -630,11 +638,51 @@ function VRCompanion:getFillLevelsBlockSize(display)
     return width, height
 end
 
+local lastFillLevelsPlacement = {
+    display = nil,
+    frameTicks = nil,
+    scale = nil,
+    offset = nil,
+    marginX = nil,
+    marginY = nil,
+    w = nil,
+    h = nil,
+    x = nil,
+    y = nil,
+    sm = nil,
+}
+
+local function isFillLevelsPlacementCurrent(self, display)
+    if lastFillLevelsPlacement.display ~= display then return false end
+    if lastFillLevelsPlacement.frameTicks ~= self.frameTicks then return false end
+    local uiScale = self:getHudGroupScale("speedometer")
+    if display.vrUiScale ~= uiScale or lastFillLevelsPlacement.scale ~= uiScale then return false end
+    local currentOffset = self.currentConvergenceOffset or 0.0
+    if lastFillLevelsPlacement.offset ~= currentOffset then return false end
+    local layout = self:getHudGroupLayout("speedometer")
+    if lastFillLevelsPlacement.marginX ~= layout.marginX or lastFillLevelsPlacement.marginY ~= layout.marginY then return false end
+    if display.x ~= lastFillLevelsPlacement.x or display.y ~= lastFillLevelsPlacement.y then return false end
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local sm = (hud ~= nil) and (hud.speedMeter or hud.speedMeterDisplay) or nil
+    if lastFillLevelsPlacement.sm ~= sm then return false end
+    local w, h = self:getFillLevelsBlockSize(display)
+    if lastFillLevelsPlacement.w ~= w or lastFillLevelsPlacement.h ~= h then return false end
+    return true
+end
+
 function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     if display == nil then return end
 
     local currentOffset = offset or self.currentConvergenceOffset or 0.0
     local uiScale = self:getHudGroupScale("speedometer")
+    if display.vrUiScale ~= uiScale then
+        display.vrUiScale = uiScale
+        if type(display.setScale) == "function" then
+            pcall(display.setScale, display, uiScale)
+        end
+    end
+
     local flPosX, fillBottom = self:getHudDisplayPosition(display, "FillLevelsDisplay", currentOffset)
 
     display.anchorX = flPosX
@@ -649,13 +697,6 @@ function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     display.y = fillBottom
     display.offsetX = 0
     display.offsetY = 0
-
-    if display.vrUiScale ~= uiScale then
-        display.vrUiScale = uiScale
-        if type(display.setScale) == "function" then
-            pcall(display.setScale, display, uiScale)
-        end
-    end
 
     if type(display.setPosition) == "function" then
         pcall(display.setPosition, display, flPosX, fillBottom)
@@ -711,6 +752,20 @@ function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
         pcall(sm.setPosition, sm, smX, smBottom)
     end
 
+    local layout = self:getHudGroupLayout("speedometer")
+    local w, h = self:getFillLevelsBlockSize(display)
+    lastFillLevelsPlacement.display = display
+    lastFillLevelsPlacement.frameTicks = self.frameTicks
+    lastFillLevelsPlacement.scale = uiScale
+    lastFillLevelsPlacement.offset = currentOffset
+    lastFillLevelsPlacement.marginX = layout.marginX
+    lastFillLevelsPlacement.marginY = layout.marginY
+    lastFillLevelsPlacement.w = w
+    lastFillLevelsPlacement.h = h
+    lastFillLevelsPlacement.x = flPosX
+    lastFillLevelsPlacement.y = fillBottom
+    lastFillLevelsPlacement.sm = sm
+
     return flPosX, fillBottom, smBottom
 end
 
@@ -742,11 +797,8 @@ function VRCompanion:updateHudConvergence(dt)
 
     if self.currentConvergenceDisparity == nil or dt == nil then
         self.currentConvergenceDisparity = targetDisparity
-    else
-        local dtSec = 0.0166
-        if dt > 0 then
-            dtSec = (dt > 1.0) and (dt * 0.001) or dt
-        end
+    elseif type(dt) == "number" and dt > 0 and dt == dt then
+        local dtSec = (dt > 1.0) and (dt * 0.001) or dt
         local smoothSpeed = self.CONVERGENCE_SMOOTH_SPEED or 12.0
         local step = math.min(1.0, dtSec * smoothSpeed)
         self.currentConvergenceDisparity = self.currentConvergenceDisparity + (targetDisparity - self.currentConvergenceDisparity) * step
@@ -796,6 +848,12 @@ function VRCompanion:updateHudConvergence(dt)
     return shiftedLeft, shiftedRight, offset
 end
 
+local function placeDisplayAtOffset(self, display, displayName, offset)
+    if display == nil or type(display.setPosition) ~= "function" then return end
+    local x, y = self:getHudDisplayPosition(display, displayName, offset)
+    pcall(display.setPosition, display, x, y)
+end
+
 function VRCompanion:repositionHudForConvergence()
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -805,21 +863,15 @@ function VRCompanion:repositionHudForConvergence()
 
     local fl = self:getFillLevelsDisplay(hud)
 
-    local function place(display, displayName)
-        if display == nil or type(display.setPosition) ~= "function" then return end
-        local x, y = self:getHudDisplayPosition(display, displayName, offset)
-        pcall(display.setPosition, display, x, y)
-    end
-
     if fl ~= nil then
         self:positionFillLevelsUnderSpeedometer(fl, offset)
     else
-        place(hud.speedMeter or hud.speedMeterDisplay, "SpeedMeterDisplay")
+        placeDisplayAtOffset(self, hud.speedMeter or hud.speedMeterDisplay, "SpeedMeterDisplay", offset)
     end
-    place(hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay")
-    place(hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay")
-    place(hud.ingameMap or hud.ingameMapDisplay, "IngameMap")
-    place(hud.contextAction or hud.contextActionDisplay, CONTEXT_ACTION_DISPLAY)
+    placeDisplayAtOffset(self, hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay", offset)
+    placeDisplayAtOffset(self, hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay", offset)
+    placeDisplayAtOffset(self, hud.ingameMap or hud.ingameMapDisplay, "IngameMap", offset)
+    placeDisplayAtOffset(self, hud.contextAction or hud.contextActionDisplay, CONTEXT_ACTION_DISPLAY, offset)
 end
 
 function VRCompanion:getHudState()
@@ -861,7 +913,7 @@ function VRCompanion:applyHudState(state)
 
     local isHudVisible = (state ~= self.HUD_STATE_HIDDEN)
     if type(hud.setIsVisible) == "function" then
-        pcall(function() hud:setIsVisible(isHudVisible) end)
+        pcall(hud.setIsVisible, hud, isHudVisible)
     end
     hud.isVisible = isHudVisible
 
@@ -902,13 +954,13 @@ function VRCompanion:applyHudState(state)
     local gameInfoVis = self:isDisplayVisible("GameInfoDisplay", state)
 
     if type(hud.setInputHelpVisible) == "function" then
-        pcall(function() hud:setInputHelpVisible(inputHelpVis) end)
+        pcall(hud.setInputHelpVisible, hud, inputHelpVis)
     end
     if type(hud.setIngameMapVisible) == "function" then
-        pcall(function() hud:setIngameMapVisible(ingameMapVis) end)
+        pcall(hud.setIngameMapVisible, hud, ingameMapVis)
     end
     if type(hud.setGameInfoVisible) == "function" then
-        pcall(function() hud:setGameInfoVisible(gameInfoVis) end)
+        pcall(hud.setGameInfoVisible, hud, gameInfoVis)
     end
 end
 
@@ -923,9 +975,12 @@ function VRCompanion:setHudState(newState)
 end
 
 function VRCompanion:cycleHudState()
-    local curTime = g_time
-    if curTime ~= nil and self.lastHudToggleTime ~= nil and (curTime - self.lastHudToggleTime) < 300 then
-        return self:getHudState()
+    local curTime = self:getCurrentTimeMs()
+    if curTime ~= nil and self.lastHudToggleTime ~= nil then
+        local elapsed = curTime - self.lastHudToggleTime
+        if elapsed >= 0 and elapsed < 300 then
+            return self:getHudState()
+        end
     end
     self.lastHudToggleTime = curTime
 
@@ -1054,15 +1109,15 @@ end
 function VRCompanion:positionHudDisplay(display, displayName)
     if display == nil then return end
 
-    local scale = self:getHudDisplayScale(displayName)
-
-    if type(display.setScale) == "function" then
-        pcall(function() display:setScale(scale) end)
-    end
-
     if displayName == "FillLevelsDisplay" then
         self:positionFillLevelsUnderSpeedometer(display)
         return
+    end
+
+    local scale = self:getHudDisplayScale(displayName)
+
+    if type(display.setScale) == "function" then
+        pcall(display.setScale, display, scale)
     end
 
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
@@ -1076,16 +1131,16 @@ function VRCompanion:positionHudDisplay(display, displayName)
     display.vrUiScale = scale
 
     if type(display.setPosition) == "function" then
-        pcall(function() display:setPosition(anchorX, anchorY) end)
+        pcall(display.setPosition, display, anchorX, anchorY)
     end
     if type(display.storeScaledValues) == "function" then
-        pcall(function() display:storeScaledValues() end)
+        pcall(display.storeScaledValues, display)
     end
     if type(display.reposition) == "function" then
-        pcall(function() display:reposition() end)
+        pcall(display.reposition, display)
     end
     if type(display.updatePosition) == "function" then
-        pcall(function() display:updatePosition() end)
+        pcall(display.updatePosition, display)
     end
 end
 
@@ -1116,10 +1171,10 @@ function VRCompanion:repositionAllHudDisplays(hud)
     if d5 ~= nil then self:positionHudDisplay(d5, "IngameMap") end
 
     if type(targetHud.storeScaledValues) == "function" then
-        pcall(function() targetHud:storeScaledValues() end)
+        pcall(targetHud.storeScaledValues, targetHud)
     end
     if type(targetHud.updateDimensions) == "function" then
-        pcall(function() targetHud:updateDimensions() end)
+        pcall(targetHud.updateDimensions, targetHud)
     end
 end
 
@@ -1146,6 +1201,23 @@ function VRCompanion:applyHudSafeArea()
 
     print(string.format("[FS25_VR] Applied VR HUD Safe Area: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f",
         self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop))
+end
+
+local function restoreHudDisplay(display, restoredScale)
+    if display == nil then return end
+    display.vrUiScale = nil
+    if type(display.setScale) == "function" then
+        pcall(display.setScale, display, restoredScale)
+    end
+    if type(display.storeScaledValues) == "function" then
+        pcall(display.storeScaledValues, display)
+    end
+    if type(display.reposition) == "function" then
+        pcall(display.reposition, display)
+    end
+    if type(display.updatePosition) == "function" then
+        pcall(display.updatePosition, display)
+    end
 end
 
 function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
@@ -1193,6 +1265,7 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     self.hudAnchorTop = baseTop
     self.currentConvergenceOffset = 0.0
     self.currentConvergenceDisparity = 0.0
+    lastFillLevelsPlacement.display = nil
 
     local restoredScale = self.origUiScale or 1.0
     if not preserveOrigAnchors then
@@ -1202,28 +1275,18 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
     if hud ~= nil then
-        local standardDisplays = {
-            hud.speedMeter or hud.speedMeterDisplay,
-            hud.inputHelp or hud.inputHelpDisplay,
-            hud.gameInfo or hud.gameInfoDisplay,
-            hud.contextAction or hud.contextActionDisplay,
-            hud.ingameMap or hud.ingameMapDisplay
-        }
-        for _, display in ipairs(standardDisplays) do
-            if display ~= nil then
-                if type(display.storeScaledValues) == "function" then
-                    pcall(function() display:storeScaledValues() end)
-                end
-                if type(display.setScale) == "function" then
-                    pcall(function() display:setScale(restoredScale) end)
-                end
-                if type(display.reposition) == "function" then
-                    pcall(function() display:reposition() end)
-                end
-            end
+        local fillLevels = self:getFillLevelsDisplay(hud)
+        local speedMeter = hud.speedMeter or hud.speedMeterDisplay
+        restoreHudDisplay(speedMeter, restoredScale)
+        restoreHudDisplay(hud.inputHelp or hud.inputHelpDisplay, restoredScale)
+        restoreHudDisplay(hud.gameInfo or hud.gameInfoDisplay, restoredScale)
+        restoreHudDisplay(hud.contextAction or hud.contextActionDisplay, restoredScale)
+        restoreHudDisplay(hud.ingameMap or hud.ingameMapDisplay, restoredScale)
+        if fillLevels ~= nil and fillLevels ~= speedMeter then
+            restoreHudDisplay(fillLevels, restoredScale)
         end
         if type(hud.storeScaledValues) == "function" then
-            pcall(function() hud:storeScaledValues() end)
+            pcall(hud.storeScaledValues, hud)
         end
     end
     print("[FS25_VR] Restored standard 2D HUD corner anchors.")
@@ -1244,7 +1307,15 @@ function VRCompanion:getMapDrawShift()
     if map == nil or map.isFullscreen == true then return nil end
     if self.is2DViewActive or self:getHudState() == self.HUD_STATE_HIDDEN then return nil end
     local x, y = self:getHudDisplayPosition(map, "IngameMap", self.currentConvergenceOffset)
-    return x - (self.mapEngineBaseX or 0.0), y - (self.mapEngineBaseY or 0.0)
+    local baseX = g_safeFrameOffsetX or (_G and _G.g_safeFrameOffsetX) or 0.0
+    local baseY = g_safeFrameOffsetY or (_G and _G.g_safeFrameOffsetY) or 0.0
+    return x - baseX, y - baseY
+end
+
+local function finishMapDraw(self, ok, ...)
+    self.mapDrawDepth = self.mapDrawDepth - 1
+    if not ok then error((...), 0) end
+    return ...
 end
 
 function VRCompanion:runMapDraw(fn, ...)
@@ -1255,10 +1326,13 @@ function VRCompanion:runMapDraw(fn, ...)
         self.mapDrawShiftX, self.mapDrawShiftY = dx or 0.0, dy or 0.0
         self.mapDrawDepth = 1
     end
-    local results = table.pack(pcall(fn, ...))
-    self.mapDrawDepth = self.mapDrawDepth - 1
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    return finishMapDraw(self, pcall(fn, ...))
+end
+
+local function finishMapLayoutShift(layout, origX, origY, ok, ...)
+    layout.mapPosX, layout.mapPosY = origX, origY
+    if not ok then error((...), 0) end
+    return ...
 end
 
 function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
@@ -1268,27 +1342,38 @@ function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
     end
     local origX, origY = layout.mapPosX, layout.mapPosY
     layout.mapPosX, layout.mapPosY = origX + dx, origY + dy
-    local results = table.pack(pcall(fn, layout, ...))
-    layout.mapPosX, layout.mapPosY = origX, origY
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    return finishMapLayoutShift(layout, origX, origY, pcall(fn, layout, ...))
 end
+
+local function finishHotspotDraw(self, ok, ...)
+    self.mapHotspotDepth = self.mapHotspotDepth - 1
+    if not ok then error((...), 0) end
+    return ...
+end
+
+local function runHotspotDraw(self, origMethod, ...)
+    self.mapHotspotDepth = self.mapHotspotDepth + 1
+    return finishHotspotDraw(self, pcall(origMethod, ...))
+end
+
+local function finishOverlayRender(overlay, origX, origY, ok, ...)
+    overlay.x, overlay.y = origX, origY
+    if not ok then error((...), 0) end
+    return ...
+end
+
+local hudWraps = VRCompanion.GameWraps.newGroup({ weakTargets = true })
 
 function VRCompanion:hookHud()
     if self.hudHooked then
         self:unhookHud()
     end
 
-    self.origHudHooks = {}
+    local hookedCount = 0
 
-    local function hookMethod(tbl, methodName, hookFn)
-        if tbl ~= nil and tbl[methodName] ~= nil and type(tbl[methodName]) == "function" then
-            table.insert(self.origHudHooks, {
-                tbl = tbl,
-                methodName = methodName,
-                orig = tbl[methodName]
-            })
-            tbl[methodName] = hookFn
+    local function hookMethod(tbl, methodName, makeFn)
+        if hudWraps:wrap(tbl, methodName, makeFn) then
+            hookedCount = hookedCount + 1
         end
     end
 
@@ -1297,12 +1382,15 @@ function VRCompanion:hookHud()
         if cls ~= nil then
             local displayName = info.displayName
 
-            if cls.draw ~= nil and type(cls.draw) == "function" then
-                local origDraw = cls.draw
-                hookMethod(cls, "draw", function(displaySelf, ...)
+            hookMethod(cls, "draw", function(origDraw, entry)
+                return function(displaySelf, ...)
+                    if not entry.active then
+                        return origDraw(displaySelf, ...)
+                    end
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
-                        if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
+                        if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive
+                            and not isFillLevelsPlacementCurrent(self, displaySelf) then
                             self:positionFillLevelsUnderSpeedometer(displaySelf)
                         end
                         if not self.hasLoggedFillLevelsDisplayInfo then
@@ -1326,12 +1414,14 @@ function VRCompanion:hookHud()
                         return self:runMapDraw(origDraw, displaySelf, ...)
                     end
                     return origDraw(displaySelf, ...)
-                end)
-            end
+                end
+            end)
 
-            if cls.getIsVisible ~= nil and type(cls.getIsVisible) == "function" then
-                local origGetIsVisible = cls.getIsVisible
-                hookMethod(cls, "getIsVisible", function(displaySelf, ...)
+            hookMethod(cls, "getIsVisible", function(origGetIsVisible, entry)
+                return function(displaySelf, ...)
+                    if not entry.active then
+                        return origGetIsVisible(displaySelf, ...)
+                    end
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
                     end
@@ -1339,21 +1429,23 @@ function VRCompanion:hookHud()
                         return false
                     end
                     return origGetIsVisible(displaySelf, ...)
-                end)
-            end
+                end
+            end)
 
-            if displayName == "InputHelpDisplay" and type(cls.setVisible) == "function" then
-                local origSetVisible = cls.setVisible
-                hookMethod(cls, "setVisible", function(displaySelf, isVisible, ...)
-                    self:rememberControlsExpanded(isVisible)
-                    return origSetVisible(displaySelf, isVisible, ...)
+            if displayName == "InputHelpDisplay" then
+                hookMethod(cls, "setVisible", function(origSetVisible, entry)
+                    return function(displaySelf, isVisible, ...)
+                        if not entry.active then
+                            return origSetVisible(displaySelf, isVisible, ...)
+                        end
+                        self:rememberControlsExpanded(isVisible)
+                        return origSetVisible(displaySelf, isVisible, ...)
+                    end
                 end)
             end
         end
     end
 
-    self.mapEngineBaseX = _G.g_safeFrameOffsetX or 0.0
-    self.mapEngineBaseY = _G.g_safeFrameOffsetY or 0.0
     self.mapDrawDepth = 0
     self.mapHotspotDepth = 0
     for _, className in ipairs(MAP_DRAW_CLASSES) do
@@ -1367,59 +1459,65 @@ function VRCompanion:hookHud()
                 end
             end
             for _, key in ipairs(drawMethods) do
-                local origMethod = cls[key]
                 if className ~= "IngameMap" and (key == "drawBefore" or key == "drawCoordinates" or key == "drawLatency") then
-                    hookMethod(cls, key, function(layout, ...)
-                        return self:runMapDraw(function(_, ...)
-                            return self:callWithMapLayoutShifted(layout, origMethod, ...)
-                        end, layout, ...)
+                    hookMethod(cls, key, function(origMethod, entry)
+                        return function(layout, ...)
+                            if not entry.active then
+                                return origMethod(layout, ...)
+                            end
+                            return self:runMapDraw(self.callWithMapLayoutShifted, self, layout, origMethod, ...)
+                        end
                     end)
                 elseif className == "IngameMap" and (string.find(key, "Hotspot", 1, true) or string.find(key, "PointsOfInterest", 1, true)) then
-                    hookMethod(cls, key, function(...)
-                        return self:runMapDraw(function(...)
-                            self.mapHotspotDepth = self.mapHotspotDepth + 1
-                            local results = table.pack(pcall(origMethod, ...))
-                            self.mapHotspotDepth = self.mapHotspotDepth - 1
-                            if not results[1] then error(results[2], 0) end
-                            return table.unpack(results, 2, results.n)
-                        end, ...)
+                    hookMethod(cls, key, function(origMethod, entry)
+                        return function(...)
+                            if not entry.active then
+                                return origMethod(...)
+                            end
+                            return self:runMapDraw(runHotspotDraw, self, origMethod, ...)
+                        end
                     end)
                 else
-                    hookMethod(cls, key, function(...)
-                        return self:runMapDraw(origMethod, ...)
+                    hookMethod(cls, key, function(origMethod, entry)
+                        return function(...)
+                            if not entry.active then
+                                return origMethod(...)
+                            end
+                            return self:runMapDraw(origMethod, ...)
+                        end
                     end)
                 end
             end
-            if type(cls.getMapObjectPosition) == "function" then
-                local origObjectPosition = cls.getMapObjectPosition
-                hookMethod(cls, "getMapObjectPosition", function(layout, ...)
+            hookMethod(cls, "getMapObjectPosition", function(origObjectPosition, entry)
+                return function(layout, ...)
                     local x, y, rotation, visible = origObjectPosition(layout, ...)
-                    if self.mapDrawDepth > 0 and visible and type(x) == "number" and type(y) == "number" then
+                    if entry.active and self.mapDrawDepth > 0 and visible and type(x) == "number" and type(y) == "number" then
                         x, y = x + self.mapDrawShiftX, y + self.mapDrawShiftY
                     end
                     return x, y, rotation, visible
-                end)
-            end
+                end
+            end)
         end
     end
     local overlayCls = getGlobalClass("Overlay")
-    if overlayCls ~= nil and type(overlayCls.render) == "function" then
-        local origRender = overlayCls.render
-        hookMethod(overlayCls, "render", function(overlay, clipX1, clipY1, clipX2, clipY2, ...)
-            local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
-            if self.mapDrawDepth > 0 and self.mapHotspotDepth == 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
-                and type(overlay.x) == "number" and type(overlay.y) == "number" then
-                local origX, origY = overlay.x, overlay.y
-                overlay.x, overlay.y = origX + dx, origY + dy
-                if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
-                    clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
+    if overlayCls ~= nil then
+        hookMethod(overlayCls, "render", function(origRender, entry)
+            return function(overlay, clipX1, clipY1, clipX2, clipY2, ...)
+                if not entry.active then
+                    return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
                 end
-                local results = table.pack(pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
-                overlay.x, overlay.y = origX, origY
-                if not results[1] then error(results[2], 0) end
-                return table.unpack(results, 2, results.n)
+                local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
+                if self.mapDrawDepth > 0 and self.mapHotspotDepth == 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
+                    and type(overlay.x) == "number" and type(overlay.y) == "number" then
+                    local origX, origY = overlay.x, overlay.y
+                    overlay.x, overlay.y = origX + dx, origY + dy
+                    if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
+                        clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
+                    end
+                    return finishOverlayRender(overlay, origX, origY, pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
+                end
+                return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
             end
-            return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
         end)
     end
 
@@ -1431,25 +1529,23 @@ function VRCompanion:hookHud()
     if hudInstance ~= nil and hudInstance ~= hudCls then table.insert(hudTargets, hudInstance) end
 
     for _, target in ipairs(hudTargets) do
-        if target.draw ~= nil and type(target.draw) == "function" then
-            local origHudDraw = target.draw
-            hookMethod(target, "draw", function(hudSelf, ...)
-                if self:getHudState() == self.HUD_STATE_HIDDEN then
+        hookMethod(target, "draw", function(origHudDraw, entry)
+            return function(hudSelf, ...)
+                if entry.active and self:getHudState() == self.HUD_STATE_HIDDEN then
                     return
                 end
                 return origHudDraw(hudSelf, ...)
-            end)
-        end
+            end
+        end)
 
-        if target.setIsVisible ~= nil and type(target.setIsVisible) == "function" then
-            local origSetIsVisible = target.setIsVisible
-            hookMethod(target, "setIsVisible", function(hudSelf, isVisible, ...)
-                if self:getHudState() == self.HUD_STATE_HIDDEN then
+        hookMethod(target, "setIsVisible", function(origSetIsVisible, entry)
+            return function(hudSelf, isVisible, ...)
+                if entry.active and self:getHudState() == self.HUD_STATE_HIDDEN then
                     return origSetIsVisible(hudSelf, false, ...)
                 end
                 return origSetIsVisible(hudSelf, isVisible, ...)
-            end)
-        end
+            end
+        end)
 
         local hudSetterHooks = {
             { methodName = "setInputHelpVisible", displayName = "InputHelpDisplay" },
@@ -1459,9 +1555,11 @@ function VRCompanion:hookHud()
         for _, setter in ipairs(hudSetterHooks) do
             local mName = setter.methodName
             local dName = setter.displayName
-            if target[mName] ~= nil and type(target[mName]) == "function" then
-                local origSetter = target[mName]
-                hookMethod(target, mName, function(hudSelf, isVisible, ...)
+            hookMethod(target, mName, function(origSetter, entry)
+                return function(hudSelf, isVisible, ...)
+                    if not entry.active then
+                        return origSetter(hudSelf, isVisible, ...)
+                    end
                     if dName == "InputHelpDisplay" then
                         self:rememberControlsExpanded(isVisible)
                     end
@@ -1469,26 +1567,20 @@ function VRCompanion:hookHud()
                         return origSetter(hudSelf, false, ...)
                     end
                     return origSetter(hudSelf, isVisible, ...)
-                end)
-            end
+                end
+            end)
         end
     end
 
-    if #self.origHudHooks > 0 then
+    if hookedCount > 0 then
         self.hudHooked = true
         print("[FS25_VR] Hooked native engine HUD display interfaces.")
     end
 end
 
 function VRCompanion:unhookHud()
-    if self.origHudHooks ~= nil then
-        for _, entry in ipairs(self.origHudHooks) do
-            if entry.tbl ~= nil and entry.methodName ~= nil then
-                entry.tbl[entry.methodName] = entry.orig
-            end
-        end
-        self.origHudHooks = nil
-    end
+    self:stopHudTrace()
+    hudWraps:liftAll()
     local mission = g_currentMission or (_G and _G.g_currentMission)
     if mission ~= nil and mission.hud ~= nil then
         if type(mission.hud.setIsVisible) == "function" then
@@ -1519,7 +1611,7 @@ function VRCompanion:getStereoDialogDrawShift(gui)
 end
 
 function VRCompanion:setStereoDialogDepth(depth, save)
-    if type(depth) ~= "number" or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
+    if not VRCompanion.isFiniteNumber(depth) or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
     self.stereoDialogDepth = depth
     if save then self:saveConfiguration() end
     return true
@@ -1541,21 +1633,27 @@ function VRCompanion:consoleCommandSetStereoDialogDepth(arg)
     if arg == nil or arg == "" then
         return string.format("Dialog depth: %.1f m. %s", self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH, usage)
     end
-    local depth = tonumber(arg)
+    local depth = VRCompanion.parseFiniteNumber(arg)
     if not self:setStereoDialogDepth(depth, true) then return usage end
     print(string.format("[FS25_VR] Dialog depth set to: %.1f m", depth))
     return string.format("Dialog depth set to: %.1f m (Saved)", depth)
 end
 
+local function shiftGuiRoot(root, offset)
+    root:setAbsolutePosition(root.absPosition[1] + offset, root.absPosition[2])
+end
+
+local function finishGuiDrawAtDepth(root, offset, ok, ...)
+    pcall(shiftGuiRoot, root, -offset)
+    if not ok then error((...), 0) end
+    return ...
+end
+
 function VRCompanion:drawGuiAtHudDepth(original, gui, ...)
     local root, offset = self:getStereoDialogDrawShift(gui)
     if root == nil then return original(gui, ...) end
-    local moved = pcall(function() root:setAbsolutePosition(root.absPosition[1] + offset, root.absPosition[2]) end)
-    if not moved then return original(gui, ...) end
-    local results = table.pack(pcall(original, gui, ...))
-    pcall(function() root:setAbsolutePosition(root.absPosition[1] - offset, root.absPosition[2]) end)
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    if not pcall(shiftGuiRoot, root, offset) then return original(gui, ...) end
+    return finishGuiDrawAtDepth(root, offset, pcall(original, gui, ...))
 end
 
 function VRCompanion:hookGuiDraw()
@@ -1587,13 +1685,17 @@ VRCompanion:registerSubsystem("hud", {
         if self.DEFAULT_HUD_DEPTH ~= nil then
             self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
         end
+        self.lastHudToggleTime = nil
         self.activeFillLevelsDisplay = nil
+        lastFillLevelsPlacement.display = nil
         self:stopHudTrace()
         self.hudEyeTestEye = nil
+        self.hasLoggedFillLevelsDisplayInfo = false
     end,
     saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.stereoDialogDepth = self.DEFAULT_STEREO_DIALOG_DEPTH end,
     consoleCommands = {
-        { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
+        { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 2.5 by default): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
     },
 })

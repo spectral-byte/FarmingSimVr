@@ -36,6 +36,9 @@ test("DefinesThreeStageHudStateConstants", function()
 end)
 
 test("CyclesThroughThreeStageStateMachine", function()
+    local savedTime = _G.g_time
+    _G.g_time = 1000
+    VRCompanion.lastHudToggleTime = nil
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     assert(VRCompanion:getHudState() == 0, "Initial state must be 0 (Hidden)")
 
@@ -43,13 +46,17 @@ test("CyclesThroughThreeStageStateMachine", function()
     assert(s1 == 1, "First cycle must advance to 1 (Streamlined)")
     assert(VRCompanion:getHudState() == 1, "getHudState must report 1")
 
+    _G.g_time = 1400
     local s2 = VRCompanion:cycleHudState()
     assert(s2 == 2, "Second cycle must advance to 2 (Full)")
     assert(VRCompanion:getHudState() == 2, "getHudState must report 2")
 
+    _G.g_time = 1800
     local s3 = VRCompanion:cycleHudState()
     assert(s3 == 0, "Third cycle must return to 0 (Hidden)")
     assert(VRCompanion:getHudState() == 0, "getHudState must report 0")
+    VRCompanion.lastHudToggleTime = nil
+    _G.g_time = savedTime
 end)
 
 test("ClampsHudStateValuesWithinRange", function()
@@ -61,18 +68,64 @@ test("ClampsHudStateValuesWithinRange", function()
 end)
 
 test("OnHudToggleActionAdvancesStateMachine", function()
+    local savedTime = _G.g_time
+    _G.g_time = 1000
+    VRCompanion.lastHudToggleTime = nil
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     local res1 = VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1)
     assert(res1 == 1, "onHudToggleAction must advance state to 1")
     assert(VRCompanion:getHudState() == 1, "hudState must be 1")
 
+    _G.g_time = 1400
     local res2 = VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1)
     assert(res2 == 2, "onHudToggleAction must advance state to 2")
     assert(VRCompanion:getHudState() == 2, "hudState must be 2")
 
+    _G.g_time = 1800
     local res3 = VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1)
     assert(res3 == 0, "onHudToggleAction must return state to 0")
     assert(VRCompanion:getHudState() == 0, "hudState must be 0")
+    VRCompanion.lastHudToggleTime = nil
+    _G.g_time = savedTime
+end)
+
+test("CycleHudStateDebouncesRapidPressesAndAllowsToggleAfterReload", function()
+    local savedTime = _G.g_time
+    _G.g_time = 10000
+    VRCompanion.lastHudToggleTime = nil
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+
+    assert(VRCompanion:cycleHudState() == 1, "first press advances to Streamlined")
+    _G.g_time = 10100
+    assert(VRCompanion:cycleHudState() == 1, "press within 300ms is debounced")
+    _G.g_time = 10300
+    assert(VRCompanion:cycleHudState() == 2, "press at 300ms advances to Full")
+
+    _G.g_time = 500
+    assert(VRCompanion:cycleHudState() == 0, "backward clock reset after reload does not lock out toggle")
+
+    _G.g_time = 50000
+    assert(VRCompanion:cycleHudState() == 1, "toggles before unload")
+    assert(VRCompanion.lastHudToggleTime == 50000)
+    VRCompanion:deleteMap()
+    assert(VRCompanion.lastHudToggleTime == nil, "map unload clears lastHudToggleTime")
+    _G.g_time = 100
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    assert(VRCompanion:cycleHudState() == 1, "toggle works immediately after map reload")
+
+    VRCompanion.lastHudToggleTime = nil
+    _G.g_time = savedTime
+end)
+
+test("VrDialogDepthDescriptionReportsDefaultHudDepth", function()
+    local commands = {}
+    local origAdd = _G.addConsoleCommand
+    _G.addConsoleCommand = function(name, desc, method) commands[name] = desc end
+    VRCompanion:addSubsystemConsoleCommands()
+    _G.addConsoleCommand = origAdd
+    assert(commands.vrDialogDepth ~= nil, "vrDialogDepth must be registered")
+    assert(string.find(commands.vrDialogDepth, "1.8", 1, true) == nil, "must not claim HUD is at 1.8: " .. commands.vrDialogDepth)
+    assert(string.find(commands.vrDialogDepth, "2.5", 1, true) ~= nil, "must report 2.5 default: " .. commands.vrDialogDepth)
 end)
 
 test("IsDisplayVisibleFiltersComponentsAcrossAllThreeStates", function()
@@ -874,6 +927,7 @@ test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
 
         VRCompanion:cycleHudState()
         assert(observed.store["vrSettings.hudState"] == "Streamlined", "the HUD Toggle Action saves the new state")
+        VRCompanion.lastHudToggleTime = nil
         VRCompanion:cycleHudState()
         assert(observed.store["vrSettings.hudState"] == "Full", "cycling again saves Full")
 
@@ -1114,6 +1168,66 @@ test("UnhookHudRestoresOriginalFunctionsCleanly", function()
 
     _G.InputHelpDisplay:draw()
     assert(origDrawCalled == true, "Original draw function must be callable after unhook")
+end)
+
+test("HookHudDoesNotDoubleWrapInheritedMissionHudOrMapLayoutSubclasses", function()
+    local hudDrawCalls = 0
+    local origHudDraw = function(self) hudDrawCalls = hudDrawCalls + 1 end
+    local origSetVis = function(self, v) self.isVisible = v end
+    local origMapPos = function(self) return 0.1, 0.2, 0.0, true end
+
+    _G.HUD = { draw = origHudDraw, setIsVisible = origSetVis }
+    local hudInstance = setmetatable({ isVisible = true }, { __index = _G.HUD })
+    _G.g_currentMission = { hud = hudInstance }
+    _G.IngameMapLayout = { getMapObjectPosition = origMapPos }
+    _G.IngameMapLayoutCircle = setmetatable({}, { __index = _G.IngameMapLayout })
+
+    VRCompanion:hookHud()
+    assert(rawget(hudInstance, "draw") == nil, "inherited mission.hud.draw must not be wrapped a second time on instance")
+    assert(rawget(hudInstance, "setIsVisible") == nil, "inherited mission.hud.setIsVisible must not be wrapped a second time on instance")
+    assert(rawget(_G.IngameMapLayoutCircle, "getMapObjectPosition") == nil, "inherited getMapObjectPosition must not be double-wrapped on subclass")
+
+    local savedState = VRCompanion.hudState
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    hudInstance:draw()
+    assert(hudDrawCalls == 1, "HUD.draw must execute once via inherited mission.hud")
+    VRCompanion.hudState = savedState
+
+    VRCompanion:unhookHud()
+    assert(_G.HUD.draw == origHudDraw, "HUD.draw restored")
+    assert(_G.HUD.setIsVisible == origSetVis, "HUD.setIsVisible restored")
+    assert(_G.IngameMapLayout.getMapObjectPosition == origMapPos, "IngameMapLayout.getMapObjectPosition restored")
+    assert(rawget(hudInstance, "draw") == nil, "mission.hud.draw stays inherited after unhook")
+    assert(rawget(_G.IngameMapLayoutCircle, "getMapObjectPosition") == nil, "IngameMapLayoutCircle stays clean after unhook")
+
+    _G.HUD, _G.IngameMapLayout, _G.IngameMapLayoutCircle, _G.g_currentMission = nil, nil, nil, nil
+end)
+
+test("UnhookHudPreservesDownstreamThirdPartyWrappers", function()
+    local origCalls = 0
+    local origDraw = function(self) origCalls = origCalls + 1 end
+    _G.InputHelpDisplay = { draw = origDraw }
+    _G.HUD = { draw = function(self) end }
+
+    VRCompanion:hookHud()
+    local ours = _G.InputHelpDisplay.draw
+    local thirdPartyCalls = 0
+    local theirs = function(self)
+        thirdPartyCalls = thirdPartyCalls + 1
+        return ours(self)
+    end
+    _G.InputHelpDisplay.draw = theirs
+
+    VRCompanion:unhookHud()
+    assert(_G.InputHelpDisplay.draw == theirs, "unhookHud must preserve third-party wrapper installed after VRCompanion")
+
+    local savedState = VRCompanion.hudState
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    _G.InputHelpDisplay:draw()
+    VRCompanion.hudState = savedState
+    assert(thirdPartyCalls == 1 and origCalls == 1, "third-party wrapper and original run without VR suppression after unhook")
+
+    _G.InputHelpDisplay, _G.HUD = nil, nil
 end)
 
 test("LoadMapAndLifecycleIntegratesHudHooking", function()

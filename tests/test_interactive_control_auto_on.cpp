@@ -331,3 +331,71 @@ TEST_F(CompanionModTest, WithTheHudHiddenTheCabClickPointsAreUpdatedWithoutTheVe
     ASSERT_EQ(EvalLua(L, "tostring(VRCompanion:doesMenuTakeInput())"), "true") << "the menu is open";
     EXPECT_EQ(EvalLua(L, "#StubIC.cabUpdates"), "0") << "not while a menu takes the input";
 }
+
+TEST_F(CompanionModTest, AutoOnActivatesOnlyInLiveInCabGameplayNotInMenusOrOutsideCameras) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, false));
+    SetGameTime(10000);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui = { visible = false, getIsGuiVisible = function(self) return self.visible end }
+        _G.cabCam = g_currentMission.controlledVehicle:getActiveCamera()
+        StubIC.changeCamera(g_currentMission.controlledVehicle, { isInside = false })
+    )luau", "=outside"), 0);
+
+    PICK_UP(kRight);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "false");
+    EXPECT_EQ(EvalLua(L, "#StubIC.stateWrites"), "0");
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true; StubIC.changeCamera(g_currentMission.controlledVehicle, cabCam)", "=menuInside"), 0);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "false");
+    EXPECT_EQ(EvalLua(L, "#StubIC.stateWrites"), "1");
+    EXPECT_EQ(EvalLua(L, "StubIC.stateWrites[1].state"), "false");
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "false");
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenuAgain"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.changeCamera(g_currentMission.controlledVehicle, { isInside = false })", "=toOutside"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "false");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.changeCamera(g_currentMission.controlledVehicle, cabCam)", "=backInside"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "g_currentMission.controlledVehicle:isInteractiveControlActivated()"), "true");
+}
+
+TEST_F(CompanionModTest, DeletedClickPointNodeDoesNotAbortMotionControllerUpdate) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, true));
+    SetGameTime(10000);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('stalePoint', -0.3, 1.5, 2.3)
+        StubIC.addPoint('livePoint', -0.3, 1.5, 2.3)
+    )luau", "=points"), 0);
+    headset.SetHandPointing(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    FRAMES(1);
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local deadNode = StubIC.points[1].node
+        StubScene.nodes[deadNode] = nil
+        local realGetWorldTranslation = _G.getWorldTranslation
+        _G.getWorldTranslation = function(node)
+            if node == deadNode then error("deleted node") end
+            return realGetWorldTranslation(node)
+        end
+    )luau", "=deleteNode"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "livePoint");
+}

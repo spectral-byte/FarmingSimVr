@@ -86,6 +86,8 @@ end)
 test("StartingATraceTimesTheGameUpdateTheModUpdateTheCameraAndTheDraw", function()
     local reply = VRCompanion:consoleCommandPerfTrace("5")
     assert(string.find(reply, "for 5 s into fs25_vr.log", 1, true), reply)
+    assert(string.find(reply, "version.dll", 1, true), "must name version.dll: " .. reply)
+    assert(string.find(reply, "dxgi.dll", 1, true) == nil, "must not name dxgi.dll: " .. reply)
     assert(VRCompanion.perfTracing == true, "the trace runs")
     assert(_G.perfCalls[1] == "start 5", calls())
     _G.perfCalls = {}
@@ -118,7 +120,7 @@ test("StopEndsARunningTraceAndSaysWhenNoneRuns", function()
 end)
 
 test("ALengthOutsideOneToSixtySecondsGetsTheUsage", function()
-    for _, arg in ipairs({ "0", "61", "abc", "-3" }) do
+    for _, arg in ipairs({ "0", "61", "abc", "-3", "nan", "inf", "-inf" }) do
         local reply = VRCompanion:consoleCommandPerfTrace(arg)
         assert(string.find(reply, "Usage: vrPerfTrace", 1, true), arg .. ": " .. tostring(reply))
     end
@@ -136,6 +138,8 @@ test("WithoutTheInjectorTheCommandSaysSo", function()
     VRBridge = saved
     assert(ok, tostring(reply))
     assert(string.find(reply, "needs the Injector", 1, true), reply)
+    assert(string.find(reply, "version.dll", 1, true), "must name version.dll: " .. reply)
+    assert(string.find(reply, "dxgi.dll", 1, true) == nil, "must not name dxgi.dll: " .. reply)
     assert(VRCompanion.perfTracing == false)
 end)
 
@@ -209,6 +213,36 @@ test("UnderAfrAnErrorInTheGameUpdateStillClearsTheRunningMark", function()
         assert(runs.base == 2, "the next update ran the game's update")
         assert(countBegins("gameUpdate") == 1, "the next update still runs the mod logic: " .. calls())
     end)
+end)
+
+test("InheritedMission00IsNotDoubleWrappedAndDownstreamWrapperSurvivesUnhook", function()
+    local savedBase, savedM00 = _G.FSBaseMission, _G.Mission00
+    VRCompanion:unhookMissionUpdate()
+    local origCalls = 0
+    local origBase = function(self, dt) origCalls = origCalls + 1 end
+    _G.FSBaseMission = { update = origBase }
+    _G.Mission00 = setmetatable({}, { __index = _G.FSBaseMission })
+
+    VRCompanion:hookMissionUpdate()
+    assert(rawget(_G.Mission00, "update") == nil, "inherited Mission00.update must not be pinned on Mission00")
+
+    local wrappedBase = _G.FSBaseMission.update
+    local thirdPartyCalls = 0
+    local thirdPartyWrap = function(self, dt)
+        thirdPartyCalls = thirdPartyCalls + 1
+        return wrappedBase(self, dt)
+    end
+    _G.FSBaseMission.update = thirdPartyWrap
+
+    VRCompanion:unhookMissionUpdate()
+    assert(_G.FSBaseMission.update == thirdPartyWrap, "unhookMissionUpdate must preserve downstream third-party wrapper")
+    assert(rawget(_G.Mission00, "update") == nil, "Mission00 must remain clean after unhook")
+
+    _G.Mission00.update({}, 16.6)
+    assert(thirdPartyCalls == 1 and origCalls == 1, "downstream wrapper and original still run once after unhook")
+
+    _G.FSBaseMission, _G.Mission00 = savedBase, savedM00
+    VRCompanion:hookMissionUpdate()
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

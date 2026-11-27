@@ -240,7 +240,7 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, WithoutTheGamesTextsTheTypeI
     EXPECT_EQ(MessagesNaming("Marker type: ARROW"), 1) << Messages();
 }
 
-TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedAgainWhenTheCanIsTakenInHandAgainAfterBeingSetDown) {
+TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNotRepeatedAfterIdleTimeoutOrMenuAndOnlyFlashesOnEquipOrTypeChange) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
     ASSERT_EQ(MessagesNaming("Cross"), 1);
 
@@ -249,7 +249,13 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedAgainWhe
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(2);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
-    EXPECT_EQ(MessagesNaming("Cross"), 2) << "taken into the tracked Tool Hand again: named again";
+    EXPECT_EQ(MessagesNaming("Cross"), 1);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menuOpen"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=menuClose"), 0);
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Cross"), 1);
 
     headset.SetHandTracked(kRight, false);
     FRAMES(2);
@@ -259,6 +265,12 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedAgainWhe
     headset.SetHandTracked(kRight, true);
     FRAMES(3);
     EXPECT_EQ(MessagesNaming("Arrow"), 1) << "and back in the hand it is named";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(can)", "=dropCan"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.hold(can)", "=equipCan"), 0);
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Arrow"), 2);
 }
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, NoMarkerTypeMessageWithHandToolsOffAndNoneForAnotherModsTool) {

@@ -22,6 +22,8 @@ VRCompanion.ACTION_EVENTS = {
         textKey = "input_VR_SET_SEAT", fallbackText = "Set VR Seat Position", loggedField = "seatSetLoggedOnce" },
 }
 
+local activeEventsScratch = {}
+
 function VRCompanion:registerActionEvents(force)
     local inputBinding = g_inputBinding or _G.g_inputBinding
     if inputBinding == nil or type(inputBinding.registerActionEvent) ~= "function" then
@@ -40,16 +42,25 @@ function VRCompanion:registerActionEvents(force)
         print("[FS25_VR] [Warning] g_inputBinding.events is missing; action events will be re-registered on every check.")
         self.missingInputEventsLogged = true
     end
-    local active = {}
     if not force and actionEvents ~= nil then
         local allActive = true
         for _, row in ipairs(self.ACTION_EVENTS) do
-            local isActive = self[row.idField] ~= nil and actionEvents[self[row.idField]] ~= nil
-            active[row.idField] = isActive
-            allActive = allActive and isActive
+            local id = self[row.idField]
+            if id == nil or actionEvents[id] == nil then
+                allActive = false
+                break
+            end
         end
         if allActive then
             return
+        end
+    end
+    local active = activeEventsScratch
+    table.clear(active)
+    if not force and actionEvents ~= nil then
+        for _, row in ipairs(self.ACTION_EVENTS) do
+            local id = self[row.idField]
+            active[row.idField] = (id ~= nil and actionEvents[id] ~= nil)
         end
     end
 
@@ -121,7 +132,7 @@ function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
                 end
                 if type(inputBinding.setActionEventText) == "function" then
                     pcall(function()
-                        local txt = (g_i18n and g_i18n:getText(row.textKey)) or row.fallbackText
+                        local txt = VRCompanion.getLocalisedText(row.textKey, row.fallbackText)
                         inputBinding:setActionEventText(eventId, txt)
                     end)
                 end
@@ -141,12 +152,10 @@ function VRCompanion:getHudSafeAreaUsage()
         self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
 end
 
-local function isNumber(v) return v ~= nil and v == v end
-
 function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
-    local horizontal = tonumber(horizontalStr)
-    local vertical = tonumber(verticalStr)
-    if not isNumber(horizontal) or not isNumber(vertical) then
+    local horizontal = VRCompanion.parseFiniteNumber(horizontalStr)
+    local vertical = VRCompanion.parseFiniteNumber(verticalStr)
+    if horizontal == nil or vertical == nil then
         return self:getHudSafeAreaUsage()
     end
 
@@ -184,12 +193,15 @@ end
 
 function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, verticalStr, scaleStr)
     local groupName = (groupStr ~= nil) and string.lower(tostring(groupStr)) or nil
-    local horizontal = tonumber(horizontalStr)
-    local vertical = tonumber(verticalStr)
+    local horizontal = VRCompanion.parseFiniteNumber(horizontalStr)
+    local vertical = VRCompanion.parseFiniteNumber(verticalStr)
     local hasScale = (scaleStr ~= nil and scaleStr ~= "")
-    local scale = hasScale and tonumber(scaleStr) or nil
+    local scale = nil
+    if hasScale then
+        scale = VRCompanion.parseFiniteNumber(scaleStr)
+    end
     if groupName == nil or self.HUD_GROUPS[groupName] == nil
-        or not isNumber(horizontal) or not isNumber(vertical) or (hasScale and not isNumber(scale)) then
+        or horizontal == nil or vertical == nil or (hasScale and scale == nil) then
         return self:getHudGroupUsage()
     end
 
@@ -204,7 +216,7 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
         pcall(function()
             mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_groupLayoutSet",
                 "VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)",
-                groupName, layout.marginX, layout.marginY, layout.scale), 2500)
+                self:getHudGroupText(groupName), layout.marginX, layout.marginY, layout.scale), 2500)
         end)
     end
     return string.format("VR HUD %s group updated and saved: horizontal=%.2f, vertical=%.2f, scale=%.2f",
@@ -212,8 +224,8 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
 end
 
 function VRCompanion:consoleCommandSetHudState(stateStr)
-    local st = tonumber(stateStr)
-    if st == nil or st < 0 or st > 2 then
+    local st = VRCompanion.parseFiniteNumber(stateStr, 0, 2, true)
+    if st == nil then
         return "Usage: vrHudState <0=Hidden | 1=Streamlined | 2=Full>"
     end
     self:setHudState(st)
@@ -230,11 +242,14 @@ function VRCompanion:consoleCommandSetHudState(stateStr)
 end
 
 function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
+    local usage = string.format("Usage: vrHudLoadNotification <true|false> (current: %s)", tostring(self.showHudLoadNotification == true))
     if enabledStr == nil or enabledStr == "" then
-        return string.format("Usage: vrHudLoadNotification <true|false> (current: %s)", tostring(self.showHudLoadNotification == true))
+        return usage
     end
-    local lower = string.lower(tostring(enabledStr))
-    local enabled = (lower == "true" or lower == "1" or lower == "on")
+    local enabled = VRCompanion.parseOnOffArgument(enabledStr)
+    if enabled == nil then
+        return usage
+    end
     self.showHudLoadNotification = enabled
     self:saveConfiguration()
     local mission = g_currentMission or _G.g_currentMission
@@ -315,7 +330,7 @@ function VRCompanion:consoleCommandSetSnapTurnAngle(angleStr)
         return string.format("Current VR snap turn angle: %.1f deg. Usage: vrSnapTurnAngle <degrees> (e.g. 30, 45, 90, 180)", curDeg)
     end
 
-    local deg = tonumber(angleStr)
+    local deg = VRCompanion.parseFiniteNumber(angleStr)
     if deg == nil or deg <= 0 or deg > 360 then
         return string.format("Usage: vrSnapTurnAngle <degrees> (valid: 1 to 360, e.g. 30, 45, 90, 180, current: %.1f deg)", curDeg)
     end
@@ -360,24 +375,37 @@ function VRCompanion:consoleCommandToggleView()
     return string.format("2D Floating Window Mode toggled to: %s", tostring(self.is2DViewActive))
 end
 
-function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
-    local sx = tonumber(scaleXStr)
-    if sx == nil then
-        return "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)"
+local function applyDlssMvScaleCommand(scaleXStr, scaleYStr, usage, bridgeMethod, label)
+    local sx = VRCompanion.parseFiniteNumber(scaleXStr)
+    local sy = sx
+    if scaleYStr ~= nil and scaleYStr ~= "" then
+        sy = VRCompanion.parseFiniteNumber(scaleYStr)
     end
-    local sy = tonumber(scaleYStr) or sx
+    if sx == nil or sy == nil then
+        return usage
+    end
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if bridge ~= nil and type(bridge.setDlssMvScale) == "function" then
-        bridge.setDlssMvScale(sx, sy)
-        print(string.format("[FS25_VR] DLSS Motion Vector scale multiplier set to: X=%.2f, Y=%.2f", sx, sy))
-        return string.format("DLSS Motion Vector scale multiplier set to: X=%.2f, Y=%.2f", sx, sy)
-    else
-        return "VRBridge.setDlssMvScale is not available."
+    if bridge ~= nil and type(bridge[bridgeMethod]) == "function" then
+        bridge[bridgeMethod](sx, sy)
+        local message = string.format("%s set to: X=%.2f, Y=%.2f", label, sx, sy)
+        print("[FS25_VR] " .. message)
+        return message
     end
+    return "VRBridge." .. bridgeMethod .. " is not available."
+end
+
+function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
+    return applyDlssMvScaleCommand(
+        scaleXStr,
+        scaleYStr,
+        "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)",
+        "setDlssMvScale",
+        "DLSS Motion Vector scale multiplier"
+    )
 end
 
 function VRCompanion:consoleCommandSetDlssSharpness(sharpStr)
-    local s = tonumber(sharpStr)
+    local s = VRCompanion.parseFiniteNumber(sharpStr, 0.0, 1.0)
     if s == nil then
         return "Usage: vrDlssSharpness <sharpness 0.0 - 1.0> (e.g. 0.50)"
     end
@@ -392,7 +420,7 @@ function VRCompanion:consoleCommandSetDlssSharpness(sharpStr)
 end
 
 function VRCompanion:consoleCommandSetDlssPreset(presetStr)
-    local p = tonumber(presetStr)
+    local p = VRCompanion.parseFiniteNumber(presetStr, 0, nil, true)
     if p == nil then
         return "Usage: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L> (e.g. 11 for Preset K)"
     end
@@ -407,19 +435,13 @@ function VRCompanion:consoleCommandSetDlssPreset(presetStr)
 end
 
 function VRCompanion:consoleCommandSetDlssSdpMvScale(scaleXStr, scaleYStr)
-    local sx = tonumber(scaleXStr)
-    if sx == nil then
-        return "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)"
-    end
-    local sy = tonumber(scaleYStr) or sx
-    local bridge = VRBridge or (_G and _G.VRBridge)
-    if bridge ~= nil and type(bridge.setDlssSdpMvScale) == "function" then
-        bridge.setDlssSdpMvScale(sx, sy)
-        print(string.format("[FS25_VR] DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy))
-        return string.format("DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy)
-    else
-        return "VRBridge.setDlssSdpMvScale is not available."
-    end
+    return applyDlssMvScaleCommand(
+        scaleXStr,
+        scaleYStr,
+        "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)",
+        "setDlssSdpMvScale",
+        "DLSS Sequential Dual-Pass motion vector scale"
+    )
 end
 
 function VRCompanion:consoleCommandDlssMvFix(arg)
@@ -471,12 +493,10 @@ end
 local DLSS_NEAR_CLIP_MODE_NAMES = { cab = "cab", outside = "outside camera", onFoot = "on foot" }
 
 local function parseDlssNearClip(arg)
-    local meters = tonumber(arg)
-    if meters == nil and type(arg) == "string" and string.lower(arg) == "auto" then
-        meters = 0
+    if type(arg) == "string" and string.lower(arg) == "auto" then
+        return 0
     end
-    if meters == nil or meters ~= meters or meters < 0 then return nil end
-    return meters
+    return VRCompanion.parseFiniteNumber(arg, 0)
 end
 
 local function describeDlssNearClip(meters)
@@ -545,7 +565,13 @@ function VRCompanion:consoleCommandDlssNearClipOnFoot(arg)
 end
 
 function VRCompanion:consoleCommandDlssDiag(countStr)
-    local count = tonumber(countStr) or 128
+    local count = 128
+    if countStr ~= nil and countStr ~= "" then
+        count = VRCompanion.parseFiniteNumber(countStr, 1, nil, true)
+        if count == nil then
+            return "Usage: vrDlssDiag [evaluations]"
+        end
+    end
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil and type(bridge.dlssDiag) == "function" then
         if bridge.dlssDiag(count) then
@@ -615,5 +641,6 @@ VRCompanion:registerSubsystem("input", {
             self[row.loggedField] = false
         end
         self.actionEventsContextName = nil
+        self.missingInputEventsLogged = false
     end,
 })

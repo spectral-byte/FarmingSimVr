@@ -122,7 +122,7 @@ local function isHoldingHandTool(self, hand)
 end
 
 local function isCarryingHeldObject(self, hand)
-    return self:isHandCarryingHeldObject(hand) == true
+    return not self:isMenuQuadShown() and self:isHandCarryingHeldObject(hand) == true
 end
 
 local function isPointerCandidate(self, hand)
@@ -146,6 +146,11 @@ local function choosePointerHand(self)
         if hand ~= previous and self:isObjectGrabSqueeze(hand) == true then
             return hand
         end
+    end
+    if previous == nil then
+        local toolHand = type(self.getToolHand) == "function" and self:getToolHand() or nil
+        if toolHand == 0 or toolHand == 1 then return toolHand end
+        return self.MOTION_HAND_RIGHT
     end
     return previous
 end
@@ -323,10 +328,17 @@ function VRCompanion:updateMotionControllers(dt)
         end
     end
     self:updateHandTools(dt)
+    local previousPointerHand = state.pointerHand
     state.pointerHand = choosePointerHand(self)
     self.pointerHand = state.pointerHand
-    if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
+    if state.pointerHand ~= nil and (state.movedThisUpdate[state.pointerHand]
+        or (state.pointerHand ~= previousPointerHand and state.triggerConsumed[state.pointerHand])) then
         self:notePointerRayMoved()
+    end
+    for _, hand in ipairs(HANDS) do
+        if state.triggerConsumed[hand] and type(self.takeVirtualGamepadInput) == "function" then
+            self:takeVirtualGamepadInput(hand, "trigger")
+        end
     end
     self:updatePointerRay(dt)
     updatePointerUsers(self, dt)
@@ -338,10 +350,7 @@ function VRCompanion:resetMotionControllerMovement()
     end
 end
 
-local function qrotate(qx, qy, qz, qw, x, y, z)
-    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
-    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
-end
+local qrotate = VRCompanion.rotateVectorByQuaternion
 
 local function headIsPlacedInTheWorld(self)
     if self:isMenuQuadShown() or self.is2DViewActive or self.trackedCameraShown == false then return false end
@@ -368,12 +377,14 @@ function VRCompanion:describeHeadPlacement()
         tostring(self:isPassThroughMode()))
 end
 
-function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
+function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out, outRelative)
     local listener = self.cyclopeanAudioListenerNode
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
     local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if listener == nil or listener == 0 then return false, "the Cyclopean Audio Listener Node does not exist" end
+    if not VRCompanion.nodeExists(listener) then
+        return false, "the Cyclopean Audio Listener Node does not exist"
+    end
     if not headIsPlacedInTheWorld(self) then
         return false, "the head is not placed in the world (" .. self:describeHeadPlacement() .. ")"
     end
@@ -391,15 +402,27 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     local offX, offY, offZ = qrotate(hx, hy, hz, hw, x - head.x, y - head.y, z - head.z)
     local rx, ry, rz, rw = qmultiply(hx, hy, hz, hw, qx, qy, qz, qw)
 
-    local lx, ly, lz = getWorldTranslationFn(listener)
-    local lqx, lqy, lqz, lqw = getWorldQuaternionFn(listener)
-    if lx == nil or lqw == nil then return false, "the listener node has no world pose" end
+    local okT, lx, ly, lz = pcall(getWorldTranslationFn, listener)
+    local okQ, lqx, lqy, lqz, lqw = pcall(getWorldQuaternionFn, listener)
+    if not okT or not okQ or type(lx) ~= "number" or type(lqw) ~= "number" then
+        return false, "the listener node has no world pose"
+    end
     local wx, wy, wz = qrotate(lqx, lqy, lqz, lqw, offX, offY, offZ)
     local wqx, wqy, wqz, wqw = qmultiply(lqx, lqy, lqz, lqw, rx, ry, rz, rw)
     local length = math.sqrt(wqx * wqx + wqy * wqy + wqz * wqz + wqw * wqw)
     if length < 1e-6 then return false, "the pose has no rotation" end
     out.x, out.y, out.z = lx + wx, ly + wy, lz + wz
     out.qx, out.qy, out.qz, out.qw = wqx / length, wqy / length, wqz / length, wqw / length
+    if outRelative ~= nil then
+        local relLength = math.sqrt(rx * rx + ry * ry + rz * rz + rw * rw)
+        if relLength >= 1e-6 then
+            outRelative.x, outRelative.y, outRelative.z = offX, offY, offZ
+            outRelative.qx, outRelative.qy, outRelative.qz, outRelative.qw = rx / relLength, ry / relLength, rz / relLength, rw / relLength
+            outRelative.valid = true
+        else
+            outRelative.valid = false
+        end
+    end
     return true
 end
 
@@ -499,9 +522,14 @@ local function noteRayInHead(self, ray)
     local inHead = state.rayInHead
     local listener = self.cyclopeanAudioListenerNode
     local worldToLocalFn = worldToLocal or (_G and _G.worldToLocal)
-    if listener == nil or listener == 0 or type(worldToLocalFn) ~= "function" then return end
-    inHead.ox, inHead.oy, inHead.oz = worldToLocalFn(listener, ray.ox, ray.oy, ray.oz)
-    inHead.ex, inHead.ey, inHead.ez = worldToLocalFn(listener, ray.ex, ray.ey, ray.ez)
+    if not VRCompanion.nodeExists(listener) or type(worldToLocalFn) ~= "function" then
+        return
+    end
+    local okO, ox, oy, oz = pcall(worldToLocalFn, listener, ray.ox, ray.oy, ray.oz)
+    local okE, ex, ey, ez = pcall(worldToLocalFn, listener, ray.ex, ray.ey, ray.ez)
+    if not okO or not okE or type(ox) ~= "number" or type(ex) ~= "number" then return end
+    inHead.ox, inHead.oy, inHead.oz = ox, oy, oz
+    inHead.ex, inHead.ey, inHead.ez = ex, ey, ez
     inHead.valid = true
 end
 
@@ -533,23 +561,35 @@ function VRCompanion:updatePointerRay(dt)
                 or "keeps the aim direction (POINTER_RAY_FOLLOWS_FINGER_DIRECTION is false)"))
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
+    local targetKind = nil
     local clickCos = self:peekInteractiveControlTarget()
     local onCouplingPoint, couplingX, couplingY, couplingZ = self:updateManualAttach(dt, false, clickCos)
     hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onCouplingPoint)
-    if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ end
+    if onCouplingPoint then
+        hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ
+        targetKind = "couplingPoint"
+    elseif hitX ~= nil then
+        targetKind = "clickPoint"
+    end
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
-    if not hasTarget then
+    if hitX == nil then
         grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
     end
     local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil, grabbable and grabDistance or nil)
     if onAnimatedObject then
         hasTarget, hitX, hitY, hitZ = true, animatedX, animatedY, animatedZ
         grabbable = false
+        targetKind = "animatedObject"
     end
     self:settleObjectGrabRayTarget(grabbable)
     if grabbable then
         hasTarget, hitX, hitY, hitZ = true, grabX, grabY, grabZ
+        targetKind = "objectGrab"
     end
+    if hasTarget and targetKind == nil then
+        targetKind = "idle"
+    end
+    ray.targetKind = targetKind
     if ray.valid and hasTarget then
         ray.visible = true
         if hitX ~= nil then
@@ -600,22 +640,34 @@ function VRCompanion:onClickPointEvent(kind, clickPoint)
     end
 end
 
+local RAY_COLORS = {
+    idle = { 0.20, 0.45, 0.55, 0.65, 0.75, 0.80 },
+    clickPoint = { 0.25, 0.85, 1.00, 1.00, 1.00, 1.00 },
+    couplingPoint = { 1.00, 0.75, 0.20, 1.00, 0.90, 0.50 },
+    animatedObject = { 0.35, 0.95, 0.45, 0.85, 1.00, 0.85 },
+    objectGrab = { 0.95, 0.90, 0.25, 1.00, 1.00, 0.75 },
+}
+
 function VRCompanion:placePointerRayForRender()
     local inHead = state.rayInHead
     if not state.ray.visible or not inHead.valid then return end
     local listener = self.cyclopeanAudioListenerNode
     local localToWorldFn = localToWorld or (_G and _G.localToWorld)
-    if listener == nil or listener == 0 or type(localToWorldFn) ~= "function" then return end
-    local ox, oy, oz = localToWorldFn(listener, inHead.ox, inHead.oy, inHead.oz)
-    local ex, ey, ez = localToWorldFn(listener, inHead.ex, inHead.ey, inHead.ez)
+    if not VRCompanion.nodeExists(listener) or type(localToWorldFn) ~= "function" then
+        return
+    end
+    local okO, ox, oy, oz = pcall(localToWorldFn, listener, inHead.ox, inHead.oy, inHead.oz)
+    local okE, ex, ey, ez = pcall(localToWorldFn, listener, inHead.ex, inHead.ey, inHead.ez)
+    if not okO or not okE or type(ox) ~= "number" or type(ex) ~= "number" then return end
     local drawLine = drawDebugLine or (_G and _G.drawDebugLine)
     local drawPoint = drawDebugPoint or (_G and _G.drawDebugPoint)
-    local r, g, b = 0.25, 0.85, 1.0
+    local colors = RAY_COLORS[state.ray.targetKind] or RAY_COLORS.clickPoint
+    local r, g, b = colors[1], colors[2], colors[3]
     if type(drawLine) == "function" then
         drawLine(ox, oy, oz, r, g, b, ex, ey, ez, r, g, b, false)
     end
     if type(drawPoint) == "function" then
-        drawPoint(ex, ey, ez, 1.0, 1.0, 1.0, 1.0, false)
+        drawPoint(ex, ey, ez, colors[4], colors[5], colors[6], 1.0, false)
     end
 end
 
@@ -677,7 +729,7 @@ end
 local SETTING_KEY_CONE = "vrSettings.pointerConeDegrees"
 
 local function validPointerCone(self, degrees)
-    return type(degrees) == "number" and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
+    return VRCompanion.isFiniteNumber(degrees) and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
 end
 
 function VRCompanion:savePointerConeSetting(xmlFile, xml)
@@ -701,7 +753,7 @@ function VRCompanion:consoleCommandSetPointerCone(arg)
         return string.format("Pointer Ray cone: %s degrees (default %s). %s",
             tostring(self.pointerConeDegrees), tostring(self.DEFAULT_POINTER_CONE_DEGREES), usage)
     end
-    local degrees = tonumber(arg)
+    local degrees = VRCompanion.parseFiniteNumber(arg)
     if not validPointerCone(self, degrees) then
         return usage
     end
@@ -799,6 +851,10 @@ VRCompanion:registerSubsystem("motionControllers", {
     update = function(self, dt) self:updateMotionControllers(dt) end,
     saveSettings = function(self, xmlFile, xml) self:saveMotionControllerSettings(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadMotionControllerSettings(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.motionControllersEnabled = self.DEFAULT_MOTION_CONTROLLERS_ENABLED
+        self.pointerConeDegrees = self.DEFAULT_POINTER_CONE_DEGREES
+    end,
     mapUnload = function(self) self:resetMotionControllers() end,
     consoleCommands = {
         { name = "vrPointerDiagnostics", description = "Report why the Pointer Ray may not select Click Points: vrPointerDiagnostics", method = "consoleCommandPointerDiagnostics" },

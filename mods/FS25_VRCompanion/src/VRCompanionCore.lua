@@ -29,6 +29,26 @@ function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
+function VRCompanion.getLocalPlayer()
+    local player = VRCompanion.getEngineGlobal("g_localPlayer")
+    if player == nil then
+        local mission = VRCompanion.getEngineGlobal("g_currentMission")
+        player = type(mission) == "table" and mission.player or nil
+    end
+    return player
+end
+
+function VRCompanion.rotateVectorByQuaternion(qx, qy, qz, qw, x, y, z)
+    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+end
+
+function VRCompanion.nodeExists(node)
+    if node == nil or node == 0 then return false end
+    local exists = VRCompanion.getEngineGlobal("entityExists")
+    return type(exists) ~= "function" or exists(node)
+end
+
 VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
 
 local lookRayAimers = {}
@@ -105,7 +125,7 @@ function VRCompanion:registerSubsystem(name, hooks)
         error("registerSubsystem: the subsystem needs a name", 2)
     end
     hooks = hooks or {}
-    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings" }) do
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings", "resetSettings" }) do
         if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
@@ -155,6 +175,12 @@ end
 function VRCompanion:runSubsystemLoadSettings(xmlFile, getters)
     for _, subsystem in ipairs(subsystems) do
         runSubsystemHook(self, subsystem, "loadSettings", xmlFile, getters)
+    end
+end
+
+function VRCompanion:runSubsystemResetSettings()
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(self, subsystem, "resetSettings")
     end
 end
 
@@ -466,6 +492,21 @@ function VRCompanion:isStereoDialogShowing()
     return self.stereoDialogShowing == true
 end
 
+local function checkSettingsPageShowing()
+    local gui = g_gui or (_G and _G.g_gui)
+    local menu = g_inGameMenu or (_G and _G.g_inGameMenu)
+    if type(gui) ~= "table" or gui.currentGuiName ~= "InGameMenu" then return false end
+    if type(menu) ~= "table" then return false end
+    local page = menu.currentPage
+    if type(page) ~= "table" then return false end
+    return page.id == "pageSettings" or (menu.pageSettings ~= nil and page == menu.pageSettings)
+end
+
+function VRCompanion:isSettingsPageShowing()
+    local ok, showing = pcall(checkSettingsPageShowing)
+    return ok and showing == true
+end
+
 function VRCompanion:getPlayerCamera()
     if self.activePlayerCamera ~= nil then
         return self.activePlayerCamera
@@ -544,79 +585,158 @@ function VRCompanion:applyDlssNearClip(force)
     return bridge.setDlssNearClip(meters) == true
 end
 
-function VRCompanion:hookVehicleCamera()
-    if VehicleCamera ~= nil and VehicleCamera.update ~= nil and not self.vehicleCameraHooked then
-        self.origVehicleCameraUpdate = VehicleCamera.update
-        VehicleCamera.update = function(cam, dt)
-            self.origVehicleCameraUpdate(cam, dt)
-            if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
-            VRCompanion:onVehicleCameraUpdate(cam, dt)
-            if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
+local coreWrapGroups = {}
+
+local function getCoreWrapGroup(name)
+    local group = coreWrapGroups[name]
+    if group == nil then
+        group = VRCompanion.GameWraps.newGroup({ weakTargets = true })
+        coreWrapGroups[name] = group
+    end
+    return group
+end
+
+local function makeVehicleCameraUpdateWrapper(original, entry)
+    return function(cam, dt, ...)
+        original(cam, dt, ...)
+        if not entry.active then return end
+        if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
+        VRCompanion:onVehicleCameraUpdate(cam, dt)
+        if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
+    end
+end
+
+local function makeEnterableOnEnterWrapper(original, entry)
+    return function(veh, isControlling, player, ...)
+        original(veh, isControlling, player, ...)
+        if entry.active then
+            VRCompanion:onEnterVehicle(veh, isControlling, player)
         end
+    end
+end
+
+local function makeEnterableOnLeaveWrapper(original, entry)
+    return function(veh, ...)
+        original(veh, ...)
+        if entry.active then
+            VRCompanion:onLeaveVehicle(veh)
+        end
+    end
+end
+
+local function makeEnterableSetActiveCameraWrapper(original, entry)
+    return function(veh, camIndex, ...)
+        original(veh, camIndex, ...)
+        if entry.active then
+            VRCompanion:onVehicleCameraChanged(veh, camIndex)
+        end
+    end
+end
+
+local function makeSpeedGuard(original, entry)
+    return function(targetSelf, dt, ...)
+        if entry.active and (dt == nil or dt <= 0.00001) then
+            return
+        end
+        return original(targetSelf, dt, ...)
+    end
+end
+
+local function makePlayerCameraMakeCurrentWrapper(original, entry)
+    return function(cam, ...)
+        original(cam, ...)
+        if entry.active then
+            VRCompanion:onPlayerCameraMakeCurrent(cam)
+        end
+    end
+end
+
+local function makePlayerCameraUpdateRotationWrapper(original, entry)
+    return function(cam, dt, ...)
+        if not entry.active or VRCompanion.is2DViewActive then
+            original(cam, dt, ...)
+            return
+        end
+        if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
+        VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
+        if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
+    end
+end
+
+local function makePlayerCameraUpdateWrapper(original, entry)
+    return function(cam, dt, ...)
+        original(cam, dt, ...)
+        if not entry.active then return end
+        if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
+        VRCompanion:onPlayerCameraUpdate(cam, dt)
+        if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
+    end
+end
+
+local function makeMissionUpdateWrapper(original, entry)
+    return function(missionSelf, dt, ...)
+        if not entry.active then
+            return original(missionSelf, dt, ...)
+        end
+        return VRCompanion:onMissionUpdate(missionSelf, dt, original, ...)
+    end
+end
+
+function VRCompanion:hookVehicleCamera()
+    local cls = VehicleCamera or (_G and _G.VehicleCamera)
+    if cls == nil or self.vehicleCameraHooked then return end
+    local wraps = getCoreWrapGroup("vehicleCamera")
+    if wraps:wrap(cls, "update", makeVehicleCameraUpdateWrapper) then
         self.vehicleCameraHooked = true
         print("[FS25_VR] Hooked VehicleCamera.update for 6DOF VR head tracking.")
     end
 end
 
-function VRCompanion:hookEnterable()
-    if Enterable ~= nil and not self.enterableHooked then
-        if Enterable.onEnterVehicle ~= nil then
-            self.origEnterableOnEnterVehicle = Enterable.onEnterVehicle
-            Enterable.onEnterVehicle = function(veh, isControlling, player)
-                self.origEnterableOnEnterVehicle(veh, isControlling, player)
-                VRCompanion:onEnterVehicle(veh, isControlling, player)
-            end
-        end
-        if Enterable.onLeaveVehicle ~= nil then
-            self.origEnterableOnLeaveVehicle = Enterable.onLeaveVehicle
-            Enterable.onLeaveVehicle = function(veh)
-                self.origEnterableOnLeaveVehicle(veh)
-                VRCompanion:onLeaveVehicle(veh)
-            end
-        end
-        if Enterable.setActiveCameraIndex ~= nil then
-            self.origEnterableSetActiveCameraIndex = Enterable.setActiveCameraIndex
-            Enterable.setActiveCameraIndex = function(veh, camIndex)
-                self.origEnterableSetActiveCameraIndex(veh, camIndex)
-                VRCompanion:onVehicleCameraChanged(veh, camIndex)
-            end
-        end
-        self.enterableHooked = true
+function VRCompanion:unhookVehicleCamera()
+    local wraps = coreWrapGroups.vehicleCamera
+    if wraps ~= nil then
+        wraps:liftAll()
     end
+    self.origVehicleCameraUpdate = nil
+    self.vehicleCameraHooked = false
+end
+
+function VRCompanion:hookEnterable()
+    local cls = Enterable or (_G and _G.Enterable)
+    if cls == nil or self.enterableHooked then return end
+    local wraps = getCoreWrapGroup("enterable")
+    wraps:liftAll()
+    wraps:wrap(cls, "onEnterVehicle", makeEnterableOnEnterWrapper)
+    wraps:wrap(cls, "onLeaveVehicle", makeEnterableOnLeaveWrapper)
+    local camHooked, camEntry = wraps:wrap(cls, "setActiveCameraIndex", makeEnterableSetActiveCameraWrapper)
+    if camHooked and camEntry ~= nil then
+        self.origEnterableSetActiveCameraIndex = camEntry.original
+    end
+    self.enterableHooked = true
+end
+
+function VRCompanion:unhookEnterable()
+    local wraps = coreWrapGroups.enterable
+    if wraps ~= nil then
+        wraps:liftAll()
+    end
+    self.origEnterableOnEnterVehicle = nil
+    self.origEnterableOnLeaveVehicle = nil
+    self.origEnterableSetActiveCameraIndex = nil
+    self.enterableHooked = false
 end
 
 function VRCompanion:hookTableSpeed(target, label)
-    if target == nil or type(target.updateVehicleSpeed) ~= "function" then
-        return
-    end
-    if self.origVehicleSpeedFuncs[target] ~= nil or self.origClassSpeedFuncs[target] ~= nil then
-        return
-    end
-    local origFn = target.updateVehicleSpeed
-    if label then
-        self.origClassSpeedFuncs[target] = origFn
-    else
-        self.origVehicleSpeedFuncs[target] = origFn
-    end
-    target.updateVehicleSpeed = function(vehSelf, dt, ...)
-        if dt == nil or dt <= 0.00001 then
-            return
+    if target == nil then return end
+    local wraps = getCoreWrapGroup("vehicleSpeed")
+    if wraps:wrap(target, "updateVehicleSpeed", makeSpeedGuard) then
+        if label then
+            print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
         end
-        return origFn(vehSelf, dt, ...)
-    end
-    if label then
-        print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
     end
 end
 
 function VRCompanion:installVehicleSpeedGuards(scanGlobals)
-    if self.origVehicleSpeedFuncs == nil then
-        self.origVehicleSpeedFuncs = setmetatable({}, { __mode = "k" })
-    end
-    if self.origClassSpeedFuncs == nil then
-        self.origClassSpeedFuncs = {}
-    end
-
     self:hookTableSpeed(Vehicle or (_G and _G.Vehicle), "Vehicle")
     self:hookTableSpeed(RailroadVehicle or (_G and _G.RailroadVehicle), "RailroadVehicle")
     self:hookTableSpeed(Locomotive or (_G and _G.Locomotive), "Locomotive")
@@ -630,24 +750,30 @@ function VRCompanion:installVehicleSpeedGuards(scanGlobals)
     end
 
     local mission = g_currentMission or (_G and _G.g_currentMission)
-    if mission ~= nil and mission.vehicles ~= nil then
-        for _, veh in pairs(mission.vehicles) do
-            if type(veh) == "table" then
-                self:hookTableSpeed(veh, nil)
+    if mission ~= nil then
+        if mission.vehicles ~= nil then
+            for _, veh in pairs(mission.vehicles) do
+                if type(veh) == "table" then
+                    self:hookTableSpeed(veh, nil)
+                end
             end
+        end
+        if type(mission.controlledVehicle) == "table" then
+            self:hookTableSpeed(mission.controlledVehicle, nil)
         end
     end
 
+    local controlled = self:getControlledVehicle()
+    if type(controlled) == "table" then
+        self:hookTableSpeed(controlled, nil)
+    end
+
     local ferryClass = Ferry or (_G and _G.Ferry)
-    if ferryClass ~= nil and type(ferryClass.updatePosition) == "function" and self.origFerryUpdatePosition == nil then
-        self.origFerryUpdatePosition = ferryClass.updatePosition
-        ferryClass.updatePosition = function(ferrySelf, dt, ...)
-            if dt == nil or dt <= 0.00001 then
-                return
-            end
-            return self.origFerryUpdatePosition(ferrySelf, dt, ...)
+    if ferryClass ~= nil then
+        local wraps = getCoreWrapGroup("vehicleSpeed")
+        if wraps:wrap(ferryClass, "updatePosition", makeSpeedGuard) then
+            print("[FS25_VR] Hooked Ferry.updatePosition for dt=0 guard.")
         end
-        print("[FS25_VR] Hooked Ferry.updatePosition for dt=0 guard.")
     end
 
     self.vehicleSpeedHooked = true
@@ -663,67 +789,40 @@ function VRCompanion:refreshVehicleSpeedGuards()
 end
 
 function VRCompanion:unhookVehicleSpeed()
-    for _, originals in ipairs({ self.origVehicleSpeedFuncs or {}, self.origClassSpeedFuncs or {} }) do
-        for target, origFn in pairs(originals) do
-            if target ~= nil and origFn ~= nil then
-                target.updateVehicleSpeed = origFn
-            end
-        end
+    local wraps = coreWrapGroups.vehicleSpeed
+    if wraps ~= nil then
+        wraps:liftAll()
     end
-    self.origVehicleSpeedFuncs = nil
-    self.origClassSpeedFuncs = nil
-
-    local ferryClass = Ferry or (_G and _G.Ferry)
-    if self.origFerryUpdatePosition ~= nil and ferryClass ~= nil then
-        ferryClass.updatePosition = self.origFerryUpdatePosition
-        self.origFerryUpdatePosition = nil
-    end
-
     self.vehicleSpeedHooked = false
     print("[FS25_VR] Unhooked Vehicle/Ferry dt=0 guards.")
 end
 
 function VRCompanion:hookPlayerCamera()
-    if PlayerCamera ~= nil and not self.playerCameraHooked then
-        if PlayerCamera.makeCurrent ~= nil then
-            self.origPlayerCameraMakeCurrent = PlayerCamera.makeCurrent
-            PlayerCamera.makeCurrent = function(cam)
-                self.origPlayerCameraMakeCurrent(cam)
-                VRCompanion:onPlayerCameraMakeCurrent(cam)
-            end
-        end
-        if PlayerCamera.updateRotation ~= nil then
-            self.origPlayerCameraUpdateRotation = PlayerCamera.updateRotation
-            PlayerCamera.updateRotation = function(cam, dt)
-                if VRCompanion.is2DViewActive and VRCompanion.origPlayerCameraUpdateRotation ~= nil then
-                    VRCompanion.origPlayerCameraUpdateRotation(cam, dt)
-                    return
-                end
-                if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
-                VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
-                if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
-            end
-        end
-        if PlayerCamera.updatePosition ~= nil then
-            self.origPlayerCameraUpdatePosition = PlayerCamera.updatePosition
-            PlayerCamera.updatePosition = function(cam, dt)
-                self.origPlayerCameraUpdatePosition(cam, dt)
-                if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
-                VRCompanion:onPlayerCameraUpdate(cam, dt)
-                if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
-            end
-        elseif PlayerCamera.update ~= nil then
-            self.origPlayerCameraUpdate = PlayerCamera.update
-            PlayerCamera.update = function(cam, dt)
-                self.origPlayerCameraUpdate(cam, dt)
-                if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
-                VRCompanion:onPlayerCameraUpdate(cam, dt)
-                if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
-            end
-        end
-        self.playerCameraHooked = true
-        print("[FS25_VR] Hooked PlayerCamera for 6DOF VR head tracking.")
+    local cls = PlayerCamera or (_G and _G.PlayerCamera)
+    if cls == nil or self.playerCameraHooked then return end
+    local wraps = getCoreWrapGroup("playerCamera")
+    wraps:wrap(cls, "makeCurrent", makePlayerCameraMakeCurrentWrapper)
+    local rotHooked, rotEntry = wraps:wrap(cls, "updateRotation", makePlayerCameraUpdateRotationWrapper)
+    if rotHooked and rotEntry ~= nil then
+        self.origPlayerCameraUpdateRotation = rotEntry.original
     end
+    if not wraps:wrap(cls, "updatePosition", makePlayerCameraUpdateWrapper) then
+        wraps:wrap(cls, "update", makePlayerCameraUpdateWrapper)
+    end
+    self.playerCameraHooked = true
+    print("[FS25_VR] Hooked PlayerCamera for 6DOF VR head tracking.")
+end
+
+function VRCompanion:unhookPlayerCamera()
+    local wraps = coreWrapGroups.playerCamera
+    if wraps ~= nil then
+        wraps:liftAll()
+    end
+    self.origPlayerCameraMakeCurrent = nil
+    self.origPlayerCameraUpdatePosition = nil
+    self.origPlayerCameraUpdateRotation = nil
+    self.origPlayerCameraUpdate = nil
+    self.playerCameraHooked = false
 end
 
 local traceback = (debug ~= nil) and debug.traceback or nil
@@ -915,24 +1014,25 @@ function VRCompanion:hookMissionUpdate()
         return
     end
 
+    local wraps = getCoreWrapGroup("missionUpdate")
     local hooked = false
 
     local fsBase = FSBaseMission or (_G and _G.FSBaseMission)
-    if fsBase ~= nil and type(fsBase.update) == "function" and self.origFSBaseMissionUpdate == nil then
-        self.origFSBaseMissionUpdate = fsBase.update
-        fsBase.update = function(missionSelf, dt, ...)
-            return self:onMissionUpdate(missionSelf, dt, self.origFSBaseMissionUpdate, ...)
+    if fsBase ~= nil then
+        local ok, entry = wraps:wrap(fsBase, "update", makeMissionUpdateWrapper)
+        if ok and entry ~= nil then
+            self.origFSBaseMissionUpdate = entry.original
+            hooked = true
         end
-        hooked = true
     end
 
     local m00 = Mission00 or (_G and _G.Mission00)
-    if m00 ~= nil and type(m00.update) == "function" and self.origMission00Update == nil then
-        self.origMission00Update = m00.update
-        m00.update = function(missionSelf, dt, ...)
-            return self:onMissionUpdate(missionSelf, dt, self.origMission00Update, ...)
+    if m00 ~= nil then
+        local ok, entry = wraps:wrap(m00, "update", makeMissionUpdateWrapper)
+        if ok and entry ~= nil then
+            self.origMission00Update = entry.original
+            hooked = true
         end
-        hooked = true
     end
 
     self.missionUpdateHooked = hooked
@@ -942,17 +1042,12 @@ function VRCompanion:hookMissionUpdate()
 end
 
 function VRCompanion:unhookMissionUpdate()
-    local fsBase = FSBaseMission or (_G and _G.FSBaseMission)
-    if self.origFSBaseMissionUpdate ~= nil and fsBase ~= nil then
-        fsBase.update = self.origFSBaseMissionUpdate
-        self.origFSBaseMissionUpdate = nil
+    local wraps = coreWrapGroups.missionUpdate
+    if wraps ~= nil then
+        wraps:liftAll()
     end
-
-    local m00 = Mission00 or (_G and _G.Mission00)
-    if self.origMission00Update ~= nil and m00 ~= nil then
-        m00.update = self.origMission00Update
-        self.origMission00Update = nil
-    end
+    self.origFSBaseMissionUpdate = nil
+    self.origMission00Update = nil
 
     self.accumulatedPass1Dt = 0.0
     self.deferRenderingCameraBind = false
@@ -1043,38 +1138,9 @@ function VRCompanion:deleteMap()
         self.stereoToggled = false
     end
 
-    if self.origVehicleCameraUpdate ~= nil and VehicleCamera ~= nil then
-        VehicleCamera.update = self.origVehicleCameraUpdate
-        self.origVehicleCameraUpdate = nil
-    end
-    if self.origPlayerCameraMakeCurrent ~= nil and PlayerCamera ~= nil then
-        PlayerCamera.makeCurrent = self.origPlayerCameraMakeCurrent
-        self.origPlayerCameraMakeCurrent = nil
-    end
-    if self.origPlayerCameraUpdatePosition ~= nil and PlayerCamera ~= nil then
-        PlayerCamera.updatePosition = self.origPlayerCameraUpdatePosition
-        self.origPlayerCameraUpdatePosition = nil
-    end
-    if self.origPlayerCameraUpdateRotation ~= nil and PlayerCamera ~= nil then
-        PlayerCamera.updateRotation = self.origPlayerCameraUpdateRotation
-        self.origPlayerCameraUpdateRotation = nil
-    end
-    if self.origPlayerCameraUpdate ~= nil and PlayerCamera ~= nil then
-        PlayerCamera.update = self.origPlayerCameraUpdate
-        self.origPlayerCameraUpdate = nil
-    end
-    if self.origEnterableOnEnterVehicle ~= nil and Enterable ~= nil then
-        Enterable.onEnterVehicle = self.origEnterableOnEnterVehicle
-        self.origEnterableOnEnterVehicle = nil
-    end
-    if self.origEnterableOnLeaveVehicle ~= nil and Enterable ~= nil then
-        Enterable.onLeaveVehicle = self.origEnterableOnLeaveVehicle
-        self.origEnterableOnLeaveVehicle = nil
-    end
-    if self.origEnterableSetActiveCameraIndex ~= nil and Enterable ~= nil then
-        Enterable.setActiveCameraIndex = self.origEnterableSetActiveCameraIndex
-        self.origEnterableSetActiveCameraIndex = nil
-    end
+    self:unhookVehicleCamera()
+    self:unhookPlayerCamera()
+    self:unhookEnterable()
 
     self:unhookHud()
     self:unhookGuiDraw()
@@ -1097,6 +1163,8 @@ function VRCompanion:deleteMap()
     self.enterableHooked = false
     self.lastControlledVehicle = nil
     self.appliedDlssNearClip = nil
+    self.lastMissionUpdateError = nil
+    self.trackedCameraShown = nil
     self.isMenuVisible = false
     self.menuTakesInput = false
     self.stereoDialogShowing = false

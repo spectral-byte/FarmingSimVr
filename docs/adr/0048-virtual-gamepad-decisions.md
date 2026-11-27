@@ -46,20 +46,14 @@ This record holds the non-obvious decisions behind the Virtual Gamepad on both s
                                        "stickClick", "lower", "upper", "menu". False while the input is still held for its
                                        binding (held when the use would have begun): the use must not act on it.
   Uses made here, at the end of every update: every input of both hands while a menu shows (the Pointer Ray menus act on
-  the raw hand state, as they always did), and the grip of a hand holding the Steering Wheel. Interactive Control's click
-  asks for the Pointer Hand's trigger itself, as the ray lands on a Click Point, and Hand Tools ask for the trigger of the Tool
-  Hand while it holds a supported Hand Tool (VRCompanionHandTools.lua, ADR-0029), which calls the tool's use handler with it.
+  the raw hand state, as they always did). Wheel Grab asks for the grip of a hand hovering, grabbing, or holding the Steering Wheel itself (VRCompanionWheelGrab.lua), Interactive Control's click asks for the Pointer Hand's trigger itself as the ray lands on a Click Point, and Hand Tools ask for the trigger of the Tool Hand while it holds a supported Hand Tool (VRCompanionHandTools.lua, ADR-0029).
   THE SETTINGS PAGE EXCEPTION: the player binds the pad in the Controls screen, which is part of the pause menu's Settings page,
   and the game's binding capture needs the pad's inputs to arrive (a pad that reads neutral cannot be bound). So while the
   pause menu shows its Settings page (g_gui.currentGuiName == "InGameMenu" and g_inGameMenu.currentPage.id == "pageSettings",
   both measured in the game) the menu does NOT take the pad's inputs; every other menu and page keeps taking them. The
   Controls pages are sub-pages of Settings and cannot be told apart from it, so the exception covers all of Settings.
   (g_inputBinding.isInputCapturing does not turn true during binding, so it cannot be used instead.) THE TRADE-OFF: on the
-  Settings page the Pointer Ray menu still works, and a trigger click there also reaches the game as RT (likewise the
-  grip or lower face button that goes back, and the stick that scrolls); that only matters for a binding the player has
-  on those inputs. If g_gui, g_inGameMenu or the page is missing, the menu counts as any other menu. The held-input rule
-  holds on the way into and out of the Settings page: what the menu took stays off the pad until it is let go, and what was
-  held on the Settings page keeps its binding when another page's menu use begins.
+  Settings page the Pointer Ray menu still moves and clicks so the player can select Controls and rows, and a trigger click there also reaches the game as RT; however, Menu Pointer suppresses `MENU_BACK` (grip / lower face button) and thumbstick scroll shortcuts on `pageSettings` (VRCompanionMenuPointer.lua, spectral-byte/FarmingSimVr-issues#247) so binding grip, face buttons, or thumbsticks in Controls never exits or scrolls the page. If g_gui, g_inGameMenu or the page is missing, the menu counts as any other menu. The held-input rule holds on the way into and out of the Settings page: what the menu took stays off the pad until it is let go, and what was held on the Settings page keeps its binding when another page's menu use begins.
   THE STEREO DIALOG EXCEPTION (ADR-0032): a Stereo Dialog (VRCompanion.STEREO_DIALOGS, the fish catch dialog) is a menu that takes the
   input but is answered with the gamepad's own menu buttons (MENU_ACCEPT, MENU_BACK), so while one shows in the stereoscopic view the menu
   does NOT take the pad's inputs either: the Motion Controllers' bindings reach the game as outside a menu and the dialog's button hints
@@ -125,7 +119,7 @@ This record holds the non-obvious decisions behind the Virtual Gamepad on both s
 - **`VRCompanion:updateVirtualGamepad`, `if state.seenKey ~= nil or present or reason ~= "off" then`**: The first look at a pad that is simply off says nothing: a player who never turned it on reads no line.
 - **`VRCompanion:takeVirtualGamepadInput`**: A use of the Companion Mod asks for an input of a hand, every update it wants it. True: the use has it, and the input reads as released on the pad from here on. False: the input was already held when the use would have begun, so it keeps its binding until it is let go and the use must not act on it. Asking again in the same update gives the same answer.
 - **`VRCompanion:takeVirtualGamepadInput`, `continuing`**: The use goes on from the update before, or from one that took the input and still has it held (a ray that flickers off a Click Point for a frame does not hand a pulled trigger to the pad). Otherwise it begins now, and an input that was already held before this update is the binding's: the squeeze that starts the use is not.
-- **`isSettingsPageShowing`**: Whether the pause menu's Settings page is the page showing (the Controls screen is a sub-page of it and cannot be told apart). Measured in the game: while it shows, g_gui.currentGuiName is "InGameMenu" and g_inGameMenu.currentPage is the page object whose id is "pageSettings" (it is also g_inGameMenu.pageSettings). Anything missing or raising counts as not showing.
+- **`VRCompanion:isSettingsPageShowing`** (in `VRCompanionCore.lua`, shared with `VRCompanionMenuPointer.lua`): Whether the pause menu's Settings page is the page showing (the Controls screen is a sub-page of it and cannot be told apart). Measured in the game: while it shows, g_gui.currentGuiName is "InGameMenu" and g_inGameMenu.currentPage is the page object whose id is "pageSettings" (it is also g_inGameMenu.pageSettings). Anything missing or raising counts as not showing.
 - **`VRCompanion:updateVirtualGamepadUse`, `dialogShowing`**: A Stereo Dialog is answered with the pad's own buttons, so a fresh press reaches it. Its answer buttons act on release, though: an input already held when it opened is not the dialog's, and reads released until it is let go (the held-input rule of any menu, for the dialog).
 - **`VRCompanion:updateVirtualGamepadUse`, `for _, hand in ipairs(HANDS) do`**: Every input of both hands: the Pointer Ray menus act on the raw hand state themselves.
 - **`VRCompanion:updateVirtualGamepadUse`, `record.suppressed`**: No use wants it any more, but what a use took stays off the pad until it is let go.

@@ -85,11 +85,32 @@ VRCompanion.RECENTER_MODES = {
     VEHICLE_ONLY = "VehicleOnly"
 }
 
+function VRCompanion.isFiniteNumber(value)
+    return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+function VRCompanion.parseFiniteNumber(value, minVal, maxVal, integerOnly)
+    local num = tonumber(value)
+    if not VRCompanion.isFiniteNumber(num) then
+        return nil
+    end
+    if integerOnly and num ~= math.floor(num) then
+        return nil
+    end
+    if minVal ~= nil and num < minVal then
+        return nil
+    end
+    if maxVal ~= nil and num > maxVal then
+        return nil
+    end
+    return num
+end
+
 local function readXmlFloat(getXmlFloatFn, xmlFile, ...)
     local keys = {...}
     for _, k in ipairs(keys) do
         local val = getXmlFloatFn(xmlFile, k)
-        if val ~= nil then
+        if VRCompanion.isFiniteNumber(val) then
             return val
         end
     end
@@ -131,7 +152,7 @@ local function readXmlString(getXmlStringFn, xmlFile, ...)
 end
 
 function VRCompanion:clamp(val, minVal, maxVal)
-    if val == nil then return minVal end
+    if not VRCompanion.isFiniteNumber(val) then return minVal end
     if minVal ~= nil and val < minVal then return minVal end
     if maxVal ~= nil and val > maxVal then return maxVal end
     return val
@@ -225,14 +246,41 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlFloatFn(xmlFile, "vrSettings." .. field, self[field] or self.DEFAULT_DLSS_NEAR_CLIPS[mode])
         end
 
-        pcall(saveXmlFn, xmlFile)
+        local saveOk, saveResult = pcall(saveXmlFn, xmlFile)
         if type(deleteXmlFn) == "function" then
             pcall(deleteXmlFn, xmlFile)
+        end
+        if not saveOk or saveResult == false then
+            print(string.format("[FS25_VR] [Error] Failed to save VR HUD configuration to: %s (%s)",
+                tostring(path), not saveOk and tostring(saveResult) or "saveXMLFile returned false"))
+            return false
         end
         print(string.format("[FS25_VR] Saved VR HUD configuration to: %s", tostring(path)))
         return true
     end
+    print(string.format("[FS25_VR] [Error] Failed to create VR configuration XML: %s (%s)",
+        tostring(path), not ok and tostring(xmlFile) or "createXMLFile returned invalid handle"))
     return false
+end
+
+local SCALAR_SETTING_DEFAULTS = {
+    { field = "hudConvergenceDepth", defaultKey = "DEFAULT_HUD_DEPTH" },
+    { field = "showHudLoadNotification", defaultKey = "DEFAULT_SHOW_HUD_LOAD_NOTIFICATION" },
+    { field = "recenterVrTrackingSpace", defaultKey = "DEFAULT_RECENTER_VR_TRACKING_SPACE" },
+    { field = "snapTurnAngle", defaultKey = "DEFAULT_SNAP_TURN_ANGLE" },
+}
+
+local function applyScalarSettingDefaults(self, onlyIfNil)
+    for _, entry in ipairs(SCALAR_SETTING_DEFAULTS) do
+        if not onlyIfNil or self[entry.field] == nil then
+            self[entry.field] = self[entry.defaultKey]
+        end
+    end
+    for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+        if not onlyIfNil or self[field] == nil then
+            self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
+        end
+    end
 end
 
 function VRCompanion:loadConfiguration(xmlPath)
@@ -259,6 +307,11 @@ function VRCompanion:loadConfiguration(xmlPath)
     local hasXmlPropertyFn = hasXMLProperty or _G.hasXMLProperty
     local deleteXmlFn = delete or _G.delete
 
+    if type(loadXmlFn) == "function" then
+        applyScalarSettingDefaults(self, false)
+        self:runSubsystemResetSettings()
+    end
+
     local function readSettingsFromXml(filePath)
         if filePath ~= nil and type(loadXmlFn) == "function" and type(getXmlFloatFn) == "function" then
             local ok, xmlFile = pcall(loadXmlFn, "VRCompanionConfig", filePath)
@@ -281,10 +334,8 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.hudConvergenceDepth")
-                if loadedDepth ~= nil and loadedDepth == loadedDepth then
+                if loadedDepth ~= nil then
                     self.hudConvergenceDepth = self:clamp(loadedDepth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
-                else
-                    self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
                 end
 
                 local loadedShowNotification = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
@@ -318,16 +369,14 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")
-                if loadedSnapAngle ~= nil and loadedSnapAngle > 0 then
+                if loadedSnapAngle ~= nil and loadedSnapAngle > 0 and loadedSnapAngle <= 360 then
                     self.snapTurnAngle = math.rad(loadedSnapAngle)
                 end
 
-                for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+                for _, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
                     local loadedNear = readXmlFloat(getXmlFloatFn, xmlFile, "vrSettings." .. field)
                     if loadedNear ~= nil and loadedNear >= 0 then
                         self[field] = loadedNear
-                    else
-                        self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
                     end
                 end
 
@@ -374,24 +423,7 @@ function VRCompanion:loadConfiguration(xmlPath)
         end
     end
 
-    if self.hudConvergenceDepth == nil then
-        self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
-    end
-    if self.showHudLoadNotification == nil then
-        self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
-    end
-    if self.recenterVrTrackingSpace == nil then
-        self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
-    end
-    if self.snapTurnAngle == nil then
-        self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
-    end
-    for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
-        if self[field] == nil then
-            self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
-        end
-    end
-
+    applyScalarSettingDefaults(self, true)
     self.hudGroupLayout = groupLayouts
     self.persistedHudState = persistedHudState
     self.controlsExpanded = controlsExpanded

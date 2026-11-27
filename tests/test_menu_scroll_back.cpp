@@ -161,9 +161,9 @@ TEST_F(MenuScrollBackTest, AWobblyGripIsOnePress) {
     Hold(kRight, Grip(0.3f));
     EXPECT_EQ(Backs(), 0) << "a light touch is not a press";
     Hold(kRight, Grip(1.0f));
-    for (float value : { 0.8f, 0.5f, 0.7f, 0.5f, 0.8f }) Hold(kRight, Grip(value));
-    EXPECT_EQ(Backs(), 1) << "wobbling between the thresholds is the same press";
-    Release(kRight);
+    for (float value : { 0.8f, 0.4f, 0.7f, 0.4f, 0.8f }) Hold(kRight, Grip(value));
+    EXPECT_EQ(Backs(), 1) << "wobbling at or above 0.4 is the same press";
+    Hold(kRight, Grip(0.35f));
     Hold(kRight, Grip(1.0f));
     EXPECT_EQ(Backs(), 2);
 }
@@ -429,4 +429,19 @@ TEST_F(MenuScrollBackTest, TheLowerFaceButtonGoesBackInAMenuAndIsAOnTheVirtualGa
     Hold(kRight, LowerButton());
     EXPECT_EQ(Backs(), 1) << "outside menus it does not go back";
     EXPECT_EQ(PadState(bridge).wButtons & XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A) << "it is A for whatever the player bound";
+}
+
+TEST_F(MenuScrollBackTest, NilGameClockDoesNotBreakMenuScrolling) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getCurrentTimeMs = function() return nil end", "=nilClock"), 0);
+
+    Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(Scrolls(), 1);
+    NextFrame(&headset);
+    EXPECT_EQ(Scrolls(), 1);
+    Release(kRight);
+
+    Hold(kRight, Stick(0.0f, -1.0f));
+    EXPECT_EQ(Scrolls(), 2);
 }

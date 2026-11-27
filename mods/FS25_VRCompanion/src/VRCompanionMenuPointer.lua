@@ -1,7 +1,7 @@
 VRCompanion = VRCompanion or {}
 
 VRCompanion.MENU_BACK_PRESS = 0.6
-VRCompanion.MENU_BACK_RELEASE = 0.3
+VRCompanion.MENU_BACK_RELEASE = 0.4
 
 local DEFAULT_MOUSE_BUTTON_NONE = 0
 local DEFAULT_MOUSE_BUTTON_LEFT = 1
@@ -70,7 +70,19 @@ local function letGo()
     end
 end
 
-local hands = {}
+local HANDS = { 0, 1 }
+
+local hands = {
+    [0] = { tracked = false, back = false, stick = 0 },
+    [1] = { tracked = false, back = false, stick = 0 },
+}
+
+local function resetHands()
+    for _, hand in ipairs(HANDS) do
+        local entry = hands[hand]
+        entry.tracked, entry.back, entry.stick = false, false, 0
+    end
+end
 
 local function backHeld(handState, wasHeld)
     if handState.buttonLower == true then
@@ -157,36 +169,37 @@ end
 
 local function updateMenuButtons(self)
     if self.motionControllersEnabled == false then
-        hands = {}
+        resetHands()
         scroll.dir, scroll.nextMs = 0, nil
         return
     end
     local goBack = false
     local pushed, held = 0, 0
-    for _, hand in ipairs({ self.MOTION_HAND_LEFT, self.MOTION_HAND_RIGHT }) do
+    for _, hand in ipairs(HANDS) do
+        local entry = hands[hand]
         local handState = self:getHandState(hand)
         if handState.tracked ~= true then
-            hands[hand] = nil
+            entry.tracked, entry.back, entry.stick = false, false, 0
         else
-            local previous = hands[hand]
-            local current = {
-                back = backHeld(handState, previous ~= nil and previous.back),
-                stick = stickScrollDirection(handState, previous and previous.stick or 0),
-            }
-            hands[hand] = current
-            if previous ~= nil and current.back and not previous.back then
+            local wasTracked = entry.tracked
+            local prevBack = entry.back
+            local prevStick = entry.stick
+            local newBack = backHeld(handState, wasTracked and prevBack)
+            local newStick = stickScrollDirection(handState, wasTracked and prevStick or 0)
+            entry.tracked, entry.back, entry.stick = true, newBack, newStick
+            if wasTracked and newBack and not prevBack then
                 goBack = true
             end
             if held == 0 then
-                held = current.stick
+                held = newStick
             end
-            if previous ~= nil and pushed == 0 and current.stick ~= 0 and current.stick ~= previous.stick then
-                pushed = current.stick
+            if wasTracked and pushed == 0 and newStick ~= 0 and newStick ~= prevStick then
+                pushed = newStick
             end
         end
     end
 
-    if not self:doesMenuTakeInput() or self:isStereoDialogShowing() then
+    if not self:doesMenuTakeInput() or self:isStereoDialogShowing() or self:isSettingsPageShowing() then
         scroll.dir, scroll.nextMs = 0, nil
         return
     end
@@ -199,14 +212,14 @@ local function updateMenuButtons(self)
     if pushed ~= 0 and not (scroll.nextMs ~= nil and scroll.dir == pushed) then
         step = pushed
     elseif held ~= 0 and scroll.nextMs ~= nil and scroll.dir == held then
-        if now >= scroll.nextMs then
+        if now ~= nil and now >= scroll.nextMs then
             step = held
         end
     else
         scroll.nextMs = nil
     end
     if step ~= 0 then
-        scroll.nextMs = now + self.MENU_SCROLL_REPEAT_MS
+        scroll.nextMs = now ~= nil and (now + self.MENU_SCROLL_REPEAT_MS) or nil
         local x, y = scrollPosition(self)
         if x ~= nil then
             sendWheel(x, y, step > 0)
@@ -239,11 +252,11 @@ function VRCompanion:updateMenuPointer(dt)
     if type(result) == "table" then
         state.hit = result
     end
-    local hit = state.hit or {}
+    local hit = state.hit
 
     local pulled, held = self:getPointerTrigger()
 
-    local onPanel = hit.hit == true
+    local onPanel = hit ~= nil and hit.hit == true
     if onPanel then
         state.lastX, state.lastY = hit.u, 1 - hit.v
         sendMove(state.lastX, state.lastY)
@@ -252,12 +265,19 @@ function VRCompanion:updateMenuPointer(dt)
             setMenuCursor(true, hit.u, hit.v)
             state.cursorShown = true
         end
+    elseif state.cursorShown then
+        state.cursorShown = false
+        local setMenuCursor = bridgeFunction("setMenuCursor")
+        if setMenuCursor ~= nil then
+            setMenuCursor(false)
+        end
     end
 
-    if pulled and onPanel and not state.clickDown then
+    local mayClick = self:doesMenuTakeInput()
+    if mayClick and pulled and onPanel and not state.clickDown then
         state.clickDown = true
         sendMouse(state.lastX, state.lastY, true, false, mouseButton("MOUSE_BUTTON_LEFT", DEFAULT_MOUSE_BUTTON_LEFT))
-    elseif not held and state.clickDown then
+    elseif (not held or not mayClick) and state.clickDown then
         state.clickDown = false
         sendMouse(state.lastX, state.lastY, false, true, mouseButton("MOUSE_BUTTON_LEFT", DEFAULT_MOUSE_BUTTON_LEFT))
     end
@@ -266,7 +286,7 @@ end
 function VRCompanion:resetMenuPointer()
     letGo()
     state = newState()
-    hands = {}
+    resetHands()
     scroll.dir, scroll.nextMs = 0, nil
 end
 
