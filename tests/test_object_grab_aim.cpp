@@ -227,3 +227,95 @@ TEST_F(CompanionModTest, TheEmptyHandsAreNotAnUnsupportedHandTool) {
     EXPECT_NE(diagnostics.find("held Hand Tool: none"), std::string::npos) << diagnostics;
     EXPECT_EQ(CountLogLines("Hand Tool probe"), 0) << "and the probe has nothing to describe";
 }
+
+TEST_F(CompanionModTest, MovingTheDeskMouseYieldsObjectGrabAimingDuringTheHandIdleWindow) {
+    OBJECT_GRAB_START();
+    ASSERT_EQ(RunLuauChunk(L, kBaleAhead, "=bale"), 0);
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false");
+    ASSERT_EQ(EvalLua(L, "tostring(drawnRayEnd() ~= nil)"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:mouseEvent(0.4, 0.6, false, false, 0)", "=mouseMoves"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getPointerHand())"), "1") << "still within the 3 s hand idle window";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "aiming yields to the head ray while Desk Mouse owns the pointer";
+    EXPECT_EQ(EvalLua(L, "tostring(drawnRayEnd())"), "nil") << "Pointer Ray is hidden";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=drawCrosshair"), 0);
+    EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(hands)"), "crosshair");
+    EXPECT_NE(EvalLua(L, "VRCompanion:getObjectGrabDiagnostics()").find("the desk mouse controls the pointer"), std::string::npos);
+
+    headset.SetHandPointing(kRight, HandAt(kHandX + 0.05f, kHandY, kHandZ));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false");
+    EXPECT_EQ(EvalLua(L, "tostring(drawnRayEnd() ~= nil)"), "true");
+}
+
+TEST_F(CompanionModTest, AWallBehindTheFingertipDoesNotOccludeAnObjectInFrontOfItForThePointerHand) {
+    OBJECT_GRAB_START();
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.wallZ = 0.0
+        _G.wallHalfZ = 0.05
+        _G.wallNode = StubScene.newNode("wall", 0, -0.4, -0.2, wallZ)
+        local function castWithWall(x, y, z, dx, dy, dz, minDist, maxDist)
+            local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if length < 1e-9 then return nil end
+            local ux, uy, uz = dx / length, dy / length, dz / length
+            local bestDist, bestNode, bestHit = nil, nil, nil
+            local ox, oy, oz = x - (-0.4), y - (-0.2), z - wallZ
+            if math.abs(ox) <= 1.0 and math.abs(oy) <= 1.0 and math.abs(uz) > 1e-6 then
+                local t1 = (-wallHalfZ - oz) / uz
+                local t2 = (wallHalfZ - oz) / uz
+                if t1 > t2 then t1, t2 = t2, t1 end
+                if t2 >= 0 and t1 <= maxDist then
+                    local t = math.max(0, t1)
+                    if t <= maxDist then
+                        bestDist, bestNode = t, wallNode
+                    end
+                end
+            end
+            local loose = StubHandTool.castAtLooseObjects({}, x, y, z, ux, uy, uz, 0, maxDist)
+            if loose ~= nil and (bestDist == nil or loose.distance < bestDist) then
+                bestDist, bestNode, bestHit = loose.distance, loose.node, loose
+            end
+            if bestNode == nil then return nil end
+            if bestHit ~= nil and bestDist >= minDist then return bestHit end
+            return { node = bestNode, x = x + ux * bestDist, y = y + uy * bestDist, z = z + uz * bestDist, distance = bestDist }
+        end
+        _G.raycastClosest = function(x, y, z, dx, dy, dz, maxDist, callbackName, target, mask)
+            local hit = castWithWall(x, y, z, dx, dy, dz, 0, maxDist)
+            if hit == nil then return 0 end
+            target[callbackName](target, hit.node, hit.x, hit.y, hit.z, hit.distance, 0, 0, 1, 0, 0, true)
+            return 1
+        end
+        local baseUpdate = PlayerTargeter.update
+        function PlayerTargeter:update(dt)
+            baseUpdate(self, dt)
+            local mask = (self.targetedMasks or {})[HandToolHands]
+            if mask == nil or self.lastRayX == nil then return end
+            local hit = castWithWall(self.lastRayX, self.lastRayY, self.lastRayZ,
+                self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ, mask.minDistance, mask.maxDistance)
+            if hit ~= nil and hit.node ~= wallNode and hit.distance >= mask.minDistance then
+                self.closestTargetsByKey[HandToolHands] = hit
+            else
+                self.closestTargetsByKey[HandToolHands] = nil
+            end
+        end
+    )luau", "=wallAndBlockingTargeter"), 0);
+    ASSERT_EQ(RunLuauChunk(L, kBaleAhead, "=bale"), 0);
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), pointerRay())"), "true") << "origin advances to fingertip past the rear wall: " << EvalLua(L, "rayText(targeterRay())");
+    EXPECT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', drawnRayEnd())"), "-0.40 -0.20 1.35");
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressPickUp(hands)", "=pickUp"), 0);
+    EXPECT_EQ(EvalLua(L, "#StubHandTool.pickUps"), "1");
+    EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode == bale.node)"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(hands); hands.spec_hands.heldItemNode = nil; StubHandTool.hold(hands)", "=resetCarry"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.wallZ = 0.8; setTranslation(wallNode, -0.4, -0.2, 0.8)", "=wallInFront"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(drawnRayEnd())"), "nil") << "a wall in front of the fingertip still occludes";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressPickUp(hands)", "=blockedPickUp"), 0);
+    EXPECT_EQ(EvalLua(L, "#StubHandTool.pickUps"), "1");
+}
