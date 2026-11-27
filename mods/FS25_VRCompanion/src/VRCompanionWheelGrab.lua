@@ -217,9 +217,17 @@ local function measureHand(self, hand, wheel)
     for _, name in ipairs(MEASURE_FUNCTIONS) do
         if type(engine(name)) ~= "function" then return nil, name .. " is not available" end
     end
-    local parent = engine("getParent")(wheel.node)
-    local x, y, z = engine("worldToLocal")(parent, state.scratch.x, state.scratch.y, state.scratch.z)
-    local cx, cy, cz = engine("getTranslation")(wheel.node)
+    if wheel.node == nil or wheel.node == 0 then return nil, "the wheel node is missing" end
+    local exists = engine("entityExists")
+    if type(exists) == "function" and not exists(wheel.node) then return nil, "the wheel node does not exist" end
+    local getParent, worldToLocal, getTranslation = engine("getParent"), engine("worldToLocal"), engine("getTranslation")
+    local okParent, parent = pcall(getParent, wheel.node)
+    if not okParent or parent == nil or parent == 0 then return nil, "the wheel node has no parent" end
+    local okLocal, x, y, z = pcall(worldToLocal, parent, state.scratch.x, state.scratch.y, state.scratch.z)
+    local okTrans, cx, cy, cz = pcall(getTranslation, wheel.node)
+    if not okLocal or not okTrans or type(x) ~= "number" or type(cx) ~= "number" then
+        return nil, "the wheel node transform failed"
+    end
     local dx, dy, dz = x - cx, y - cy, z - cz
     return math.atan2(-dz, dx), math.sqrt(dx * dx + dz * dz), dy
 end

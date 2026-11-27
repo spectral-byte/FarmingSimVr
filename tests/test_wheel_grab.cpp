@@ -411,3 +411,23 @@ TEST_F(CompanionModTest, VrWheelGrabDiagnosticsLogsTheSteeringWheelEachHandsDist
     EXPECT_NE(EvalLua(L, "VRCompanion:getPointerDiagnostics()").find("Wheel Grab"), std::string::npos)
         << "the Pointer diagnostics carry it too";
 }
+
+TEST_F(CompanionModTest, DeletedSteeringWheelNodeDoesNotAbortMotionControllerUpdate) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
+    ASSERT_EQ(EvalLua(L, "tostring(VRCompanion:isHandHoldingSteeringWheel(1))"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local wheelNode = cab.vehicle.spec_drivable.steeringWheel.node
+        local realGetParent = _G.getParent
+        _G.getParent = function(node)
+            if node == wheelNode then error("deleted wheel node") end
+            return realGetParent(node)
+        end
+    )luau", "=deleteWheelNode"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:isHandHoldingSteeringWheel(1))"), "false");
+}

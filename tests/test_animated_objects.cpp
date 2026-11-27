@@ -227,3 +227,52 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, TheGamesPromptAndItsBoundButtonKeepWor
     EXPECT_EQ(Toggles(), 3) << "a pull with the prompt shown toggles too";
     EXPECT_EQ(Number(L, "#StubAnimatedObject.textCalls"), 2) << "and refreshes the prompt's texts";
 }
+
+TEST_F(VirtualGamepadAnimatedObjectsTest, TheRayCastMaskClearsIgnoredFlagsBitwiseWithoutCorruptingUnsetBits) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor());
+    ASSERT_EQ(RunLuauChunk(L, "CollisionMask.ALL = CollisionFlag.STATIC_OBJECT + CollisionFlag.DYNAMIC_OBJECT + CollisionFlag.TRIGGER + CollisionFlag.PLAYER", "=subsetMask"), 0);
+    EnterZone();
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_GT(Number(L, "#animatedCasts()"), 0);
+    EXPECT_EQ(EvalLua(L, "tostring(animatedCasts()[1].mask == CollisionFlag.STATIC_OBJECT + CollisionFlag.DYNAMIC_OBJECT)"), "true");
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsTest, NestedTriggerZonesReferenceCountEnterAndLeaveEventsPerObject) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor());
+    EnterZone();
+    EnterZone();
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
+
+    LeaveZone();
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
+    PullTrigger(kRight);
+    EXPECT_EQ(Toggles(), 1);
+    ReleaseTrigger(kRight);
+
+    LeaveZone();
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "none");
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsTest, AWallBehindTheFingertipDoesNotOccludeADoorInFrontOfIt) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor());
+    EnterZone();
+    ASSERT_EQ(RunLuauChunk(L, "_G.wall = StubAnimatedObject.wall('rearWall', -0.4, -0.2, 0.0, 1.0, 1.0, 0.05)", "=rearWall"), 0);
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
+    PullTrigger(kRight);
+    EXPECT_EQ(Toggles(), 1);
+    ReleaseTrigger(kRight);
+
+    ASSERT_EQ(RunLuauChunk(L, "setTranslation(wall, -0.4, -0.2, 0.24)", "=wristWall"), 0);
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 1.95");
+
+    ASSERT_EQ(RunLuauChunk(L, "setTranslation(wall, -0.4, -0.2, 0.8)", "=frontWall"), 0);
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "none");
+    PullTrigger(kRight);
+    EXPECT_EQ(Toggles(), 1);
+}

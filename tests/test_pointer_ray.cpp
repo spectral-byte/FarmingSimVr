@@ -37,10 +37,10 @@ FakeOpenXrControllers::Inputs Trigger(float value) {
 constexpr const char* kDrawStubs = R"luau(
     _G.debugLines, _G.debugPoints = {}, {}
     _G.drawDebugLine = function(x0, y0, z0, r0, g0, b0, x1, y1, z1, r1, g1, b1, solid)
-        table.insert(_G.debugLines, { x0 = x0, y0 = y0, z0 = z0, x1 = x1, y1 = y1, z1 = z1 })
+        table.insert(_G.debugLines, { x0 = x0, y0 = y0, z0 = z0, x1 = x1, y1 = y1, z1 = z1, r = r0, g = g0, b = b0 })
     end
     _G.drawDebugPoint = function(x, y, z, r, g, b, a, solid)
-        table.insert(_G.debugPoints, { x = x, y = y, z = z })
+        table.insert(_G.debugPoints, { x = x, y = y, z = z, r = r, g = g, b = b })
     end
     _G.drawPass = function()
         _G.debugLines, _G.debugPoints = {}, {}
@@ -1145,4 +1145,95 @@ TEST_F(CompanionModTest, TheLogSaysOncePerHandHowFarTheFingerPointsFromTheAimDir
     EXPECT_NE(report.find(rightReport), std::string::npos) << report;
     EXPECT_NE(report.find("Left hand: aim (-0.30, -0.20, -0.40) tracked, grip ("), std::string::npos) << report;
     EXPECT_NE(report.find("finger 0.0 degrees from aim"), std::string::npos) << "the left hand points along its aim direction: " << report;
+}
+
+TEST_F(CompanionModTest, ThePointerRayVisuallyDistinguishesEachTargetCategoryWhileKeepingVisibilityRules) {
+    FakeTrackedHeadset headset;
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("model_loading"), "=modelLoading"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("hand_tool"), "=handTool"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("hand_tool_hands"), "=handToolHands"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("animated_objects"), "=animatedObjects"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("manual_attach"), "=manualAttach"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("manual_attach_vehicles"), "=manualAttachVehicles"), 0);
+    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, kDrawStubs, "=drawStubs"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubHandTool.install('ok')
+        StubHandTool.installHands('ok')
+        StubIC.install('ok')
+        StubAnimatedObject.install('ok')
+        StubManualAttach.install('ok')
+        _G.foot = StubHandTool.onFoot({})
+        _G.hands = StubHandTool.hands(foot.player)
+        VRCompanion:loadMap('x')
+        StubHandTool.hold(hands)
+        StubScene.updateCamera = function()
+            if VRCompanion and VRCompanion.update then
+                VRCompanion:onPlayerCameraUpdate(foot.cam, 16.667)
+            end
+        end
+        local baseTick = StubIC.tick
+        StubIC.tick = function()
+            baseTick()
+            StubHandTool.tick(16.667)
+            StubManualAttach.tick()
+        end
+    )luau", "=setup"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubManualAttach.tick()", "=maInit"), 0);
+
+    SetGameTime(10000);
+    headset.SetHandPointing(kRight, HandAt(0.3f, -0.2f, -0.3f));
+    FRAMES(1);
+    headset.SetHandPointing(kRight, HandAt(0.4f, -0.2f, -0.3f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, "drawPass()", "=drawEmpty"), 0);
+    EXPECT_EQ(EvalLua(L, "#debugLines + #debugPoints"), "0");
+
+    auto colorOf = [&](const char* label) -> std::string {
+        EXPECT_EQ(RunLuauChunk(L, "drawPass()", "=draw"), 0) << label;
+        EXPECT_EQ(EvalLua(L, "#debugLines"), "1") << label;
+        EXPECT_EQ(EvalLua(L, "#debugPoints"), "1") << label;
+        return EvalLua(L, "string.format('%.2f %.2f %.2f | %.2f %.2f %.2f', debugLines[1].r, debugLines[1].g, debugLines[1].b, debugPoints[1].r, debugPoints[1].g, debugPoints[1].b)");
+    };
+
+    ASSERT_EQ(RunLuauChunk(L, "_G.icIdle = StubIC.addPoint('idleOnly', 10.0, 0.0, 2.0)", "=addIdleIc"), 0);
+    FRAMES(2);
+    const std::string idleColor = colorOf("idle");
+
+    ASSERT_EQ(RunLuauChunk(L, "_G.icHit = StubIC.addPoint('hitIc', -0.4, -0.2, 2.0)", "=addHitIc"), 0);
+    FRAMES(2);
+    const std::string clickColor = colorOf("clickPoint");
+
+    ASSERT_EQ(RunLuauChunk(L, "icIdle.inRange = false; icHit.inRange = false", "=hideIc"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("manual_attach_tractor_and_implement"), "=maVehicles"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubManualAttach.tick()", "=maTick"), 0);
+    FRAMES(2);
+    const std::string couplingColor = colorOf("couplingPoint");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubManualAttach.detect()", "=clearMa"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.door = StubAnimatedObject.door({ x = -0.4, y = -0.2, z = 2.0 }); StubAnimatedObject.enterZone(door)", "=addDoor"), 0);
+    FRAMES(2);
+    const std::string animatedColor = colorOf("animatedObject");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubAnimatedObject.leaveZone(door)", "=leaveDoor"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.bale = StubHandTool.looseObject(-0.4, -0.2, 1.5, 0.05, { name = 'bale' })", "=addBale"), 0);
+    FRAMES(2);
+    const std::string grabColor = colorOf("objectGrab");
+
+    EXPECT_NE(idleColor, clickColor);
+    EXPECT_NE(idleColor, couplingColor);
+    EXPECT_NE(idleColor, animatedColor);
+    EXPECT_NE(idleColor, grabColor);
+    EXPECT_NE(clickColor, couplingColor);
+    EXPECT_NE(clickColor, animatedColor);
+    EXPECT_NE(clickColor, grabColor);
+    EXPECT_NE(couplingColor, animatedColor);
+    EXPECT_NE(couplingColor, grabColor);
+    EXPECT_NE(animatedColor, grabColor);
 }

@@ -1412,3 +1412,29 @@ TEST_F(CompanionModTest, TheRaysFingertipAndDirectionAreTheIndexFingerOfTheGlove
         end
     )luau", "=pointerOffset"), 0);
 }
+
+TEST_F(CompanionModTest, FailingSceneNodeTransformDoesNotAbortVirtualHandsUpdateOrRender) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    ASSERT_EQ(EvalLua(L, "handIsShown('right')"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local listener = VRCompanion.cyclopeanAudioListenerNode
+        local realWorldToLocal = _G.worldToLocal
+        local realLocalToWorld = _G.localToWorld
+        _G.worldToLocal = function(node, x, y, z)
+            if node == listener then error("deleted listener") end
+            return realWorldToLocal(node, x, y, z)
+        end
+        _G.localToWorld = function(node, x, y, z)
+            if node == listener then error("deleted listener") end
+            return realLocalToWorld(node, x, y, z)
+        end
+        VRCompanion:placeVirtualHandsForRender()
+    )luau", "=failNodeTransforms"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
+}

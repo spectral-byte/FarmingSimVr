@@ -486,6 +486,21 @@ function VRCompanion:isStereoDialogShowing()
     return self.stereoDialogShowing == true
 end
 
+local function checkSettingsPageShowing()
+    local gui = g_gui or (_G and _G.g_gui)
+    local menu = g_inGameMenu or (_G and _G.g_inGameMenu)
+    if type(gui) ~= "table" or gui.currentGuiName ~= "InGameMenu" then return false end
+    if type(menu) ~= "table" then return false end
+    local page = menu.currentPage
+    if type(page) ~= "table" then return false end
+    return page.id == "pageSettings" or (menu.pageSettings ~= nil and page == menu.pageSettings)
+end
+
+function VRCompanion:isSettingsPageShowing()
+    local ok, showing = pcall(checkSettingsPageShowing)
+    return ok and showing == true
+end
+
 function VRCompanion:getPlayerCamera()
     if self.activePlayerCamera ~= nil then
         return self.activePlayerCamera

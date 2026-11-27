@@ -387,8 +387,19 @@ local function toolProblem(tool, entry, nowMs)
         if problem ~= nil and (pending == nil or pending.tool ~= tool) then
             state.fieldsPending = { tool = tool, sinceMs = nowMs }
             return nil
-        elseif problem ~= nil and nowMs - pending.sinceMs < TOOL_FIELDS_GRACE_MS then
-            return nil
+        elseif problem ~= nil then
+            if nowMs == nil then return nil end
+            if pending.sinceMs == nil then
+                pending.sinceMs = nowMs
+                return nil
+            end
+            if nowMs - pending.sinceMs < 0 then
+                pending.sinceMs = nowMs
+                return nil
+            end
+            if nowMs - pending.sinceMs < TOOL_FIELDS_GRACE_MS then
+                return nil
+            end
         end
         state.fieldsPending = nil
     end

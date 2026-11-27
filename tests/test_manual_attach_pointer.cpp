@@ -402,3 +402,50 @@ TEST_F(VirtualGamepadManualAttachTest, LandingOnAnotherHitchPulsesAgainAndARefus
     ASSERT_EQ(BlinkingWarnings(), 1) << "Manual Attach refused the detach";
     EXPECT_EQ(PulsesTo(kRight), 3) << "its path ran, so the pull is felt";
 }
+
+TEST_F(VirtualGamepadManualAttachTest, ClearingSelectedCandidateImmediatelyAfterActionPreventsOneFrameStaleOverwrite) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearHitch);
+
+    PullTrigger(kRight);
+    ASSERT_EQ(Attached("plow"), "true");
+
+    Lua("StubManualAttach.tick()");
+    EXPECT_EQ(EvalLua(L, "tostring(StubManualAttach.handler.attachedImplement == plow)"), "true");
+    EXPECT_EQ(EvalLua(L, "tostring(StubManualAttach.handler.attachable)"), "nil");
+    ReleaseTrigger(kRight);
+
+    FRAMES(1);
+    PullTrigger(kRight);
+    ASSERT_EQ(Attached("plow"), "false");
+
+    Lua("StubManualAttach.tick()");
+    EXPECT_EQ(EvalLua(L, "tostring(StubManualAttach.handler.attachedImplement)"), "nil");
+    EXPECT_EQ(EvalLua(L, "tostring(StubManualAttach.handler.attachable == plow)"), "true");
+}
+
+TEST_F(VirtualGamepadManualAttachTest, DeletedCouplingOrJointNodeDoesNotAbortMotionControllerUpdate) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearHitch);
+
+    Lua(R"luau(
+        local deadJoint = tractor.spec_attacherJoints.attacherJoints[1].jointTransform
+        StubScene.nodes[deadJoint] = nil
+        local realLocalToLocal = _G.localToLocal
+        _G.localToLocal = function(from, to, x, y, z)
+            if from == deadJoint then error("deleted joint node") end
+            return realLocalToLocal(from, to, x, y, z)
+        end
+        local realGetWorldTranslation = _G.getWorldTranslation
+        _G.getWorldTranslation = function(node)
+            if node == deadJoint then error("deleted joint node") end
+            return realGetWorldTranslation(node)
+        end
+        VRCompanion:updateMotionControllers(16.667)
+    )luau");
+    EXPECT_EQ(DrawnEnd(), "none");
+}

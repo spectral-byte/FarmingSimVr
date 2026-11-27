@@ -1,5 +1,6 @@
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
+#include "input/virtual_gamepad.h"
 
 namespace {
 
@@ -101,6 +102,11 @@ protected:
     void Release(uint32_t hand) { headset.SetHandInputs(hand, Trigger(0.0f)); }
     std::string Executed() { return EvalLua(L, "table.concat(StubIC.executed, ',')"); }
     std::string PointerHand() { return EvalLua(L, "VRCompanion:getPointerHand()"); }
+    XINPUT_GAMEPAD Pad() {
+        XINPUT_STATE state{};
+        EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
+        return state.Gamepad;
+    }
 };
 
 }
@@ -307,4 +313,33 @@ TEST_F(PointerHandSwitchMenuTest, ASwitchingPullDoesNotClickInAMenuAndTheNextPul
     headset.SetHandInputs(kLeft, Trigger(1.0f));
     NextFrame(&headset);
     EXPECT_EQ(Count("guiDowns()"), 1) << "the next pull on the new Pointer Hand clicks";
+}
+
+TEST_F(PointerHandSwitchTest, SwitchingPointerHandByTriggerTakesControlFromDeskMouseAndSuppressesGamepadTrigger) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false; StubIC.points[2].inRange = false", "=clearPoints"), 0);
+    ASSERT_NO_FATAL_FAILURE(BothHandsInUseRightIsPointerHand());
+    ASSERT_EQ(PointerHand(), "1");
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:notePointerMouseMoved()", "=mouseControl"), 0);
+    Frames(1);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
+
+    Pull(kLeft);
+    Frames(1);
+    EXPECT_EQ(PointerHand(), "0");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
+    EXPECT_EQ(Pad().bLeftTrigger, 0);
+
+    Frames(4);
+    EXPECT_EQ(Pad().bLeftTrigger, 0);
+
+    Release(kLeft);
+    Frames(2);
+    EXPECT_EQ(Pad().bLeftTrigger, 0);
+
+    Pull(kLeft);
+    Frames(1);
+    EXPECT_EQ(Pad().bLeftTrigger, 255);
 }

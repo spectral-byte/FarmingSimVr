@@ -196,6 +196,12 @@ local function carryNodes(hands)
     return kinematic, rotation
 end
 
+local function nodeExists(node)
+    if node == nil or node == 0 then return false end
+    local exists = engine("entityExists")
+    return type(exists) ~= "function" or exists(node)
+end
+
 local function recordGrabOffset(self, carry)
     local hands = carry.hands
     if type(hands.getIsAwaitingJointCreation) == "function" then
@@ -204,9 +210,12 @@ local function recordGrabOffset(self, carry)
     end
     local _, rotation = carryNodes(hands)
     local hand = handGripInWorld(self, carry.hand)
-    if rotation == nil or hand == nil then return end
-    local x, y, z = engine("getWorldTranslation")(rotation)
-    local qx, qy, qz, qw = engine("getWorldQuaternion")(rotation)
+    if rotation == nil or hand == nil or not nodeExists(rotation) then return end
+    local getWorldTranslation, getWorldQuaternion = engine("getWorldTranslation"), engine("getWorldQuaternion")
+    if type(getWorldTranslation) ~= "function" or type(getWorldQuaternion) ~= "function" then return end
+    local okT, x, y, z = pcall(getWorldTranslation, rotation)
+    local okQ, qx, qy, qz, qw = pcall(getWorldQuaternion, rotation)
+    if not okT or not okQ or type(x) ~= "number" or type(qw) ~= "number" then return end
     local ix, iy, iz, iw = -hand.qx, -hand.qy, -hand.qz, hand.qw
     local ox, oy, oz = qrotate(ix, iy, iz, iw, x - hand.x, y - hand.y, z - hand.z)
     local rx, ry, rz, rw = self.multiplyQuaternions(ix, iy, iz, iw, qx, qy, qz, qw)
@@ -217,21 +226,33 @@ end
 local TURN_EPSILON = 1e-9  -- 1 - |dot| of two rotations: about 9e-5 rad, far below any turn the game makes in an update
 local function absorbTurn(carry, rotation)
     local placed, offset = carry.placed, carry.offset
-    local qx, qy, qz, qw = engine("getWorldQuaternion")(rotation)
-    if 1 - math.abs(qx * placed.qx + qy * placed.qy + qz * placed.qz + qw * placed.qw) <= TURN_EPSILON then return end
+    local getWorldQuaternion = engine("getWorldQuaternion")
+    if type(getWorldQuaternion) ~= "function" or not nodeExists(rotation) then return false end
+    local ok, qx, qy, qz, qw = pcall(getWorldQuaternion, rotation)
+    if not ok or type(qw) ~= "number" then return false end
+    if 1 - math.abs(qx * placed.qx + qy * placed.qy + qz * placed.qz + qw * placed.qw) <= TURN_EPSILON then return true end
     offset.qx, offset.qy, offset.qz, offset.qw =
         VRCompanion.multiplyQuaternions(-placed.hx, -placed.hy, -placed.hz, placed.hw, qx, qy, qz, qw)
     placed.qx, placed.qy, placed.qz, placed.qw = qx, qy, qz, qw
+    return true
 end
 
 local function placeFromHand(self, tool, carry)
     local kinematic, rotation = carryNodes(tool)
-    if kinematic == nil then return end
+    if kinematic == nil or not nodeExists(kinematic) or not nodeExists(rotation) then return end
     local spec = tool.spec_hands
     if type(tool.raiseDirtyFlags) == "function" and spec ~= nil then pcall(tool.raiseDirtyFlags, tool, spec.dirtyFlag) end
-    absorbTurn(carry, rotation)
+    if not absorbTurn(carry, rotation) then return end
     local hand = handGripInWorld(self, carry.hand)
     if hand == nil then return end
+    local getTranslation, getWorldQuaternion = engine("getTranslation"), engine("getWorldQuaternion")
+    local setWorldTranslation, setWorldQuaternion = engine("setWorldTranslation"), engine("setWorldQuaternion")
+    if type(getTranslation) ~= "function" or type(getWorldQuaternion) ~= "function"
+        or type(setWorldTranslation) ~= "function" or type(setWorldQuaternion) ~= "function" then
+        return
+    end
+    local okL, lx, ly, lz = pcall(getTranslation, rotation)
+    if not okL or type(lx) ~= "number" then return end
     local offset = carry.offset
     local ox, oy, oz = qrotate(hand.qx, hand.qy, hand.qz, hand.qw, offset.x, offset.y, offset.z)
     local px, py, pz = hand.x + ox, hand.y + oy, hand.z + oz
@@ -240,13 +261,15 @@ local function placeFromHand(self, tool, carry)
     if fx * fx + fz * fz > 0.0025 then carry.heading = math.atan2(fx, fz) end
     local heading = carry.heading or 0
     local yawX, yawY, yawZ, yawW = 0, math.sin(heading / 2), 0, math.cos(heading / 2)
-    local lx, ly, lz = engine("getTranslation")(rotation)
     local rx, ry, rz = qrotate(yawX, yawY, yawZ, yawW, lx, ly, lz)
-    engine("setWorldTranslation")(kinematic, px - rx, py - ry, pz - rz)
-    engine("setWorldQuaternion")(kinematic, yawX, yawY, yawZ, yawW)
-    engine("setWorldQuaternion")(rotation, qx, qy, qz, qw)
+    pcall(setWorldTranslation, kinematic, px - rx, py - ry, pz - rz)
+    pcall(setWorldQuaternion, kinematic, yawX, yawY, yawZ, yawW)
+    pcall(setWorldQuaternion, rotation, qx, qy, qz, qw)
     local placed = carry.placed
-    placed.qx, placed.qy, placed.qz, placed.qw = engine("getWorldQuaternion")(rotation)
+    local okQ, rqx, rqy, rqz, rqw = pcall(getWorldQuaternion, rotation)
+    if okQ and type(rqw) == "number" then
+        placed.qx, placed.qy, placed.qz, placed.qw = rqx, rqy, rqz, rqw
+    end
     placed.hx, placed.hy, placed.hz, placed.hw = hand.qx, hand.qy, hand.qz, hand.qw
     local jointId = spec ~= nil and spec.heldItemJointId or nil
     if tool.isServer == true and jointId ~= nil and type(engine("setJointFrame")) == "function" then
@@ -699,11 +722,14 @@ local function trailText(self, carry)
     if carry.offset == nil then return "unknown (the grab offset is not recorded yet)" end
     local _, rotation = carryNodes(carry.hands)
     local hand = handGripInWorld(self, carry.hand)
-    if rotation == nil then return "unknown (the game's rotation node is not there)" end
+    if rotation == nil or not nodeExists(rotation) then return "unknown (the game's rotation node is not there)" end
     if hand == nil then return "unknown (the hand is not tracked)" end
+    local getWorldTranslation = engine("getWorldTranslation")
+    if type(getWorldTranslation) ~= "function" then return "unknown" end
+    local ok, x, y, z = pcall(getWorldTranslation, rotation)
+    if not ok or type(x) ~= "number" then return "unknown (the rotation node has no pose)" end
     local offset = carry.offset
     local ox, oy, oz = qrotate(hand.qx, hand.qy, hand.qz, hand.qw, offset.x, offset.y, offset.z)
-    local x, y, z = engine("getWorldTranslation")(rotation)
     local dx, dy, dz = x - (hand.x + ox), y - (hand.y + oy), z - (hand.z + oz)
     return string.format("%.2f m", math.sqrt(dx * dx + dy * dy + dz * dz))
 end

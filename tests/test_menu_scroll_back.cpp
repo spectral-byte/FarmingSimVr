@@ -430,3 +430,18 @@ TEST_F(MenuScrollBackTest, TheLowerFaceButtonGoesBackInAMenuAndIsAOnTheVirtualGa
     EXPECT_EQ(Backs(), 1) << "outside menus it does not go back";
     EXPECT_EQ(PadState(bridge).wButtons & XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A) << "it is A for whatever the player bound";
 }
+
+TEST_F(MenuScrollBackTest, NilGameClockDoesNotBreakMenuScrolling) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getCurrentTimeMs = function() return nil end", "=nilClock"), 0);
+
+    Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(Scrolls(), 1);
+    NextFrame(&headset);
+    EXPECT_EQ(Scrolls(), 1);
+    Release(kRight);
+
+    Hold(kRight, Stick(0.0f, -1.0f));
+    EXPECT_EQ(Scrolls(), 2);
+}
