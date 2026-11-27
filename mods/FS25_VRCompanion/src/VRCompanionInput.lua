@@ -375,24 +375,33 @@ function VRCompanion:consoleCommandToggleView()
     return string.format("2D Floating Window Mode toggled to: %s", tostring(self.is2DViewActive))
 end
 
-function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
+local function applyDlssMvScaleCommand(scaleXStr, scaleYStr, usage, bridgeMethod, label)
     local sx = VRCompanion.parseFiniteNumber(scaleXStr)
-    local hasScaleY = (scaleYStr ~= nil and scaleYStr ~= "")
     local sy = sx
-    if hasScaleY then
+    if scaleYStr ~= nil and scaleYStr ~= "" then
         sy = VRCompanion.parseFiniteNumber(scaleYStr)
     end
     if sx == nil or sy == nil then
-        return "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)"
+        return usage
     end
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if bridge ~= nil and type(bridge.setDlssMvScale) == "function" then
-        bridge.setDlssMvScale(sx, sy)
-        print(string.format("[FS25_VR] DLSS Motion Vector scale multiplier set to: X=%.2f, Y=%.2f", sx, sy))
-        return string.format("DLSS Motion Vector scale multiplier set to: X=%.2f, Y=%.2f", sx, sy)
-    else
-        return "VRBridge.setDlssMvScale is not available."
+    if bridge ~= nil and type(bridge[bridgeMethod]) == "function" then
+        bridge[bridgeMethod](sx, sy)
+        local message = string.format("%s set to: X=%.2f, Y=%.2f", label, sx, sy)
+        print("[FS25_VR] " .. message)
+        return message
     end
+    return "VRBridge." .. bridgeMethod .. " is not available."
+end
+
+function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
+    return applyDlssMvScaleCommand(
+        scaleXStr,
+        scaleYStr,
+        "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)",
+        "setDlssMvScale",
+        "DLSS Motion Vector scale multiplier"
+    )
 end
 
 function VRCompanion:consoleCommandSetDlssSharpness(sharpStr)
@@ -426,23 +435,13 @@ function VRCompanion:consoleCommandSetDlssPreset(presetStr)
 end
 
 function VRCompanion:consoleCommandSetDlssSdpMvScale(scaleXStr, scaleYStr)
-    local sx = VRCompanion.parseFiniteNumber(scaleXStr)
-    local hasScaleY = (scaleYStr ~= nil and scaleYStr ~= "")
-    local sy = sx
-    if hasScaleY then
-        sy = VRCompanion.parseFiniteNumber(scaleYStr)
-    end
-    if sx == nil or sy == nil then
-        return "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)"
-    end
-    local bridge = VRBridge or (_G and _G.VRBridge)
-    if bridge ~= nil and type(bridge.setDlssSdpMvScale) == "function" then
-        bridge.setDlssSdpMvScale(sx, sy)
-        print(string.format("[FS25_VR] DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy))
-        return string.format("DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy)
-    else
-        return "VRBridge.setDlssSdpMvScale is not available."
-    end
+    return applyDlssMvScaleCommand(
+        scaleXStr,
+        scaleYStr,
+        "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)",
+        "setDlssSdpMvScale",
+        "DLSS Sequential Dual-Pass motion vector scale"
+    )
 end
 
 function VRCompanion:consoleCommandDlssMvFix(arg)

@@ -232,10 +232,8 @@ end
 function VRCompanion:unregisterDualEyeCameraNodes()
     if self.registeredEyeCameras == nil then return end
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
     for registered in pairs(self.registeredEyeCameras) do
-        local exists = type(entityExistsFn) ~= "function" or entityExistsFn(registered)
-        if exists and camMgr ~= nil and type(camMgr.removeCamera) == "function" then
+        if VRCompanion.nodeExists(registered) and camMgr ~= nil and type(camMgr.removeCamera) == "function" then
             pcall(camMgr.removeCamera, camMgr, registered)
         end
     end
@@ -349,16 +347,13 @@ function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
 end
 
 function VRCompanion:ensureDualEyeCameraNodes(referenceCamNode)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    if type(entityExistsFn) == "function" and self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0
-        and not entityExistsFn(self.cameraNodeLeft) then
+    if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 and not VRCompanion.nodeExists(self.cameraNodeLeft) then
         if self.cameraNodeRight == self.cameraNodeLeft then
             self.cameraNodeRight = nil
         end
         self.cameraNodeLeft = nil
     end
-    if type(entityExistsFn) == "function" and self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0
-        and not entityExistsFn(self.cameraNodeRight) then
+    if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 and not VRCompanion.nodeExists(self.cameraNodeRight) then
         self.cameraNodeRight = nil
     end
     if self.cameraNodeLeft == nil or self.cameraNodeRight == nil or self.cameraNodeLeft == 0 or self.cameraNodeRight == 0 then
@@ -387,9 +382,8 @@ function VRCompanion:initCyclopeanAudioListener(referenceNode)
 end
 
 function VRCompanion:ensureCyclopeanAudioListener(referenceNode)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    if type(entityExistsFn) == "function" and self.cyclopeanAudioListenerNode ~= nil
-        and self.cyclopeanAudioListenerNode ~= 0 and not entityExistsFn(self.cyclopeanAudioListenerNode) then
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0
+        and not VRCompanion.nodeExists(self.cyclopeanAudioListenerNode) then
         self.cyclopeanAudioListenerNode = nil
     end
     if self.cyclopeanAudioListenerNode == nil or self.cyclopeanAudioListenerNode == 0 then
@@ -497,11 +491,7 @@ end
 function VRCompanion:restoreCameraProjectionsFor2D()
     if self.origCamSettings ~= nil then
         for camNode, orig in pairs(self.origCamSettings) do
-            local exists = true
-            if type(entityExists) == "function" then
-                exists = entityExists(camNode)
-            end
-            if exists then
+            if VRCompanion.nodeExists(camNode) then
                 if orig.fovY ~= nil and type(setFovY) == "function" then
                     pcall(setFovY, camNode, orig.fovY)
                 end
@@ -1046,9 +1036,7 @@ function VRCompanion:placeOutsideCameraBase(rootNode, x, y, z, heading)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
     local setRotationFn = setRotation or (_G and _G.setRotation)
     if type(setTranslationFn) ~= "function" or type(setRotationFn) ~= "function" then return nil end
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    if self.outsideCameraBaseNode ~= nil and type(entityExistsFn) == "function"
-        and not entityExistsFn(self.outsideCameraBaseNode) then
+    if self.outsideCameraBaseNode ~= nil and not VRCompanion.nodeExists(self.outsideCameraBaseNode) then
         self.outsideCameraBaseNode = nil
     end
     if self.outsideCameraBaseNode == nil then
@@ -1486,11 +1474,7 @@ end
 function VRCompanion:restoreMenuBackgroundCamera()
     if self.menuCameraOffsets ~= nil then
         for camNode, offset in pairs(self.menuCameraOffsets) do
-            local exists = true
-            if type(entityExists) == "function" then
-                exists = entityExists(camNode)
-            end
-            if exists and offset ~= nil then
+            if VRCompanion.nodeExists(camNode) and offset ~= nil then
                 local curX, curY, curZ = 0, 0, 0
                 if type(getTranslation) == "function" then
                     local ok, x, y, z = pcall(getTranslation, camNode)
@@ -1516,10 +1500,8 @@ end
 
 local function deleteDualEyeNodes(self)
     local deleteFn = delete or (_G and _G.delete)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
     local function deleteIfExists(node)
-        if node == nil or node == 0 then return end
-        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
+        if not VRCompanion.nodeExists(node) then return end
         pcall(deleteFn, node)
     end
     if type(deleteFn) == "function" then
@@ -1539,11 +1521,7 @@ end
 local function restoreOriginalCameraSettings(self)
     if self.origCamSettings == nil then return end
     for camNode, orig in pairs(self.origCamSettings) do
-        local exists = true
-        if type(entityExists) == "function" then
-            exists = entityExists(camNode)
-        end
-        if exists then
+        if VRCompanion.nodeExists(camNode) then
             if orig.fovY ~= nil and type(setFovY) == "function" then
                 pcall(setFovY, camNode, orig.fovY)
             end

@@ -218,8 +218,7 @@ local function measureHand(self, hand, wheel)
         if type(engine(name)) ~= "function" then return nil, name .. " is not available" end
     end
     if wheel.node == nil or wheel.node == 0 then return nil, "the wheel node is missing" end
-    local exists = engine("entityExists")
-    if type(exists) == "function" and not exists(wheel.node) then return nil, "the wheel node does not exist" end
+    if not VRCompanion.nodeExists(wheel.node) then return nil, "the wheel node does not exist" end
     local getParent, worldToLocal, getTranslation = engine("getParent"), engine("worldToLocal"), engine("getTranslation")
     local okParent, parent = pcall(getParent, wheel.node)
     if not okParent or parent == nil or parent == 0 then return nil, "the wheel node has no parent" end
@@ -388,7 +387,7 @@ function VRCompanion:updateWheelGrab(dt)
                 pinHand(hand, wheel)
                 self:pulseHand(hand, self.WHEEL_GRAB_GRAB_PULSE_MS, self.WHEEL_GRAB_GRAB_PULSE_STRENGTH)
             end
-        elseif self:isHandInUse(hand) then
+        elseif self:isHandInUse(hand) and not entry.gripDown then
             local angle, radial, axial = measureHand(self, hand, wheel)
             if angle ~= nil and ringDistance(self, radial, axial) == 0 then
                 self:takeVirtualGamepadInput(hand, "grip")
