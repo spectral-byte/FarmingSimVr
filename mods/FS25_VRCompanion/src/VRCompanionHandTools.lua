@@ -108,8 +108,8 @@ local CHAINSAW_REACH_USAGE = "Usage: vrChainsawReach [<metres, 0 to 3> | default
 local function parseChainsawReach(text)
     local word = string.lower(tostring(text))
     if word == "default" or word == CHAINSAW_REACH_GAME then return true, nil, false end
-    local metres = tonumber(word)
-    if metres == nil or metres ~= metres or metres == math.huge or metres < 0 then return false end
+    local metres = VRCompanion.parseFiniteNumber(word, 0)
+    if metres == nil then return false end
     return true, math.min(metres, VRCompanion.MAX_CHAINSAW_REACH), metres > VRCompanion.MAX_CHAINSAW_REACH
 end
 
@@ -1939,16 +1939,18 @@ function VRCompanion:consoleCommandHandToolOffset(kind, action, a, b, c)
     elseif action == "reset" then
         offsets[name] = copyOffset(DEFAULT_HANDLE_OFFSETS[name])
     elseif action == "nudge" then
-        local dx, dy, dz = tonumber(a), tonumber(b), tonumber(c)
-        if dx == nil or dy == nil or dz == nil or math.abs(dx) > MAX_NUDGE_METRES or math.abs(dy) > MAX_NUDGE_METRES
-            or math.abs(dz) > MAX_NUDGE_METRES then
+        local dx = VRCompanion.parseFiniteNumber(a, -MAX_NUDGE_METRES, MAX_NUDGE_METRES)
+        local dy = VRCompanion.parseFiniteNumber(b, -MAX_NUDGE_METRES, MAX_NUDGE_METRES)
+        local dz = VRCompanion.parseFiniteNumber(c, -MAX_NUDGE_METRES, MAX_NUDGE_METRES)
+        if dx == nil or dy == nil or dz == nil then
             return TUNING_USAGE
         end
         offset.position.x, offset.position.y, offset.position.z = offset.position.x + dx, offset.position.y + dy, offset.position.z + dz
     elseif action == "turn" then
-        local rx, ry, rz = tonumber(a), tonumber(b), tonumber(c)
-        if rx == nil or ry == nil or rz == nil or math.abs(rx) > MAX_TURN_DEGREES or math.abs(ry) > MAX_TURN_DEGREES
-            or math.abs(rz) > MAX_TURN_DEGREES then
+        local rx = VRCompanion.parseFiniteNumber(a, -MAX_TURN_DEGREES, MAX_TURN_DEGREES)
+        local ry = VRCompanion.parseFiniteNumber(b, -MAX_TURN_DEGREES, MAX_TURN_DEGREES)
+        local rz = VRCompanion.parseFiniteNumber(c, -MAX_TURN_DEGREES, MAX_TURN_DEGREES)
+        if rx == nil or ry == nil or rz == nil then
             return TUNING_USAGE
         end
         local turn = quaternionProduct(quaternionAbout("z", rz), quaternionProduct(quaternionAbout("y", ry), quaternionAbout("x", rx)))
@@ -1993,6 +1995,11 @@ VRCompanion:registerSubsystem("handTools", {
     mapUnload = function(self) self:resetHandTools() end,
     saveSettings = function(self, xmlFile, xml) self:saveHandToolsSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadHandToolsSetting(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.handToolsEnabled = self.DEFAULT_HAND_TOOLS_ENABLED
+        self.toolHand = nil
+        self.chainsawReach = nil
+    end,
     consoleCommands = {
         { name = "vrHandToolOffset", description = "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", method = "consoleCommandHandToolOffset" },
         { name = "vrHandTools", description = "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", method = "consoleCommandSetHandTools" },

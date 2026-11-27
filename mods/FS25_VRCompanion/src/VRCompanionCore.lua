@@ -105,7 +105,7 @@ function VRCompanion:registerSubsystem(name, hooks)
         error("registerSubsystem: the subsystem needs a name", 2)
     end
     hooks = hooks or {}
-    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings" }) do
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings", "resetSettings" }) do
         if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
@@ -155,6 +155,12 @@ end
 function VRCompanion:runSubsystemLoadSettings(xmlFile, getters)
     for _, subsystem in ipairs(subsystems) do
         runSubsystemHook(self, subsystem, "loadSettings", xmlFile, getters)
+    end
+end
+
+function VRCompanion:runSubsystemResetSettings()
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(self, subsystem, "resetSettings")
     end
 end
 

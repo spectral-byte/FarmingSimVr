@@ -794,6 +794,7 @@ VRCompanion:registerSubsystem("objectGrab", {
     mapUnload = function(self) self:resetObjectGrab() end,
     saveSettings = function(self, xmlFile, xml) self:saveObjectGrabSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadObjectGrabSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.objectGrabEnabled = self.DEFAULT_OBJECT_GRAB_ENABLED end,
     consoleCommands = {
         { name = "vrObjectGrab", description = "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", method = "consoleCommandSetObjectGrab" },
         { name = "vrObjectGrabDiagnostics", description = "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", method = "consoleCommandObjectGrabDiagnostics" },

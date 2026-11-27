@@ -265,7 +265,7 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
 end
 
 function VRCompanion:setHudConvergenceDepth(depth, save)
-    if type(depth) ~= "number" or depth ~= depth or depth < self.MIN_HUD_DEPTH or depth > self.MAX_HUD_DEPTH then
+    if not VRCompanion.isFiniteNumber(depth) or depth < self.MIN_HUD_DEPTH or depth > self.MAX_HUD_DEPTH then
         return false
     end
     self.hudConvergenceDepth = depth
@@ -280,7 +280,7 @@ function VRCompanion:consoleCommandSetHudDepth(arg)
     if arg == nil or arg == "" then
         return string.format("HUD depth: %g m. %s", self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH, usage)
     end
-    local depth = tonumber(arg)
+    local depth = VRCompanion.parseFiniteNumber(arg)
     if not self:setHudConvergenceDepth(depth, true) then return usage end
     print(string.format("[FS25_VR] HUD depth set to: %g m", depth))
     return string.format("HUD depth set to: %g m (Saved)", depth)
@@ -469,8 +469,8 @@ function VRCompanion:consoleCommandHudTrace(arg)
         HUD_TRACE_MAX_FRAMES, HUD_TRACE_DEFAULT_FRAMES)
     local frames = HUD_TRACE_DEFAULT_FRAMES
     if arg ~= nil and arg ~= "" then
-        frames = tonumber(arg)
-        if frames == nil or frames ~= math.floor(frames) or frames < 1 or frames > HUD_TRACE_MAX_FRAMES then return usage end
+        frames = VRCompanion.parseFiniteNumber(arg, 1, HUD_TRACE_MAX_FRAMES, true)
+        if frames == nil then return usage end
     end
     if not self:startHudTrace(frames) then
         return "HUD trace unavailable: the game's Overlay class was not found"
@@ -1535,7 +1535,7 @@ function VRCompanion:getStereoDialogDrawShift(gui)
 end
 
 function VRCompanion:setStereoDialogDepth(depth, save)
-    if type(depth) ~= "number" or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
+    if not VRCompanion.isFiniteNumber(depth) or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
     self.stereoDialogDepth = depth
     if save then self:saveConfiguration() end
     return true
@@ -1557,7 +1557,7 @@ function VRCompanion:consoleCommandSetStereoDialogDepth(arg)
     if arg == nil or arg == "" then
         return string.format("Dialog depth: %.1f m. %s", self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH, usage)
     end
-    local depth = tonumber(arg)
+    local depth = VRCompanion.parseFiniteNumber(arg)
     if not self:setStereoDialogDepth(depth, true) then return usage end
     print(string.format("[FS25_VR] Dialog depth set to: %.1f m", depth))
     return string.format("Dialog depth set to: %.1f m (Saved)", depth)
@@ -1609,6 +1609,7 @@ VRCompanion:registerSubsystem("hud", {
     end,
     saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.stereoDialogDepth = self.DEFAULT_STEREO_DIALOG_DEPTH end,
     consoleCommands = {
         { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
     },

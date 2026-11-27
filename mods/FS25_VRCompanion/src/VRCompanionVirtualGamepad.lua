@@ -536,6 +536,11 @@ VRCompanion:registerSubsystem("virtualGamepad", {
     mapUnload = function(self) self:resetVirtualGamepad() end,
     saveSettings = function(self, xmlFile, xml) self:saveVirtualGamepadSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadVirtualGamepadSetting(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.virtualGamepadEnabled = self.DEFAULT_VIRTUAL_GAMEPAD_ENABLED
+        self.virtualGamepadDefaultsWritten = self.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN
+        self.virtualGamepadRecenterMigrated = self.DEFAULT_VIRTUAL_GAMEPAD_RECENTER_MIGRATED
+    end,
     consoleCommands = {
         { name = "vrVirtualGamepad", description = "Turn the Virtual Gamepad (the Motion Controllers as an Xbox pad bound in the Controls screen) on or off (saved): vrVirtualGamepad [on|off]", method = "consoleCommandSetVirtualGamepad" },
     },

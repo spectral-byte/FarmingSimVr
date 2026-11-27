@@ -677,7 +677,7 @@ end
 local SETTING_KEY_CONE = "vrSettings.pointerConeDegrees"
 
 local function validPointerCone(self, degrees)
-    return type(degrees) == "number" and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
+    return VRCompanion.isFiniteNumber(degrees) and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
 end
 
 function VRCompanion:savePointerConeSetting(xmlFile, xml)
@@ -701,7 +701,7 @@ function VRCompanion:consoleCommandSetPointerCone(arg)
         return string.format("Pointer Ray cone: %s degrees (default %s). %s",
             tostring(self.pointerConeDegrees), tostring(self.DEFAULT_POINTER_CONE_DEGREES), usage)
     end
-    local degrees = tonumber(arg)
+    local degrees = VRCompanion.parseFiniteNumber(arg)
     if not validPointerCone(self, degrees) then
         return usage
     end
@@ -799,6 +799,10 @@ VRCompanion:registerSubsystem("motionControllers", {
     update = function(self, dt) self:updateMotionControllers(dt) end,
     saveSettings = function(self, xmlFile, xml) self:saveMotionControllerSettings(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadMotionControllerSettings(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.motionControllersEnabled = self.DEFAULT_MOTION_CONTROLLERS_ENABLED
+        self.pointerConeDegrees = self.DEFAULT_POINTER_CONE_DEGREES
+    end,
     mapUnload = function(self) self:resetMotionControllers() end,
     consoleCommands = {
         { name = "vrPointerDiagnostics", description = "Report why the Pointer Ray may not select Click Points: vrPointerDiagnostics", method = "consoleCommandPointerDiagnostics" },
