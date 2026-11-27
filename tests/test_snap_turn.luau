@@ -122,8 +122,9 @@ test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
         string.format("headTrackingNode yaw must equal +pi/2, got %f", headRotR.ry))
     assert(math.abs(headRotR.rx) < 0.0001 and math.abs(headRotR.rz) < 0.0001, "Pitch and roll must remain 0")
 
-    assert(VRCompanion.vehicleRotationStates[veh] ~= nil, "Vehicle rotation state must exist")
-    assert(math.abs(VRCompanion.vehicleRotationStates[veh].rotY - (math.pi * 0.5)) < 0.0001,
+    local savedState = VRCompanion:getVehicleRotationState(veh, testCam)
+    assert(savedState ~= nil, "Vehicle rotation state must exist")
+    assert(math.abs(savedState.rotY - (math.pi * 0.5)) < 0.0001,
         "Vehicle rotation state must track snapped rotY")
 
     local okL, newRotL = VRCompanion:snapTurnLeft(nil, 1300)

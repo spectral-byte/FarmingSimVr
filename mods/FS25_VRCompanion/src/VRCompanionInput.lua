@@ -615,5 +615,6 @@ VRCompanion:registerSubsystem("input", {
             self[row.loggedField] = false
         end
         self.actionEventsContextName = nil
+        self.missingInputEventsLogged = false
     end,
 })

@@ -1606,6 +1606,7 @@ VRCompanion:registerSubsystem("hud", {
         self.activeFillLevelsDisplay = nil
         self:stopHudTrace()
         self.hudEyeTestEye = nil
+        self.hasLoggedFillLevelsDisplayInfo = false
     end,
     saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,

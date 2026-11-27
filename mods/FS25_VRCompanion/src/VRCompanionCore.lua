@@ -1122,6 +1122,8 @@ function VRCompanion:deleteMap()
     self.enterableHooked = false
     self.lastControlledVehicle = nil
     self.appliedDlssNearClip = nil
+    self.lastMissionUpdateError = nil
+    self.trackedCameraShown = nil
     self.isMenuVisible = false
     self.menuTakesInput = false
     self.stereoDialogShowing = false

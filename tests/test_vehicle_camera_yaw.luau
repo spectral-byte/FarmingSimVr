@@ -860,6 +860,99 @@ test("CabForwardOfZeroDoesNotTakeUpTheLookYaw", function()
     _G.link = nil
 end)
 
+test("MultiCabVehiclePreservesIndependentLookYawPerCameraIndex", function()
+    VRCompanion.vehicleRotationStates = {}
+    local driverCam = {
+        isInside = true,
+        cameraNode = 1401,
+        origRotY = math.pi,
+        rotY = math.pi,
+        origRotX = 0.0,
+        rotX = 0.0,
+    }
+    local outsideCam = {
+        isInside = false,
+        cameraNode = 1402,
+        origRotY = 0.0,
+        rotY = 0.0,
+    }
+    local passengerCam = {
+        isInside = true,
+        cameraNode = 1403,
+        origRotY = 0.0,
+        rotY = 0.0,
+        origRotX = 0.0,
+        rotX = 0.0,
+    }
+    local veh = {
+        spec_enterable = {
+            cameras = { driverCam, outsideCam, passengerCam },
+            camIndex = 1,
+        },
+        getActiveCamera = function(self)
+            return self.spec_enterable.cameras[self.spec_enterable.camIndex]
+        end,
+    }
+
+    _G.g_currentMission = { controlledVehicle = veh }
+    VRCompanion:onEnterVehicle(veh, true, nil)
+
+    driverCam.rotY = math.pi - 0.65
+    VRCompanion:onVehicleCameraUpdate(driverCam, 16.6)
+
+    veh.spec_enterable.camIndex = 3
+    VRCompanion:onVehicleCameraChanged(veh, 3)
+    assert(math.abs(passengerCam.rotY - 0.0) < 0.0001,
+        string.format("passenger cab must keep its own neutral rotY (0.0), got %f", passengerCam.rotY))
+
+    passengerCam.rotY = 0.45
+    VRCompanion:onVehicleCameraUpdate(passengerCam, 16.6)
+
+    driverCam.rotY = math.pi
+    veh.spec_enterable.camIndex = 1
+    VRCompanion:onVehicleCameraChanged(veh, 1)
+    assert(math.abs(driverCam.rotY - (math.pi - 0.65)) < 0.0001,
+        string.format("driver cab must restore its own look yaw (%.4f), got %f", math.pi - 0.65, driverCam.rotY))
+
+    passengerCam.rotY = 0.0
+    veh.spec_enterable.camIndex = 3
+    VRCompanion:onVehicleCameraChanged(veh, 3)
+    assert(math.abs(passengerCam.rotY - 0.45) < 0.0001,
+        string.format("passenger cab must restore its own look yaw (0.45), got %f", passengerCam.rotY))
+
+    VRCompanion:onLeaveVehicle(veh)
+    _G.g_currentMission = nil
+    VRCompanion.lastControlledVehicle = nil
+end)
+
+test("SoldVehiclesAreGarbageCollectedFromVehicleRotationStates", function()
+    VRCompanion.vehicleRotationStates = nil
+    do
+        local soldCam = {
+            isInside = true,
+            cameraNode = 1501,
+            origRotY = math.pi,
+            rotY = math.pi,
+            origRotX = 0.0,
+            rotX = 0.0,
+        }
+        local soldVeh = {
+            spec_enterable = {
+                cameras = { soldCam },
+                camIndex = 1,
+            },
+            getActiveCamera = function(self) return soldCam end,
+        }
+        VRCompanion:saveVehicleRotationState(soldVeh)
+        assert(next(VRCompanion.vehicleRotationStates) ~= nil, "precondition: saved vehicle rotation state exists")
+    end
+
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(next(VRCompanion.vehicleRotationStates) == nil,
+        "vehicleRotationStates must use weak vehicle keys so sold vehicles are not pinned")
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_vehicle_camera_yaw.luau", failed))
 
