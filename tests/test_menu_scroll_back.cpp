@@ -161,9 +161,9 @@ TEST_F(MenuScrollBackTest, AWobblyGripIsOnePress) {
     Hold(kRight, Grip(0.3f));
     EXPECT_EQ(Backs(), 0) << "a light touch is not a press";
     Hold(kRight, Grip(1.0f));
-    for (float value : { 0.8f, 0.5f, 0.7f, 0.5f, 0.8f }) Hold(kRight, Grip(value));
-    EXPECT_EQ(Backs(), 1) << "wobbling between the thresholds is the same press";
-    Release(kRight);
+    for (float value : { 0.8f, 0.4f, 0.7f, 0.4f, 0.8f }) Hold(kRight, Grip(value));
+    EXPECT_EQ(Backs(), 1) << "wobbling at or above 0.4 is the same press";
+    Hold(kRight, Grip(0.35f));
     Hold(kRight, Grip(1.0f));
     EXPECT_EQ(Backs(), 2);
 }

@@ -297,3 +297,12 @@ TEST_F(CompanionModTest, ThereIsStillOneWrapOfGetLookRayHoweverManySubsystemsAre
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMap"), 0);
     EXPECT_EQ(EvalLua(L, "Player.getLookRay == StubHandTool.originalGetLookRay"), "true") << "and one lift gives the game's function back";
 }
+
+TEST_F(CompanionModTest, DescribeLookRayFindsGLocalPlayerWhenMissionPlayerIsNil) {
+    NO_HAND_TOOL_START();
+    ASSERT_EQ(RunLuauChunk(L, "g_currentMission.player = nil", "=clearMissionPlayer"), 0);
+    FRAMES(1);
+    const std::string diagnostics = EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
+    EXPECT_NE(diagnostics.find("look ray starts at"), std::string::npos) << diagnostics;
+    EXPECT_EQ(diagnostics.find("look ray: unknown"), std::string::npos) << diagnostics;
+}

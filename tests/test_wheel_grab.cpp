@@ -216,12 +216,12 @@ TEST_F(CompanionModTest, TheGripGrabsAtTheMenuBackThresholdAndKeepsHoldingUntilI
     FRAMES(30);
     EXPECT_NEAR(WheelAngle(L), 0.4, 0.02) << "a grip eased to 0.4 still held the Steering Wheel";
 
-    headset.SetHandInputs(kRight, Grip(0.2f));
+    headset.SetHandInputs(kRight, Grip(0.35f));
     FRAMES(1);
     const std::string callsAtRelease = EvalLua(L, "#StubSteer.calls");
     TURN_HAND_TO(kRight, 1.0);
     FRAMES(5);
-    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsAtRelease) << "below 0.3 the Steering Wheel was let go";
+    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsAtRelease) << "below 0.4 the Steering Wheel was let go";
 }
 
 TEST_F(CompanionModTest, AGripAlreadySqueezedWhenTheHandReachesTheRingDoesNotGrab) {

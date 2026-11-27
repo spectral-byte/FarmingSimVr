@@ -29,6 +29,20 @@ function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
+function VRCompanion.getLocalPlayer()
+    local player = VRCompanion.getEngineGlobal("g_localPlayer")
+    if player == nil then
+        local mission = VRCompanion.getEngineGlobal("g_currentMission")
+        player = type(mission) == "table" and mission.player or nil
+    end
+    return player
+end
+
+function VRCompanion.rotateVectorByQuaternion(qx, qy, qz, qw, x, y, z)
+    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+end
+
 VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
 
 local lookRayAimers = {}

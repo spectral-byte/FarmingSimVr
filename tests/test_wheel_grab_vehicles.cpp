@@ -176,3 +176,69 @@ TEST_F(CompanionModTest, ASteeringAssistSeesWheelGrabAsAnAnalogWheelPeripheralLi
     )luau", "=assistSaw"), 0);
     EXPECT_NEAR(WheelAngle(L), 0.6, 0.02) << "and the Steering Wheel followed the hand";
 }
+
+TEST_F(CompanionModTest, MidGrabSteeringWheelNodeChangeReleasesHeldHandsUntilSqueezedAfresh) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("turnedSeatWheel = true")));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
+    TURN_HAND_TO(kRight, 0.3);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local altBase = StubScene.newNode("altSteeringWheelBase", cab.parent, 0, 1.2, 0.5, -0.6, 0, 0)
+        local altNode = StubScene.newNode("altSteeringWheel", altBase, 0, 0, 0)
+        cab.vehicle.spec_crabSteering = {
+            hasSteeringModes = true,
+            state = 1,
+            steeringModes = {
+                [1] = { steeringWheel = { node = altNode, indoorRotation = math.rad(540) } },
+            },
+        }
+    )luau", "=crabWheelChange"), 0);
+    FRAMES(1);
+    const int callsAtChange = SteeringCalls(L);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "false");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false");
+
+    TURN_HAND_TO(kRight, 0.7);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "false");
+    EXPECT_EQ(SteeringCalls(L), callsAtChange);
+
+    headset.SetHandInputs(kRight, Grip(0.0f));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Grip(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true");
+}
+
+TEST_F(CompanionModTest, MidGrabSteeringDirectionChangeReleasesHeldHandsUntilSqueezedAfresh) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
+    TURN_HAND_TO(kRight, 0.3);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "cab.vehicle.spec_reverseDriving = { isReverseDriving = true }", "=flipDirection"), 0);
+    FRAMES(1);
+    const int callsAtFlip = SteeringCalls(L);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "false");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false");
+
+    TURN_HAND_TO(kRight, 0.7);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "false");
+    EXPECT_EQ(SteeringCalls(L), callsAtFlip);
+
+    headset.SetHandInputs(kRight, Grip(0.0f));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Grip(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true");
+}

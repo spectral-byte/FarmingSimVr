@@ -147,6 +147,11 @@ local function choosePointerHand(self)
             return hand
         end
     end
+    if previous == nil then
+        local toolHand = type(self.getToolHand) == "function" and self:getToolHand() or nil
+        if toolHand == 0 or toolHand == 1 then return toolHand end
+        return self.MOTION_HAND_RIGHT
+    end
     return previous
 end
 
@@ -338,10 +343,7 @@ function VRCompanion:resetMotionControllerMovement()
     end
 end
 
-local function qrotate(qx, qy, qz, qw, x, y, z)
-    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
-    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
-end
+local qrotate = VRCompanion.rotateVectorByQuaternion
 
 local function headIsPlacedInTheWorld(self)
     if self:isMenuQuadShown() or self.is2DViewActive or self.trackedCameraShown == false then return false end
