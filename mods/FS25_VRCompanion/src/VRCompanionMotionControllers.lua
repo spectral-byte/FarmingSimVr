@@ -122,7 +122,7 @@ local function isHoldingHandTool(self, hand)
 end
 
 local function isCarryingHeldObject(self, hand)
-    return self:isHandCarryingHeldObject(hand) == true
+    return not self:isMenuQuadShown() and self:isHandCarryingHeldObject(hand) == true
 end
 
 local function isPointerCandidate(self, hand)
@@ -540,7 +540,7 @@ function VRCompanion:updatePointerRay(dt)
     hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onCouplingPoint)
     if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ end
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
-    if not hasTarget then
+    if hitX == nil then
         grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
     end
     local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil, grabbable and grabDistance or nil)

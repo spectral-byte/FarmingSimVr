@@ -176,3 +176,69 @@ TEST_F(CompanionModTest, AnotherPlayersHandsToolIsDrawnTheGamesWayWhileTheLocalH
     EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(hands)"), "") << "the local player's: held back";
     EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(othersHands)"), "crosshair") << "the other player's: the game's";
 }
+
+TEST_F(VirtualGamepadObjectGrabTest, ObjectGrabStillAimsAndPulsesWhenInteractiveControlClickPointsAreNearbyButOutsideTheRay) {
+    const std::string icStubs = StubChunk("interactive_control") + "\nStubIC.install('ok')";
+    StartOptions options;
+    options.extraStubs = icStubs.c_str();
+    ASSERT_NO_FATAL_FAILURE(Start(options));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('sideSwitch', -2.0, -0.2, 1.5)", "=addSideIc"), 0);
+    ASSERT_EQ(RunLuauChunk(L, ObjectAhead("0.05").c_str(), "=object"), 0);
+
+    for (int i = 0; i < 2; ++i) {
+        ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+        FRAMES(1);
+    }
+    headset.SetHandPointing(kRight, HandAt(kHandX - 0.1f, kHandY, kHandZ));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+    FRAMES(1);
+    headset.SetHandPointing(kRight, HandAt(kHandX, kHandY, kHandZ));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil");
+    ASSERT_EQ(EvalLua(L, "tostring(drawnRayEnd() ~= nil)"), "true");
+    EXPECT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', drawnRayEnd())"), "-0.40 -0.20 1.35");
+    EXPECT_EQ(PulsesTo(kRight), 1);
+
+    Squeeze(kRight, 1.0f);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+    FRAMES(1);
+    EXPECT_EQ(PickUps(), 1);
+}
+
+TEST_F(VirtualGamepadObjectGrabTest, WhenAClickPointSuppressesObjectGrabMovingBackOntoTheSameObjectPulsesHapticsAgain) {
+    const std::string icStubs = StubChunk("interactive_control") + "\nStubIC.install('ok')";
+    StartOptions options;
+    options.extraStubs = icStubs.c_str();
+    ASSERT_NO_FATAL_FAILURE(Start(options));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', -0.4, -0.2, 1.0, { inRange = false })", "=addIc"), 0);
+    ASSERT_EQ(RunLuauChunk(L, ObjectAhead("0.05").c_str(), "=object"), 0);
+
+    headset.SetHandPointing(kRight, HandAt(kHandX - 0.1f, kHandY, kHandZ));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+    FRAMES(1);
+    headset.SetHandPointing(kRight, HandAt(kHandX, kHandY, kHandZ));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+    FRAMES(2);
+    ASSERT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', drawnRayEnd())"), "-0.40 -0.20 1.35");
+    ASSERT_EQ(PulsesTo(kRight), 1);
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = true", "=icInRange"), 0);
+    for (int i = 0; i < 2; ++i) {
+        ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+        FRAMES(1);
+    }
+    ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "switch");
+    ASSERT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', drawnRayEnd())"), "-0.40 -0.20 1.00");
+    const int pulsesAfterIc = PulsesTo(kRight);
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false", "=icOutOfRange"), 0);
+    for (int i = 0; i < 2; ++i) {
+        ASSERT_EQ(RunLuauChunk(L, "StubIC.tick()", "=icTick"), 0);
+        FRAMES(1);
+    }
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil");
+    EXPECT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', drawnRayEnd())"), "-0.40 -0.20 1.35");
+    EXPECT_EQ(PulsesTo(kRight), pulsesAfterIc + 1) << "landed-target state reset while suppressed, so re-landing pulses again";
+}
