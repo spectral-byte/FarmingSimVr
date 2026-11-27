@@ -468,8 +468,11 @@ function VRCompanion:drawVirtualHands()
 end
 
 function VRCompanion:consoleCommandVirtualHandsTrace(arg)
-    local frames = math.floor(tonumber(arg) or 16)
-    if frames < 1 then return "Usage: vrVirtualHandsTrace [frames, default 16]" end
+    local frames = 16
+    if arg ~= nil and arg ~= "" then
+        frames = VRCompanion.parseFiniteNumber(arg, 1, nil, true)
+        if frames == nil then return "Usage: vrVirtualHandsTrace [frames, default 16]" end
+    end
     state.traceFrames = frames
     return string.format("Tracing the Virtual Hands for %d frames into the log", frames)
 end

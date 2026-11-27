@@ -545,6 +545,7 @@ VRCompanion:registerSubsystem("wheelGrab", {
     mapUnload = function(self) self:resetWheelGrab() end,
     saveSettings = function(self, xmlFile, xml) self:saveWheelGrabSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadWheelGrabSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.wheelGrabEnabled = self.DEFAULT_WHEEL_GRAB_ENABLED end,
     consoleCommands = {
         { name = "vrWheelGrab", description = "Turn Wheel Grab, steering by holding the Steering Wheel with a Motion Controller, on or off (saved): vrWheelGrab [on|off]", method = "consoleCommandSetWheelGrab" },
         { name = "vrWheelGrabDiagnostics", description = "Report the Steering Wheel, each hand's distance to the rim ring, the grab and the steering sent: vrWheelGrabDiagnostics", method = "consoleCommandWheelGrabDiagnostics" },

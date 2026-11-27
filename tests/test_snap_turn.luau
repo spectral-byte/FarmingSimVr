@@ -1132,7 +1132,7 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     end
 
     VRCompanion:loadConfiguration("mockSettings.xml")
-    assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
+    assert(math.abs(VRCompanion:getSnapTurnAngle() - VRCompanion.DEFAULT_SNAP_TURN_ANGLE) < 0.0001,
         "modDesc.vrSettings.snapTurnAngle must not be read as a settings key")
 
     _G.getUserProfileAppPath = nil
@@ -1212,6 +1212,12 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     local inv4 = VRCompanion:consoleCommandSetSnapTurnAngle("400")
     assert(string.find(inv4, "Usage:") ~= nil, "Angle > 360 must return usage error")
     assert(VRCompanion:getSnapTurnAngle() == prevAngle, "Angle must not change on > 360")
+
+    for _, bad in ipairs({ "nan", "inf", "-inf" }) do
+        local invNonFinite = VRCompanion:consoleCommandSetSnapTurnAngle(bad)
+        assert(string.find(invNonFinite, "Usage:") ~= nil, bad .. " must return usage error")
+        assert(VRCompanion:getSnapTurnAngle() == prevAngle, "Angle must not change on " .. bad)
+    end
 
     _G.getUserProfileAppPath = nil
     _G.createFolder = nil

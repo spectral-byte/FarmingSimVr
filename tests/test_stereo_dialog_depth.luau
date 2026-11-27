@@ -146,7 +146,7 @@ test("VrDialogDepthSetsHowFarBackTheDialogReadsAndReportsAndRefusesBadValues", f
     local set = VRCompanion:consoleCommandSetStereoDialogDepth("3.2")
     assert(string.find(set, "3.2", 1, true), "reports the new depth: " .. set)
     assert(near(renderFrame(0).root, disparityAt(3.2)), "the dialog is drawn at the new depth")
-    for _, bad in ipairs({ "far", "0", "-1", "99", "0.1" }) do
+    for _, bad in ipairs({ "far", "0", "-1", "99", "0.1", "nan", "inf", "-inf" }) do
         local refused = VRCompanion:consoleCommandSetStereoDialogDepth(bad)
         assert(string.find(refused, "Usage", 1, true), "refused with the usage: " .. bad)
     end

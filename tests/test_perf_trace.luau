@@ -118,7 +118,7 @@ test("StopEndsARunningTraceAndSaysWhenNoneRuns", function()
 end)
 
 test("ALengthOutsideOneToSixtySecondsGetsTheUsage", function()
-    for _, arg in ipairs({ "0", "61", "abc", "-3" }) do
+    for _, arg in ipairs({ "0", "61", "abc", "-3", "nan", "inf", "-inf" }) do
         local reply = VRCompanion:consoleCommandPerfTrace(arg)
         assert(string.find(reply, "Usage: vrPerfTrace", 1, true), arg .. ": " .. tostring(reply))
     end

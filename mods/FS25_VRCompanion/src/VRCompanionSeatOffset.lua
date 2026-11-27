@@ -97,9 +97,7 @@ end
 local SEAT_OFFSET_USAGE = "Usage: vrSeatOffset [<forward> <up> <right> | reset] (metres from the vehicle's own eye point, each axis up to 0.5 either way; the in-cab camera you are in)"
 
 local function parseSeatOffsetAxis(text)
-    local value = tonumber(text)
-    if value == nil or value ~= value or value == math.huge or value == -math.huge then return nil end
-    return value
+    return VRCompanion.parseFiniteNumber(text)
 end
 
 local function describeSeatOffset(forward, up, right)
@@ -231,8 +229,8 @@ function VRCompanion:loadSeatOffsetSettings(xmlFile, getters)
         local key = string.format("%s(%d)", SEAT_OFFSETS_KEY, entry)
         local model, camera = getString(xmlFile, key .. "#vehicle"), getInt(xmlFile, key .. "#camera")
         local forward, up, right = getFloat(xmlFile, key .. "#forward"), getFloat(xmlFile, key .. "#up"), getFloat(xmlFile, key .. "#right")
-        if model ~= nil and model ~= "" and camera ~= nil and camera >= 1
-            and forward ~= nil and up ~= nil and right ~= nil then
+        if model ~= nil and model ~= "" and VRCompanion.isFiniteNumber(camera) and camera >= 1 and camera == math.floor(camera)
+            and VRCompanion.isFiniteNumber(forward) and VRCompanion.isFiniteNumber(up) and VRCompanion.isFiniteNumber(right) then
             self:setSeatOffset(model, camera, forward, up, right)
         end
         entry = entry + 1
@@ -242,6 +240,7 @@ end
 VRCompanion:registerSubsystem("seatOffset", {
     saveSettings = function(self, xmlFile, xml) self:saveSeatOffsetSettings(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadSeatOffsetSettings(xmlFile, xml) end,
+    resetSettings = function(self) self.seatOffsets = {} end,
     consoleCommands = {
         { name = "vrSeatOffset", description = "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (saved): vrSeatOffset [<forward> <up> <right> | reset]", method = "consoleCommandSeatOffset" },
     },
