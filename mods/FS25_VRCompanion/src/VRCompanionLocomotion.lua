@@ -122,7 +122,7 @@ function VRCompanion:getSnapTurnAngle()
 end
 
 function VRCompanion:setSnapTurnAngle(angle, inDegrees, saveConfig)
-    if type(angle) == "number" and angle > 0 then
+    if VRCompanion.isFiniteNumber(angle) and angle > 0 then
         if inDegrees == true then
             self.snapTurnAngle = math.rad(angle)
         elseif inDegrees == false then

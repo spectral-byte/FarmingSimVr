@@ -29,6 +29,20 @@ function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
+function VRCompanion.getLocalPlayer()
+    local player = VRCompanion.getEngineGlobal("g_localPlayer")
+    if player == nil then
+        local mission = VRCompanion.getEngineGlobal("g_currentMission")
+        player = type(mission) == "table" and mission.player or nil
+    end
+    return player
+end
+
+function VRCompanion.rotateVectorByQuaternion(qx, qy, qz, qw, x, y, z)
+    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+end
+
 VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
 
 local lookRayAimers = {}
@@ -105,7 +119,7 @@ function VRCompanion:registerSubsystem(name, hooks)
         error("registerSubsystem: the subsystem needs a name", 2)
     end
     hooks = hooks or {}
-    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings" }) do
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "updateBeforeActions", "saveSettings", "loadSettings", "resetSettings" }) do
         if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
@@ -155,6 +169,12 @@ end
 function VRCompanion:runSubsystemLoadSettings(xmlFile, getters)
     for _, subsystem in ipairs(subsystems) do
         runSubsystemHook(self, subsystem, "loadSettings", xmlFile, getters)
+    end
+end
+
+function VRCompanion:runSubsystemResetSettings()
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(self, subsystem, "resetSettings")
     end
 end
 

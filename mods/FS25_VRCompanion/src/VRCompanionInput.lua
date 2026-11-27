@@ -141,12 +141,10 @@ function VRCompanion:getHudSafeAreaUsage()
         self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
 end
 
-local function isNumber(v) return v ~= nil and v == v end
-
 function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
-    local horizontal = tonumber(horizontalStr)
-    local vertical = tonumber(verticalStr)
-    if not isNumber(horizontal) or not isNumber(vertical) then
+    local horizontal = VRCompanion.parseFiniteNumber(horizontalStr)
+    local vertical = VRCompanion.parseFiniteNumber(verticalStr)
+    if horizontal == nil or vertical == nil then
         return self:getHudSafeAreaUsage()
     end
 
@@ -184,12 +182,15 @@ end
 
 function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, verticalStr, scaleStr)
     local groupName = (groupStr ~= nil) and string.lower(tostring(groupStr)) or nil
-    local horizontal = tonumber(horizontalStr)
-    local vertical = tonumber(verticalStr)
+    local horizontal = VRCompanion.parseFiniteNumber(horizontalStr)
+    local vertical = VRCompanion.parseFiniteNumber(verticalStr)
     local hasScale = (scaleStr ~= nil and scaleStr ~= "")
-    local scale = hasScale and tonumber(scaleStr) or nil
+    local scale = nil
+    if hasScale then
+        scale = VRCompanion.parseFiniteNumber(scaleStr)
+    end
     if groupName == nil or self.HUD_GROUPS[groupName] == nil
-        or not isNumber(horizontal) or not isNumber(vertical) or (hasScale and not isNumber(scale)) then
+        or horizontal == nil or vertical == nil or (hasScale and scale == nil) then
         return self:getHudGroupUsage()
     end
 
@@ -212,8 +213,8 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
 end
 
 function VRCompanion:consoleCommandSetHudState(stateStr)
-    local st = tonumber(stateStr)
-    if st == nil or st < 0 or st > 2 then
+    local st = VRCompanion.parseFiniteNumber(stateStr, 0, 2, true)
+    if st == nil then
         return "Usage: vrHudState <0=Hidden | 1=Streamlined | 2=Full>"
     end
     self:setHudState(st)
@@ -230,11 +231,14 @@ function VRCompanion:consoleCommandSetHudState(stateStr)
 end
 
 function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
+    local usage = string.format("Usage: vrHudLoadNotification <true|false> (current: %s)", tostring(self.showHudLoadNotification == true))
     if enabledStr == nil or enabledStr == "" then
-        return string.format("Usage: vrHudLoadNotification <true|false> (current: %s)", tostring(self.showHudLoadNotification == true))
+        return usage
     end
-    local lower = string.lower(tostring(enabledStr))
-    local enabled = (lower == "true" or lower == "1" or lower == "on")
+    local enabled = VRCompanion.parseOnOffArgument(enabledStr)
+    if enabled == nil then
+        return usage
+    end
     self.showHudLoadNotification = enabled
     self:saveConfiguration()
     local mission = g_currentMission or _G.g_currentMission
@@ -315,7 +319,7 @@ function VRCompanion:consoleCommandSetSnapTurnAngle(angleStr)
         return string.format("Current VR snap turn angle: %.1f deg. Usage: vrSnapTurnAngle <degrees> (e.g. 30, 45, 90, 180)", curDeg)
     end
 
-    local deg = tonumber(angleStr)
+    local deg = VRCompanion.parseFiniteNumber(angleStr)
     if deg == nil or deg <= 0 or deg > 360 then
         return string.format("Usage: vrSnapTurnAngle <degrees> (valid: 1 to 360, e.g. 30, 45, 90, 180, current: %.1f deg)", curDeg)
     end
@@ -361,11 +365,15 @@ function VRCompanion:consoleCommandToggleView()
 end
 
 function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
-    local sx = tonumber(scaleXStr)
-    if sx == nil then
+    local sx = VRCompanion.parseFiniteNumber(scaleXStr)
+    local hasScaleY = (scaleYStr ~= nil and scaleYStr ~= "")
+    local sy = sx
+    if hasScaleY then
+        sy = VRCompanion.parseFiniteNumber(scaleYStr)
+    end
+    if sx == nil or sy == nil then
         return "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)"
     end
-    local sy = tonumber(scaleYStr) or sx
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil and type(bridge.setDlssMvScale) == "function" then
         bridge.setDlssMvScale(sx, sy)
@@ -377,7 +385,7 @@ function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
 end
 
 function VRCompanion:consoleCommandSetDlssSharpness(sharpStr)
-    local s = tonumber(sharpStr)
+    local s = VRCompanion.parseFiniteNumber(sharpStr, 0.0, 1.0)
     if s == nil then
         return "Usage: vrDlssSharpness <sharpness 0.0 - 1.0> (e.g. 0.50)"
     end
@@ -392,7 +400,7 @@ function VRCompanion:consoleCommandSetDlssSharpness(sharpStr)
 end
 
 function VRCompanion:consoleCommandSetDlssPreset(presetStr)
-    local p = tonumber(presetStr)
+    local p = VRCompanion.parseFiniteNumber(presetStr, 0, nil, true)
     if p == nil then
         return "Usage: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L> (e.g. 11 for Preset K)"
     end
@@ -407,11 +415,15 @@ function VRCompanion:consoleCommandSetDlssPreset(presetStr)
 end
 
 function VRCompanion:consoleCommandSetDlssSdpMvScale(scaleXStr, scaleYStr)
-    local sx = tonumber(scaleXStr)
-    if sx == nil then
+    local sx = VRCompanion.parseFiniteNumber(scaleXStr)
+    local hasScaleY = (scaleYStr ~= nil and scaleYStr ~= "")
+    local sy = sx
+    if hasScaleY then
+        sy = VRCompanion.parseFiniteNumber(scaleYStr)
+    end
+    if sx == nil or sy == nil then
         return "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)"
     end
-    local sy = tonumber(scaleYStr) or sx
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil and type(bridge.setDlssSdpMvScale) == "function" then
         bridge.setDlssSdpMvScale(sx, sy)
@@ -471,12 +483,10 @@ end
 local DLSS_NEAR_CLIP_MODE_NAMES = { cab = "cab", outside = "outside camera", onFoot = "on foot" }
 
 local function parseDlssNearClip(arg)
-    local meters = tonumber(arg)
-    if meters == nil and type(arg) == "string" and string.lower(arg) == "auto" then
-        meters = 0
+    if type(arg) == "string" and string.lower(arg) == "auto" then
+        return 0
     end
-    if meters == nil or meters ~= meters or meters < 0 then return nil end
-    return meters
+    return VRCompanion.parseFiniteNumber(arg, 0)
 end
 
 local function describeDlssNearClip(meters)
@@ -545,7 +555,13 @@ function VRCompanion:consoleCommandDlssNearClipOnFoot(arg)
 end
 
 function VRCompanion:consoleCommandDlssDiag(countStr)
-    local count = tonumber(countStr) or 128
+    local count = 128
+    if countStr ~= nil and countStr ~= "" then
+        count = VRCompanion.parseFiniteNumber(countStr, 1, nil, true)
+        if count == nil then
+            return "Usage: vrDlssDiag [evaluations]"
+        end
+    end
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil and type(bridge.dlssDiag) == "function" then
         if bridge.dlssDiag(count) then

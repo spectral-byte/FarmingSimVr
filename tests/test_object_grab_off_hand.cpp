@@ -227,3 +227,70 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, WhenTheTargetersAnswerToTheNewRayCom
     ASSERT_EQ(PickUps(), 1);
     EXPECT_EQ(EvalLua(L, "tostring(StubHandTool.pickUps[1].node == bale.node)"), "true");
 }
+
+TEST_F(VirtualGamepadObjectGrabOffHandTest, WhileTheDeskMouseOwnsThePointerTheOffHandDoesNotTakeGripOrGrab) {
+    ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
+    BothInUseLeftAtTheBale();
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:mouseEvent(0.4, 0.6, false, false, 0)", "=mouseMoves"), 0);
+    FRAMES(2);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
+
+    Squeeze(kLeft, 1.0f);
+    FRAMES(1);
+    EXPECT_EQ(PickUps(), 0);
+    EXPECT_TRUE(PadGrip(kLeft)) << "the Desk Mouse owns the pointer, so the off-hand grip stays on the pad";
+}
+
+TEST_F(VirtualGamepadObjectGrabOffHandTest, AWallBehindTheOffHandsFingertipDoesNotOccludeAGrabbableObjectInFront) {
+    ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.wallObjects = {}
+        local baseCast = _G.raycastClosest
+        function _G.addWall(x, y, z, radius)
+            local node = StubScene.newNode("wall", 0, x, y, z)
+            table.insert(_G.wallObjects, { node = node, radius = radius })
+            return node
+        end
+        function _G.raycastClosest(x, y, z, dx, dy, dz, maxDistance, callbackName, target, mask)
+            local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            local bestNode, best = nil, nil
+            local function check(node, radius)
+                if entityExists(node) then
+                    local cx, cy, cz = getWorldTranslation(node)
+                    local ox, oy, oz = cx - x, cy - y, cz - z
+                    local b = (ox * dx + oy * dy + oz * dz) / length
+                    local disc = b * b - (ox * ox + oy * oy + oz * oz - radius ^ 2)
+                    if disc >= 0 then
+                        local t = b - math.sqrt(disc)
+                        if t >= 0 and t <= maxDistance and (best == nil or t < best) then bestNode, best = node, t end
+                    end
+                end
+            end
+            for node, object in pairs(StubHandTool.looseObjects) do check(node, object.radius) end
+            for _, wall in ipairs(_G.wallObjects) do check(wall.node, wall.radius) end
+            if bestNode == nil then return 0 end
+            target[callbackName](target, bestNode, x + dx / length * best, y + dy / length * best, z + dz / length * best, best, 0, 1, 0, 0, 0, true)
+            return 1
+        end
+        _G.rearWall = addWall(-0.45, -0.2, 0.0, 0.1)
+    )luau", "=wallStub"), 0);
+    BothInUseLeftAtTheBale();
+
+    Squeeze(kLeft, 1.0f);
+    FRAMES(1);
+    EXPECT_EQ(PickUps(), 1) << "wall behind the off-hand fingertip does not block the bale in front";
+    EXPECT_FALSE(PadGrip(kLeft));
+
+    Squeeze(kLeft, 0.0f);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "setTranslation(rearWall, -0.45, -0.2, 0.8)", "=moveWallInFront"), 0);
+    BothInUseLeftAtTheBale();
+    headset.SetHandInputs(kRight, hand_tools_test::Squeeze(1.0f, 0.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, hand_tools_test::Squeeze(0.0f, 0.0f));
+    FRAMES(1);
+    Squeeze(kLeft, 1.0f);
+    FRAMES(2);
+    EXPECT_EQ(PickUps(), 1) << "a wall in front of the off-hand fingertip still occludes";
+    EXPECT_TRUE(PadGrip(kLeft));
+}

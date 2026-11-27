@@ -1642,5 +1642,15 @@ test("EyePairTraceLogsTheDtsAndTimeScaleBehindTheMove", function()
         "a second sub-pass's line must give the dt its time scale was set for: " .. lines[4])
 end)
 
+test("EyePairTraceRejectsNaNInfinityNonIntegersAndInvalidTokens", function()
+    _G.getWorldTranslation = function() return 0, 0, 0 end
+    for _, bad in ipairs({ "nan", "inf", "-inf", "abc", "1.5", "0", "-3" }) do
+        local reply = VRCompanion:consoleCommandEyePairTrace(bad)
+        assert(string.find(reply, "Usage: vrEyePairTrace", 1, true) ~= nil, bad .. ": " .. tostring(reply))
+        assert(VRCompanion:traceEyeFrame(0, 2001, 0) == nil, bad .. " must not start tracing")
+    end
+    _G.getWorldTranslation = nil
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed", failed))

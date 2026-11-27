@@ -29,15 +29,7 @@ VRCompanion.cyclopeanAudioListenerNode = VRCompanion.cyclopeanAudioListenerNode 
 VRCompanion.origCamSettings = VRCompanion.origCamSettings or {}
 VRCompanion.menuCameraOffsets = VRCompanion.menuCameraOffsets or {}
 
-local function rotateVectorByQuaternion(qx, qy, qz, qw, vx, vy, vz)
-    local tx = 2 * (qy * vz - qz * vy)
-    local ty = 2 * (qz * vx - qx * vz)
-    local tz = 2 * (qx * vy - qy * vx)
-    local rx = vx + qw * tx + (qy * tz - qz * ty)
-    local ry = vy + qw * ty + (qz * tx - qx * tz)
-    local rz = vz + qw * tz + (qx * ty - qy * tx)
-    return rx, ry, rz
-end
+local rotateVectorByQuaternion = VRCompanion.rotateVectorByQuaternion
 
 local function multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw)
     return aw * bx + ax * bw + ay * bz - az * by,

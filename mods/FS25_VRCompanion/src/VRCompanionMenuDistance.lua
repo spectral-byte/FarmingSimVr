@@ -9,10 +9,7 @@ local SETTING_KEY = "vrSettings.menuDistance"
 local USAGE = "Usage: vrMenuDistance [1.0-5.0] (metres, saved, 1.5 by default)"
 
 local function parseArgument(arg)
-    local metres = tonumber(arg)
-    if metres == nil or metres ~= metres then return nil end
-    if metres < VRCompanion.MIN_MENU_DISTANCE or metres > VRCompanion.MAX_MENU_DISTANCE then return nil end
-    return metres
+    return VRCompanion.parseFiniteNumber(arg, VRCompanion.MIN_MENU_DISTANCE, VRCompanion.MAX_MENU_DISTANCE)
 end
 
 local function describe(metres)
@@ -65,6 +62,7 @@ VRCompanion:registerSubsystem("menuDistance", {
     mapLoad = function(self) self:applyMenuDistance() end,
     saveSettings = function(self, xmlFile, xml) self:saveMenuDistanceSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadMenuDistanceSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.menuDistance = self.DEFAULT_MENU_DISTANCE end,
     consoleCommands = {
         { name = "vrMenuDistance", description = "How far in front of you menus, the main menu included, and 2D Floating Window Mode are shown, in metres (saved; 1.5 by default; further away they fill less of the view): vrMenuDistance [1.0-5.0]", method = "consoleCommandSetMenuDistance" },
     },
