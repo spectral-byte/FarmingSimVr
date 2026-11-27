@@ -1274,21 +1274,18 @@ function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
     return table.unpack(results, 2, results.n)
 end
 
+local hudWraps = VRCompanion.GameWraps.newGroup({ weakTargets = true })
+
 function VRCompanion:hookHud()
     if self.hudHooked then
         self:unhookHud()
     end
 
-    self.origHudHooks = {}
+    local hookedCount = 0
 
-    local function hookMethod(tbl, methodName, hookFn)
-        if tbl ~= nil and tbl[methodName] ~= nil and type(tbl[methodName]) == "function" then
-            table.insert(self.origHudHooks, {
-                tbl = tbl,
-                methodName = methodName,
-                orig = tbl[methodName]
-            })
-            tbl[methodName] = hookFn
+    local function hookMethod(tbl, methodName, makeFn)
+        if hudWraps:wrap(tbl, methodName, makeFn) then
+            hookedCount = hookedCount + 1
         end
     end
 
@@ -1297,9 +1294,11 @@ function VRCompanion:hookHud()
         if cls ~= nil then
             local displayName = info.displayName
 
-            if cls.draw ~= nil and type(cls.draw) == "function" then
-                local origDraw = cls.draw
-                hookMethod(cls, "draw", function(displaySelf, ...)
+            hookMethod(cls, "draw", function(origDraw, entry)
+                return function(displaySelf, ...)
+                    if not entry.active then
+                        return origDraw(displaySelf, ...)
+                    end
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
                         if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
@@ -1326,12 +1325,14 @@ function VRCompanion:hookHud()
                         return self:runMapDraw(origDraw, displaySelf, ...)
                     end
                     return origDraw(displaySelf, ...)
-                end)
-            end
+                end
+            end)
 
-            if cls.getIsVisible ~= nil and type(cls.getIsVisible) == "function" then
-                local origGetIsVisible = cls.getIsVisible
-                hookMethod(cls, "getIsVisible", function(displaySelf, ...)
+            hookMethod(cls, "getIsVisible", function(origGetIsVisible, entry)
+                return function(displaySelf, ...)
+                    if not entry.active then
+                        return origGetIsVisible(displaySelf, ...)
+                    end
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
                     end
@@ -1339,14 +1340,18 @@ function VRCompanion:hookHud()
                         return false
                     end
                     return origGetIsVisible(displaySelf, ...)
-                end)
-            end
+                end
+            end)
 
-            if displayName == "InputHelpDisplay" and type(cls.setVisible) == "function" then
-                local origSetVisible = cls.setVisible
-                hookMethod(cls, "setVisible", function(displaySelf, isVisible, ...)
-                    self:rememberControlsExpanded(isVisible)
-                    return origSetVisible(displaySelf, isVisible, ...)
+            if displayName == "InputHelpDisplay" then
+                hookMethod(cls, "setVisible", function(origSetVisible, entry)
+                    return function(displaySelf, isVisible, ...)
+                        if not entry.active then
+                            return origSetVisible(displaySelf, isVisible, ...)
+                        end
+                        self:rememberControlsExpanded(isVisible)
+                        return origSetVisible(displaySelf, isVisible, ...)
+                    end
                 end)
             end
         end
@@ -1367,59 +1372,76 @@ function VRCompanion:hookHud()
                 end
             end
             for _, key in ipairs(drawMethods) do
-                local origMethod = cls[key]
                 if className ~= "IngameMap" and (key == "drawBefore" or key == "drawCoordinates" or key == "drawLatency") then
-                    hookMethod(cls, key, function(layout, ...)
-                        return self:runMapDraw(function(_, ...)
-                            return self:callWithMapLayoutShifted(layout, origMethod, ...)
-                        end, layout, ...)
+                    hookMethod(cls, key, function(origMethod, entry)
+                        return function(layout, ...)
+                            if not entry.active then
+                                return origMethod(layout, ...)
+                            end
+                            return self:runMapDraw(function(_, ...)
+                                return self:callWithMapLayoutShifted(layout, origMethod, ...)
+                            end, layout, ...)
+                        end
                     end)
                 elseif className == "IngameMap" and (string.find(key, "Hotspot", 1, true) or string.find(key, "PointsOfInterest", 1, true)) then
-                    hookMethod(cls, key, function(...)
-                        return self:runMapDraw(function(...)
-                            self.mapHotspotDepth = self.mapHotspotDepth + 1
-                            local results = table.pack(pcall(origMethod, ...))
-                            self.mapHotspotDepth = self.mapHotspotDepth - 1
-                            if not results[1] then error(results[2], 0) end
-                            return table.unpack(results, 2, results.n)
-                        end, ...)
+                    hookMethod(cls, key, function(origMethod, entry)
+                        return function(...)
+                            if not entry.active then
+                                return origMethod(...)
+                            end
+                            return self:runMapDraw(function(...)
+                                self.mapHotspotDepth = self.mapHotspotDepth + 1
+                                local results = table.pack(pcall(origMethod, ...))
+                                self.mapHotspotDepth = self.mapHotspotDepth - 1
+                                if not results[1] then error(results[2], 0) end
+                                return table.unpack(results, 2, results.n)
+                            end, ...)
+                        end
                     end)
                 else
-                    hookMethod(cls, key, function(...)
-                        return self:runMapDraw(origMethod, ...)
+                    hookMethod(cls, key, function(origMethod, entry)
+                        return function(...)
+                            if not entry.active then
+                                return origMethod(...)
+                            end
+                            return self:runMapDraw(origMethod, ...)
+                        end
                     end)
                 end
             end
-            if type(cls.getMapObjectPosition) == "function" then
-                local origObjectPosition = cls.getMapObjectPosition
-                hookMethod(cls, "getMapObjectPosition", function(layout, ...)
+            hookMethod(cls, "getMapObjectPosition", function(origObjectPosition, entry)
+                return function(layout, ...)
                     local x, y, rotation, visible = origObjectPosition(layout, ...)
-                    if self.mapDrawDepth > 0 and visible and type(x) == "number" and type(y) == "number" then
+                    if entry.active and self.mapDrawDepth > 0 and visible and type(x) == "number" and type(y) == "number" then
                         x, y = x + self.mapDrawShiftX, y + self.mapDrawShiftY
                     end
                     return x, y, rotation, visible
-                end)
-            end
+                end
+            end)
         end
     end
     local overlayCls = getGlobalClass("Overlay")
-    if overlayCls ~= nil and type(overlayCls.render) == "function" then
-        local origRender = overlayCls.render
-        hookMethod(overlayCls, "render", function(overlay, clipX1, clipY1, clipX2, clipY2, ...)
-            local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
-            if self.mapDrawDepth > 0 and self.mapHotspotDepth == 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
-                and type(overlay.x) == "number" and type(overlay.y) == "number" then
-                local origX, origY = overlay.x, overlay.y
-                overlay.x, overlay.y = origX + dx, origY + dy
-                if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
-                    clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
+    if overlayCls ~= nil then
+        hookMethod(overlayCls, "render", function(origRender, entry)
+            return function(overlay, clipX1, clipY1, clipX2, clipY2, ...)
+                if not entry.active then
+                    return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
                 end
-                local results = table.pack(pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
-                overlay.x, overlay.y = origX, origY
-                if not results[1] then error(results[2], 0) end
-                return table.unpack(results, 2, results.n)
+                local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
+                if self.mapDrawDepth > 0 and self.mapHotspotDepth == 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
+                    and type(overlay.x) == "number" and type(overlay.y) == "number" then
+                    local origX, origY = overlay.x, overlay.y
+                    overlay.x, overlay.y = origX + dx, origY + dy
+                    if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
+                        clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
+                    end
+                    local results = table.pack(pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
+                    overlay.x, overlay.y = origX, origY
+                    if not results[1] then error(results[2], 0) end
+                    return table.unpack(results, 2, results.n)
+                end
+                return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
             end
-            return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
         end)
     end
 
@@ -1431,25 +1453,23 @@ function VRCompanion:hookHud()
     if hudInstance ~= nil and hudInstance ~= hudCls then table.insert(hudTargets, hudInstance) end
 
     for _, target in ipairs(hudTargets) do
-        if target.draw ~= nil and type(target.draw) == "function" then
-            local origHudDraw = target.draw
-            hookMethod(target, "draw", function(hudSelf, ...)
-                if self:getHudState() == self.HUD_STATE_HIDDEN then
+        hookMethod(target, "draw", function(origHudDraw, entry)
+            return function(hudSelf, ...)
+                if entry.active and self:getHudState() == self.HUD_STATE_HIDDEN then
                     return
                 end
                 return origHudDraw(hudSelf, ...)
-            end)
-        end
+            end
+        end)
 
-        if target.setIsVisible ~= nil and type(target.setIsVisible) == "function" then
-            local origSetIsVisible = target.setIsVisible
-            hookMethod(target, "setIsVisible", function(hudSelf, isVisible, ...)
-                if self:getHudState() == self.HUD_STATE_HIDDEN then
+        hookMethod(target, "setIsVisible", function(origSetIsVisible, entry)
+            return function(hudSelf, isVisible, ...)
+                if entry.active and self:getHudState() == self.HUD_STATE_HIDDEN then
                     return origSetIsVisible(hudSelf, false, ...)
                 end
                 return origSetIsVisible(hudSelf, isVisible, ...)
-            end)
-        end
+            end
+        end)
 
         local hudSetterHooks = {
             { methodName = "setInputHelpVisible", displayName = "InputHelpDisplay" },
@@ -1459,9 +1479,11 @@ function VRCompanion:hookHud()
         for _, setter in ipairs(hudSetterHooks) do
             local mName = setter.methodName
             local dName = setter.displayName
-            if target[mName] ~= nil and type(target[mName]) == "function" then
-                local origSetter = target[mName]
-                hookMethod(target, mName, function(hudSelf, isVisible, ...)
+            hookMethod(target, mName, function(origSetter, entry)
+                return function(hudSelf, isVisible, ...)
+                    if not entry.active then
+                        return origSetter(hudSelf, isVisible, ...)
+                    end
                     if dName == "InputHelpDisplay" then
                         self:rememberControlsExpanded(isVisible)
                     end
@@ -1469,26 +1491,20 @@ function VRCompanion:hookHud()
                         return origSetter(hudSelf, false, ...)
                     end
                     return origSetter(hudSelf, isVisible, ...)
-                end)
-            end
+                end
+            end)
         end
     end
 
-    if #self.origHudHooks > 0 then
+    if hookedCount > 0 then
         self.hudHooked = true
         print("[FS25_VR] Hooked native engine HUD display interfaces.")
     end
 end
 
 function VRCompanion:unhookHud()
-    if self.origHudHooks ~= nil then
-        for _, entry in ipairs(self.origHudHooks) do
-            if entry.tbl ~= nil and entry.methodName ~= nil then
-                entry.tbl[entry.methodName] = entry.orig
-            end
-        end
-        self.origHudHooks = nil
-    end
+    self:stopHudTrace()
+    hudWraps:liftAll()
     local mission = g_currentMission or (_G and _G.g_currentMission)
     if mission ~= nil and mission.hud ~= nil then
         if type(mission.hud.setIsVisible) == "function" then
