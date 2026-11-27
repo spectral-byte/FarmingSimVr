@@ -70,7 +70,19 @@ local function letGo()
     end
 end
 
-local hands = {}
+local HANDS = { 0, 1 }
+
+local hands = {
+    [0] = { tracked = false, back = false, stick = 0 },
+    [1] = { tracked = false, back = false, stick = 0 },
+}
+
+local function resetHands()
+    for _, hand in ipairs(HANDS) do
+        local entry = hands[hand]
+        entry.tracked, entry.back, entry.stick = false, false, 0
+    end
+end
 
 local function backHeld(handState, wasHeld)
     if handState.buttonLower == true then
@@ -157,31 +169,32 @@ end
 
 local function updateMenuButtons(self)
     if self.motionControllersEnabled == false then
-        hands = {}
+        resetHands()
         scroll.dir, scroll.nextMs = 0, nil
         return
     end
     local goBack = false
     local pushed, held = 0, 0
-    for _, hand in ipairs({ self.MOTION_HAND_LEFT, self.MOTION_HAND_RIGHT }) do
+    for _, hand in ipairs(HANDS) do
+        local entry = hands[hand]
         local handState = self:getHandState(hand)
         if handState.tracked ~= true then
-            hands[hand] = nil
+            entry.tracked, entry.back, entry.stick = false, false, 0
         else
-            local previous = hands[hand]
-            local current = {
-                back = backHeld(handState, previous ~= nil and previous.back),
-                stick = stickScrollDirection(handState, previous and previous.stick or 0),
-            }
-            hands[hand] = current
-            if previous ~= nil and current.back and not previous.back then
+            local wasTracked = entry.tracked
+            local prevBack = entry.back
+            local prevStick = entry.stick
+            local newBack = backHeld(handState, wasTracked and prevBack)
+            local newStick = stickScrollDirection(handState, wasTracked and prevStick or 0)
+            entry.tracked, entry.back, entry.stick = true, newBack, newStick
+            if wasTracked and newBack and not prevBack then
                 goBack = true
             end
             if held == 0 then
-                held = current.stick
+                held = newStick
             end
-            if previous ~= nil and pushed == 0 and current.stick ~= 0 and current.stick ~= previous.stick then
-                pushed = current.stick
+            if wasTracked and pushed == 0 and newStick ~= 0 and newStick ~= prevStick then
+                pushed = newStick
             end
         end
     end
@@ -239,11 +252,11 @@ function VRCompanion:updateMenuPointer(dt)
     if type(result) == "table" then
         state.hit = result
     end
-    local hit = state.hit or {}
+    local hit = state.hit
 
     local pulled, held = self:getPointerTrigger()
 
-    local onPanel = hit.hit == true
+    local onPanel = hit ~= nil and hit.hit == true
     if onPanel then
         state.lastX, state.lastY = hit.u, 1 - hit.v
         sendMove(state.lastX, state.lastY)
@@ -273,7 +286,7 @@ end
 function VRCompanion:resetMenuPointer()
     letGo()
     state = newState()
-    hands = {}
+    resetHands()
     scroll.dir, scroll.nextMs = 0, nil
 end
 

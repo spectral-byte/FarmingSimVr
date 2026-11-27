@@ -86,8 +86,16 @@ local function findHudGroup(displayName)
 end
 
 function VRCompanion:getHudGroupLayout(groupName)
-    local stored = (self.hudGroupLayout or {})[groupName] or {}
-    return self:sanitizeHudGroupLayout(groupName, stored.marginX, stored.marginY, stored.scale)
+    if self.hudGroupLayout == nil then self.hudGroupLayout = {} end
+    local stored = self.hudGroupLayout[groupName]
+    if stored ~= nil then
+        return stored
+    end
+    local defaults = self.DEFAULT_HUD_GROUP_LAYOUTS and self.DEFAULT_HUD_GROUP_LAYOUTS[groupName]
+    if defaults == nil then return nil end
+    local layout = self:sanitizeHudGroupLayout(groupName, defaults.marginX, defaults.marginY, defaults.scale)
+    self.hudGroupLayout[groupName] = layout
+    return layout
 end
 
 -- Sets a group's margins, and its scale when one is given. Returns the clamped layout, or nil for
@@ -218,9 +226,9 @@ local function setDisplayVisible(display, isVisible)
     if display == nil then return end
     display.isVisible = isVisible
     if type(display.setIsVisible) == "function" then
-        pcall(function() display:setIsVisible(isVisible) end)
+        pcall(display.setIsVisible, display, isVisible)
     elseif type(display.setVisible) == "function" then
-        pcall(function() display:setVisible(isVisible) end)
+        pcall(display.setVisible, display, isVisible)
     end
 end
 
@@ -840,6 +848,12 @@ function VRCompanion:updateHudConvergence(dt)
     return shiftedLeft, shiftedRight, offset
 end
 
+local function placeDisplayAtOffset(self, display, displayName, offset)
+    if display == nil or type(display.setPosition) ~= "function" then return end
+    local x, y = self:getHudDisplayPosition(display, displayName, offset)
+    pcall(display.setPosition, display, x, y)
+end
+
 function VRCompanion:repositionHudForConvergence()
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -849,21 +863,15 @@ function VRCompanion:repositionHudForConvergence()
 
     local fl = self:getFillLevelsDisplay(hud)
 
-    local function place(display, displayName)
-        if display == nil or type(display.setPosition) ~= "function" then return end
-        local x, y = self:getHudDisplayPosition(display, displayName, offset)
-        pcall(display.setPosition, display, x, y)
-    end
-
     if fl ~= nil then
         self:positionFillLevelsUnderSpeedometer(fl, offset)
     else
-        place(hud.speedMeter or hud.speedMeterDisplay, "SpeedMeterDisplay")
+        placeDisplayAtOffset(self, hud.speedMeter or hud.speedMeterDisplay, "SpeedMeterDisplay", offset)
     end
-    place(hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay")
-    place(hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay")
-    place(hud.ingameMap or hud.ingameMapDisplay, "IngameMap")
-    place(hud.contextAction or hud.contextActionDisplay, CONTEXT_ACTION_DISPLAY)
+    placeDisplayAtOffset(self, hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay", offset)
+    placeDisplayAtOffset(self, hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay", offset)
+    placeDisplayAtOffset(self, hud.ingameMap or hud.ingameMapDisplay, "IngameMap", offset)
+    placeDisplayAtOffset(self, hud.contextAction or hud.contextActionDisplay, CONTEXT_ACTION_DISPLAY, offset)
 end
 
 function VRCompanion:getHudState()
@@ -905,7 +913,7 @@ function VRCompanion:applyHudState(state)
 
     local isHudVisible = (state ~= self.HUD_STATE_HIDDEN)
     if type(hud.setIsVisible) == "function" then
-        pcall(function() hud:setIsVisible(isHudVisible) end)
+        pcall(hud.setIsVisible, hud, isHudVisible)
     end
     hud.isVisible = isHudVisible
 
@@ -946,13 +954,13 @@ function VRCompanion:applyHudState(state)
     local gameInfoVis = self:isDisplayVisible("GameInfoDisplay", state)
 
     if type(hud.setInputHelpVisible) == "function" then
-        pcall(function() hud:setInputHelpVisible(inputHelpVis) end)
+        pcall(hud.setInputHelpVisible, hud, inputHelpVis)
     end
     if type(hud.setIngameMapVisible) == "function" then
-        pcall(function() hud:setIngameMapVisible(ingameMapVis) end)
+        pcall(hud.setIngameMapVisible, hud, ingameMapVis)
     end
     if type(hud.setGameInfoVisible) == "function" then
-        pcall(function() hud:setGameInfoVisible(gameInfoVis) end)
+        pcall(hud.setGameInfoVisible, hud, gameInfoVis)
     end
 end
 
@@ -1109,7 +1117,7 @@ function VRCompanion:positionHudDisplay(display, displayName)
     local scale = self:getHudDisplayScale(displayName)
 
     if type(display.setScale) == "function" then
-        pcall(function() display:setScale(scale) end)
+        pcall(display.setScale, display, scale)
     end
 
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
@@ -1123,16 +1131,16 @@ function VRCompanion:positionHudDisplay(display, displayName)
     display.vrUiScale = scale
 
     if type(display.setPosition) == "function" then
-        pcall(function() display:setPosition(anchorX, anchorY) end)
+        pcall(display.setPosition, display, anchorX, anchorY)
     end
     if type(display.storeScaledValues) == "function" then
-        pcall(function() display:storeScaledValues() end)
+        pcall(display.storeScaledValues, display)
     end
     if type(display.reposition) == "function" then
-        pcall(function() display:reposition() end)
+        pcall(display.reposition, display)
     end
     if type(display.updatePosition) == "function" then
-        pcall(function() display:updatePosition() end)
+        pcall(display.updatePosition, display)
     end
 end
 
@@ -1163,10 +1171,10 @@ function VRCompanion:repositionAllHudDisplays(hud)
     if d5 ~= nil then self:positionHudDisplay(d5, "IngameMap") end
 
     if type(targetHud.storeScaledValues) == "function" then
-        pcall(function() targetHud:storeScaledValues() end)
+        pcall(targetHud.storeScaledValues, targetHud)
     end
     if type(targetHud.updateDimensions) == "function" then
-        pcall(function() targetHud:updateDimensions() end)
+        pcall(targetHud.updateDimensions, targetHud)
     end
 end
 
@@ -1304,6 +1312,12 @@ function VRCompanion:getMapDrawShift()
     return x - baseX, y - baseY
 end
 
+local function finishMapDraw(self, ok, ...)
+    self.mapDrawDepth = self.mapDrawDepth - 1
+    if not ok then error((...), 0) end
+    return ...
+end
+
 function VRCompanion:runMapDraw(fn, ...)
     if self.mapDrawDepth > 0 then
         self.mapDrawDepth = self.mapDrawDepth + 1
@@ -1312,10 +1326,13 @@ function VRCompanion:runMapDraw(fn, ...)
         self.mapDrawShiftX, self.mapDrawShiftY = dx or 0.0, dy or 0.0
         self.mapDrawDepth = 1
     end
-    local results = table.pack(pcall(fn, ...))
-    self.mapDrawDepth = self.mapDrawDepth - 1
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    return finishMapDraw(self, pcall(fn, ...))
+end
+
+local function finishMapLayoutShift(layout, origX, origY, ok, ...)
+    layout.mapPosX, layout.mapPosY = origX, origY
+    if not ok then error((...), 0) end
+    return ...
 end
 
 function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
@@ -1325,10 +1342,24 @@ function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
     end
     local origX, origY = layout.mapPosX, layout.mapPosY
     layout.mapPosX, layout.mapPosY = origX + dx, origY + dy
-    local results = table.pack(pcall(fn, layout, ...))
-    layout.mapPosX, layout.mapPosY = origX, origY
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    return finishMapLayoutShift(layout, origX, origY, pcall(fn, layout, ...))
+end
+
+local function finishHotspotDraw(self, ok, ...)
+    self.mapHotspotDepth = self.mapHotspotDepth - 1
+    if not ok then error((...), 0) end
+    return ...
+end
+
+local function runHotspotDraw(self, origMethod, ...)
+    self.mapHotspotDepth = self.mapHotspotDepth + 1
+    return finishHotspotDraw(self, pcall(origMethod, ...))
+end
+
+local function finishOverlayRender(overlay, origX, origY, ok, ...)
+    overlay.x, overlay.y = origX, origY
+    if not ok then error((...), 0) end
+    return ...
 end
 
 local hudWraps = VRCompanion.GameWraps.newGroup({ weakTargets = true })
@@ -1434,9 +1465,7 @@ function VRCompanion:hookHud()
                             if not entry.active then
                                 return origMethod(layout, ...)
                             end
-                            return self:runMapDraw(function(_, ...)
-                                return self:callWithMapLayoutShifted(layout, origMethod, ...)
-                            end, layout, ...)
+                            return self:runMapDraw(self.callWithMapLayoutShifted, self, layout, origMethod, ...)
                         end
                     end)
                 elseif className == "IngameMap" and (string.find(key, "Hotspot", 1, true) or string.find(key, "PointsOfInterest", 1, true)) then
@@ -1445,13 +1474,7 @@ function VRCompanion:hookHud()
                             if not entry.active then
                                 return origMethod(...)
                             end
-                            return self:runMapDraw(function(...)
-                                self.mapHotspotDepth = self.mapHotspotDepth + 1
-                                local results = table.pack(pcall(origMethod, ...))
-                                self.mapHotspotDepth = self.mapHotspotDepth - 1
-                                if not results[1] then error(results[2], 0) end
-                                return table.unpack(results, 2, results.n)
-                            end, ...)
+                            return self:runMapDraw(runHotspotDraw, self, origMethod, ...)
                         end
                     end)
                 else
@@ -1491,10 +1514,7 @@ function VRCompanion:hookHud()
                     if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
                         clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
                     end
-                    local results = table.pack(pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
-                    overlay.x, overlay.y = origX, origY
-                    if not results[1] then error(results[2], 0) end
-                    return table.unpack(results, 2, results.n)
+                    return finishOverlayRender(overlay, origX, origY, pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
                 end
                 return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
             end
@@ -1619,15 +1639,21 @@ function VRCompanion:consoleCommandSetStereoDialogDepth(arg)
     return string.format("Dialog depth set to: %.1f m (Saved)", depth)
 end
 
+local function shiftGuiRoot(root, offset)
+    root:setAbsolutePosition(root.absPosition[1] + offset, root.absPosition[2])
+end
+
+local function finishGuiDrawAtDepth(root, offset, ok, ...)
+    pcall(shiftGuiRoot, root, -offset)
+    if not ok then error((...), 0) end
+    return ...
+end
+
 function VRCompanion:drawGuiAtHudDepth(original, gui, ...)
     local root, offset = self:getStereoDialogDrawShift(gui)
     if root == nil then return original(gui, ...) end
-    local moved = pcall(function() root:setAbsolutePosition(root.absPosition[1] + offset, root.absPosition[2]) end)
-    if not moved then return original(gui, ...) end
-    local results = table.pack(pcall(original, gui, ...))
-    pcall(function() root:setAbsolutePosition(root.absPosition[1] - offset, root.absPosition[2]) end)
-    if not results[1] then error(results[2], 0) end
-    return table.unpack(results, 2, results.n)
+    if not pcall(shiftGuiRoot, root, offset) then return original(gui, ...) end
+    return finishGuiDrawAtDepth(root, offset, pcall(original, gui, ...))
 end
 
 function VRCompanion:hookGuiDraw()

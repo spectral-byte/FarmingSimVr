@@ -377,7 +377,7 @@ function VRCompanion:describeHeadPlacement()
         tostring(self:isPassThroughMode()))
 end
 
-function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
+function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out, outRelative)
     local listener = self.cyclopeanAudioListenerNode
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
     local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
@@ -414,6 +414,16 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     if length < 1e-6 then return false, "the pose has no rotation" end
     out.x, out.y, out.z = lx + wx, ly + wy, lz + wz
     out.qx, out.qy, out.qz, out.qw = wqx / length, wqy / length, wqz / length, wqw / length
+    if outRelative ~= nil then
+        local relLength = math.sqrt(rx * rx + ry * ry + rz * rz + rw * rw)
+        if relLength >= 1e-6 then
+            outRelative.x, outRelative.y, outRelative.z = offX, offY, offZ
+            outRelative.qx, outRelative.qy, outRelative.qz, outRelative.qw = rx / relLength, ry / relLength, rz / relLength, rw / relLength
+            outRelative.valid = true
+        else
+            outRelative.valid = false
+        end
+    end
     return true
 end
 

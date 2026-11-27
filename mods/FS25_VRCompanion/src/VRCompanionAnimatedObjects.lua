@@ -41,6 +41,10 @@ local function newState()
         hit = {},
         selected = nil,
         landedOn = nil,    -- the object the ray is on and has pulsed for
+        castMaskValue = nil,
+        castMaskRef = nil,
+        castFlagsRef = nil,
+        castMaskAll = nil,
     }
 end
 
@@ -138,12 +142,16 @@ end
 local function castMask()
     local mask, flags = engine("CollisionMask"), engine("CollisionFlag")
     if type(mask) ~= "table" or type(flags) ~= "table" or type(mask.ALL) ~= "number" then return nil end
+    if mask == state.castMaskRef and flags == state.castFlagsRef and mask.ALL == state.castMaskAll then
+        return state.castMaskValue
+    end
     local result = mask.ALL
     for _, name in ipairs(IGNORED_FLAGS) do
         if type(flags[name]) == "number" then
             result = bit32.band(result, bit32.bnot(flags[name]))
         end
     end
+    state.castMaskRef, state.castFlagsRef, state.castMaskAll, state.castMaskValue = mask, flags, mask.ALL, result
     return result
 end
 

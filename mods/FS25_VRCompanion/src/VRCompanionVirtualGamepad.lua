@@ -47,6 +47,9 @@ local function newState()
         sentLive = nil,
         seenKey = nil,       -- the last (present, slot, reason) the game log was told about
         update = 0,
+        gripUpdate = -1,
+        leftGripHeld = false,
+        rightGripHeld = false,
         dialogShowing = false,
         uses = newUses(),
         sentUse = { [0] = 0, [1] = 0 },
@@ -80,7 +83,10 @@ function VRCompanion:updateVirtualGamepad(dt)
     end
 
     if type(b.getVirtualGamepad) ~= "function" then return end
-    local present, slot, reason = b.getVirtualGamepad()
+    local present, slot, reason, leftHeld, rightHeld = b.getVirtualGamepad()
+    state.gripUpdate = state.update
+    state.leftGripHeld = leftHeld == true
+    state.rightGripHeld = rightHeld == true
     local key = present and ("slot" .. tostring(slot)) or reason
     if key ~= state.seenKey then
         if state.seenKey ~= nil or present or reason ~= "off" then
@@ -92,14 +98,25 @@ function VRCompanion:updateVirtualGamepad(dt)
     self:updateVirtualGamepadDefaults(dt, present, slot)
 end
 
+function VRCompanion:isVirtualGamepadGripHeld(hand)
+    if state.gripUpdate == state.update then
+        if hand == 0 then
+            return state.leftGripHeld == true
+        end
+        return state.rightGripHeld == true
+    end
+    local b = bridge()
+    if b == nil or type(b.getVirtualGamepad) ~= "function" then return false end
+    local _, _, _, leftHeld, rightHeld = b.getVirtualGamepad()
+    if hand == 0 then
+        return leftHeld == true
+    end
+    return rightHeld == true
+end
+
 local function isHeld(self, hand, input, wasDown)
     if input == "grip" then
-        local b = bridge()
-        if b == nil or type(b.getVirtualGamepad) ~= "function" then return false end
-        local _, _, _, leftHeld, rightHeld = b.getVirtualGamepad()
-        local held = leftHeld
-        if hand ~= 0 then held = rightHeld end
-        return held == true
+        return self:isVirtualGamepadGripHeld(hand)
     end
     local hands = self:getHandState(hand)
     if hands == nil or hands.tracked ~= true then return false end
