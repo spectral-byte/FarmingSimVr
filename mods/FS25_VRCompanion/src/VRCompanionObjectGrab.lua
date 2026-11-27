@@ -150,18 +150,23 @@ VRCompanion:registerLookRayAimer("objectGrab", function(player)
     return ox, oy, oz, dx, dy, dz
 end)
 
-local function padGripHeld(hand)
+local HANDS = { 0, 1 }
+
+local function padGripHeld(self, hand)
+    if type(self.isVirtualGamepadGripHeld) == "function" then
+        return self:isVirtualGamepadGripHeld(hand)
+    end
     local bridge = engine("VRBridge")
     if type(bridge) ~= "table" or type(bridge.getVirtualGamepad) ~= "function" then return false end
     local ok, _, _, _, leftHeld, rightHeld = pcall(bridge.getVirtualGamepad)
     if not ok then return false end
-    if hand == VRCompanion.MOTION_HAND_LEFT then return leftHeld == true end
+    if hand == self.MOTION_HAND_LEFT then return leftHeld == true end
     return rightHeld == true
 end
 
-local function trackGrips()
-    for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
-        local down = padGripHeld(hand)
+local function trackGrips(self)
+    for _, hand in ipairs(HANDS) do
+        local down = padGripHeld(self, hand)
         state.gripPressed[hand] = down and not state.gripDown[hand]
         state.gripDown[hand] = down
     end
@@ -370,7 +375,7 @@ local function updateOffHand(self)
     local player = localPlayer()
     if whyNotAiming(self, player) ~= nil or not self:isPointerRayInControl() then return end
     local hands = emptyHands(player)
-    for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
+    for _, hand in ipairs(HANDS) do
         if hand ~= self.pointerHand and self:isHandInUse(hand) and pointsAtGrabbable(self, hands, hand) then
             if takeGrip(self, hand) and state.gripPressed[hand] then state.offHandSqueezed = hand end
         end
@@ -413,12 +418,18 @@ local function sampleSwing(self)
     local swing = state.swing
     local carry = state.carry
     if carry == nil then
-        if swing.rig ~= nil or #swing.samples > 0 then swing.samples, swing.rig = {}, nil end
+        if swing.rig ~= nil or #swing.samples > 0 then
+            table.clear(swing.samples)
+            swing.rig = nil
+        end
         return
     end
     local hand = handGripInWorld(self, carry.hand)
     if self:doesMenuTakeInput() or hand == nil or self:headRelativePoseToWorld(0, 0, 0, 0, 0, 0, 1, rigPose) ~= true then
-        if swing.rig ~= nil or #swing.samples > 0 then swing.samples, swing.rig = {}, nil end
+        if swing.rig ~= nil or #swing.samples > 0 then
+            table.clear(swing.samples)
+            swing.rig = nil
+        end
         return
     end
     local rig = swing.rig
@@ -528,7 +539,7 @@ end
 
 function VRCompanion:updateObjectGrab(dt)
     state.dt = dt or 0
-    trackGrips()
+    trackGrips(self)
     if wraps:problem() == nil then
         local hands = emptyHands(localPlayer())
         if hands ~= nil then wrapInstance(hands) end

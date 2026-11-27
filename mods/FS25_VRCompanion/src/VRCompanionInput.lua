@@ -22,6 +22,8 @@ VRCompanion.ACTION_EVENTS = {
         textKey = "input_VR_SET_SEAT", fallbackText = "Set VR Seat Position", loggedField = "seatSetLoggedOnce" },
 }
 
+local activeEventsScratch = {}
+
 function VRCompanion:registerActionEvents(force)
     local inputBinding = g_inputBinding or _G.g_inputBinding
     if inputBinding == nil or type(inputBinding.registerActionEvent) ~= "function" then
@@ -40,16 +42,25 @@ function VRCompanion:registerActionEvents(force)
         print("[FS25_VR] [Warning] g_inputBinding.events is missing; action events will be re-registered on every check.")
         self.missingInputEventsLogged = true
     end
-    local active = {}
     if not force and actionEvents ~= nil then
         local allActive = true
         for _, row in ipairs(self.ACTION_EVENTS) do
-            local isActive = self[row.idField] ~= nil and actionEvents[self[row.idField]] ~= nil
-            active[row.idField] = isActive
-            allActive = allActive and isActive
+            local id = self[row.idField]
+            if id == nil or actionEvents[id] == nil then
+                allActive = false
+                break
+            end
         end
         if allActive then
             return
+        end
+    end
+    local active = activeEventsScratch
+    table.clear(active)
+    if not force and actionEvents ~= nil then
+        for _, row in ipairs(self.ACTION_EVENTS) do
+            local id = self[row.idField]
+            active[row.idField] = (id ~= nil and actionEvents[id] ~= nil)
         end
     end
 

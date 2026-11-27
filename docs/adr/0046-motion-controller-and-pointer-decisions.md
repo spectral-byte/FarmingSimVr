@@ -331,9 +331,11 @@ This record holds the non-obvious decisions behind the Motion Controllers as the
   Audio Listener Node's world pose (the head's centre with the head's full world rotation).
 
     VRCompanion:isHeadPlacedInTheWorld() -> boolean
-    VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out) -> true | false, reason
+    VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out, outRelative) -> true | false, reason
       On true, out.x, out.y, out.z (world position) and out.qx, out.qy, out.qz, out.qw (unit world
-      rotation) are filled in place. On false, out is untouched and reason says why in one line.
+      rotation) are filled in place; when outRelative is provided, the head-relative pose is also
+      filled into it in place so callers do not need a world-to-listener round-trip. On false, out
+      is untouched and reason says why in one line.
     VRCompanion.multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw) -> x, y, z, w   (a then b is applied as a * b)
   ```
 
