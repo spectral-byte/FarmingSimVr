@@ -1116,6 +1116,66 @@ test("UnhookHudRestoresOriginalFunctionsCleanly", function()
     assert(origDrawCalled == true, "Original draw function must be callable after unhook")
 end)
 
+test("HookHudDoesNotDoubleWrapInheritedMissionHudOrMapLayoutSubclasses", function()
+    local hudDrawCalls = 0
+    local origHudDraw = function(self) hudDrawCalls = hudDrawCalls + 1 end
+    local origSetVis = function(self, v) self.isVisible = v end
+    local origMapPos = function(self) return 0.1, 0.2, 0.0, true end
+
+    _G.HUD = { draw = origHudDraw, setIsVisible = origSetVis }
+    local hudInstance = setmetatable({ isVisible = true }, { __index = _G.HUD })
+    _G.g_currentMission = { hud = hudInstance }
+    _G.IngameMapLayout = { getMapObjectPosition = origMapPos }
+    _G.IngameMapLayoutCircle = setmetatable({}, { __index = _G.IngameMapLayout })
+
+    VRCompanion:hookHud()
+    assert(rawget(hudInstance, "draw") == nil, "inherited mission.hud.draw must not be wrapped a second time on instance")
+    assert(rawget(hudInstance, "setIsVisible") == nil, "inherited mission.hud.setIsVisible must not be wrapped a second time on instance")
+    assert(rawget(_G.IngameMapLayoutCircle, "getMapObjectPosition") == nil, "inherited getMapObjectPosition must not be double-wrapped on subclass")
+
+    local savedState = VRCompanion.hudState
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    hudInstance:draw()
+    assert(hudDrawCalls == 1, "HUD.draw must execute once via inherited mission.hud")
+    VRCompanion.hudState = savedState
+
+    VRCompanion:unhookHud()
+    assert(_G.HUD.draw == origHudDraw, "HUD.draw restored")
+    assert(_G.HUD.setIsVisible == origSetVis, "HUD.setIsVisible restored")
+    assert(_G.IngameMapLayout.getMapObjectPosition == origMapPos, "IngameMapLayout.getMapObjectPosition restored")
+    assert(rawget(hudInstance, "draw") == nil, "mission.hud.draw stays inherited after unhook")
+    assert(rawget(_G.IngameMapLayoutCircle, "getMapObjectPosition") == nil, "IngameMapLayoutCircle stays clean after unhook")
+
+    _G.HUD, _G.IngameMapLayout, _G.IngameMapLayoutCircle, _G.g_currentMission = nil, nil, nil, nil
+end)
+
+test("UnhookHudPreservesDownstreamThirdPartyWrappers", function()
+    local origCalls = 0
+    local origDraw = function(self) origCalls = origCalls + 1 end
+    _G.InputHelpDisplay = { draw = origDraw }
+    _G.HUD = { draw = function(self) end }
+
+    VRCompanion:hookHud()
+    local ours = _G.InputHelpDisplay.draw
+    local thirdPartyCalls = 0
+    local theirs = function(self)
+        thirdPartyCalls = thirdPartyCalls + 1
+        return ours(self)
+    end
+    _G.InputHelpDisplay.draw = theirs
+
+    VRCompanion:unhookHud()
+    assert(_G.InputHelpDisplay.draw == theirs, "unhookHud must preserve third-party wrapper installed after VRCompanion")
+
+    local savedState = VRCompanion.hudState
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    _G.InputHelpDisplay:draw()
+    VRCompanion.hudState = savedState
+    assert(thirdPartyCalls == 1 and origCalls == 1, "third-party wrapper and original run without VR suppression after unhook")
+
+    _G.InputHelpDisplay, _G.HUD = nil, nil
+end)
+
 test("LoadMapAndLifecycleIntegratesHudHooking", function()
     _G.HUD = { draw = function(self) end }
     _G.SpeedMeterDisplay = { draw = function(self) end }

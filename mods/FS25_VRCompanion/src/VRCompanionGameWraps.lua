@@ -200,7 +200,7 @@ function Set:wrapInstance(target, names)
             local original = target[fn]
             local classWrap = self.wraps[name]
             if GameWraps.shapeProblem(original, spec.parameters, spec.describe) == nil
-                and not (classWrap ~= nil and original == classWrap.wrapper) then
+                and not (classWrap ~= nil and (original == classWrap.wrapper or (classWrap.class ~= nil and original == classWrap.class[fn]))) then
                 local wrapper = spec.make(original)
                 self.instance = self.instance or { target = target, entries = {} }
                 self.instance.entries[name] = { fn = fn, original = original, hadOwn = rawget(target, fn) ~= nil, wrapper = wrapper }
@@ -291,6 +291,99 @@ end
 function Set:status(name)
     if self.givingUp:problem() ~= nil then return name .. " wrap: gave up (" .. self.givingUp:problem() .. ")" end
     return name .. " wrap: " .. (self.wraps[name] ~= nil and "installed" or "not installed")
+end
+
+local function inheritedProvider(target, methodName)
+    local mt = getmetatable(target)
+    local index = type(mt) == "table" and mt.__index or nil
+    local depth = 0
+    while type(index) == "table" and depth < 16 do
+        if rawget(index, methodName) ~= nil then
+            return index
+        end
+        mt = getmetatable(index)
+        index = type(mt) == "table" and mt.__index or nil
+        depth = depth + 1
+    end
+    return nil
+end
+
+local Group = {}
+Group.__index = Group
+
+function GameWraps.newGroup(options)
+    options = options or {}
+    local weakTargets = options.weakTargets == true
+    local targets = {}
+    if weakTargets then setmetatable(targets, { __mode = "k" }) end
+    return setmetatable({
+        targets = targets,
+        wrappers = setmetatable({}, { __mode = "k" }),
+        weakTargets = weakTargets,
+    }, Group)
+end
+
+function Group:wrap(target, methodName, make)
+    if type(target) ~= "table" or type(methodName) ~= "string" or type(make) ~= "function" then
+        return false, nil
+    end
+    local targetEntries = self.targets[target]
+    local existing = targetEntries ~= nil and targetEntries[methodName] or nil
+    if existing ~= nil and existing.active then
+        return false, existing
+    end
+    local own = rawget(target, methodName)
+    local current = own
+    if current == nil then
+        local provider = inheritedProvider(target, methodName)
+        if provider ~= nil then
+            local providerEntries = self.targets[provider]
+            if providerEntries ~= nil and providerEntries[methodName] ~= nil and providerEntries[methodName].active then
+                return false, nil
+            end
+        end
+        current = target[methodName]
+    end
+    if type(current) ~= "function" then return false, nil end
+    if self.wrappers[current] then return false, nil end
+    for wrappedTarget, wrappedEntries in pairs(self.targets) do
+        local wrappedEntry = wrappedEntries[methodName]
+        if wrappedEntry ~= nil and wrappedEntry.active and wrappedTarget[methodName] == current then
+            return false, nil
+        end
+    end
+    local entry = {
+        methodName = methodName,
+        original = current,
+        hadOwn = own ~= nil,
+        active = true,
+        wrapper = nil,
+    }
+    local wrapper = make(current, entry)
+    entry.wrapper = wrapper
+    if targetEntries == nil then
+        targetEntries = {}
+        self.targets[target] = targetEntries
+    end
+    targetEntries[methodName] = entry
+    self.wrappers[wrapper] = true
+    target[methodName] = wrapper
+    return true, entry
+end
+
+function Group:liftAll()
+    for target, entries in pairs(self.targets) do
+        for _, entry in pairs(entries) do
+            entry.active = false
+            if rawget(target, entry.methodName) == entry.wrapper then
+                target[entry.methodName] = entry.hadOwn and entry.original or nil
+            end
+        end
+    end
+    local targets = {}
+    if self.weakTargets then setmetatable(targets, { __mode = "k" }) end
+    self.targets = targets
+    self.wrappers = setmetatable({}, { __mode = "k" })
 end
 
 GameWraps.defineShared("lookRay", {
