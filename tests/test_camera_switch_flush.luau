@@ -153,6 +153,39 @@ test("SwitchingToTheOrbitOutsideCameraLeavesItsOrbitAsTheEngineSetIt", function(
     assert(orbitRotY == 1.0 and orbitRotX == 0.4, "Outside Camera orbit rotation must not be touched by the camera switch")
 end)
 
+test("DeleteMapPreservesDownstreamThirdPartyWrappersOnCoreHooks", function()
+    local origVehCam = function(cam, dt) end
+    local origPlayerPos = function(cam, dt) end
+    local origSetCam = function(v, idx) end
+    _G.VehicleCamera = { update = origVehCam }
+    _G.PlayerCamera = { updatePosition = origPlayerPos }
+    _G.Enterable = { setActiveCameraIndex = origSetCam }
+
+    VRCompanion:hookVehicleCamera()
+    VRCompanion:hookPlayerCamera()
+    VRCompanion:hookEnterable()
+
+    local wrapVehCam = _G.VehicleCamera.update
+    local wrapPlayerPos = _G.PlayerCamera.updatePosition
+    local wrapSetCam = _G.Enterable.setActiveCameraIndex
+    local thirdVehCam = function(cam, dt) return wrapVehCam(cam, dt) end
+    local thirdPlayerPos = function(cam, dt) return wrapPlayerPos(cam, dt) end
+    local thirdSetCam = function(v, idx) return wrapSetCam(v, idx) end
+
+    _G.VehicleCamera.update = thirdVehCam
+    _G.PlayerCamera.updatePosition = thirdPlayerPos
+    _G.Enterable.setActiveCameraIndex = thirdSetCam
+
+    VRCompanion:deleteMap()
+    assert(_G.VehicleCamera.update == thirdVehCam, "VehicleCamera third-party wrapper must remain intact")
+    assert(_G.PlayerCamera.updatePosition == thirdPlayerPos, "PlayerCamera third-party wrapper must remain intact")
+    assert(_G.Enterable.setActiveCameraIndex == thirdSetCam, "Enterable third-party wrapper must remain intact")
+
+    _G.VehicleCamera = nil
+    _G.PlayerCamera = nil
+    _G.Enterable = nil
+end)
+
 print(string.format("\nCamera Switch Flush Tests: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d camera switch flush test(s) failed", failed))
