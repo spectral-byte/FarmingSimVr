@@ -60,6 +60,11 @@ local function install()
         nextNodeId = nextNodeId + 1
         return addNode(nextNodeId, { 0, 0, 0 }, { 0, 0, 0 }, { fov = fov, nearClip = nearClip, farClip = farClip })
     end
+    _G.createTransformGroup = function(name)
+        nextNodeId = nextNodeId + 1
+        return addNode(nextNodeId, { 0, 0, 0 }, { 0, 0, 0 })
+    end
+    _G.setAudioListener = function() end
     _G.entityExists = function(node) return nodes[node] ~= nil end
     _G.getFovY = function(node) return nodes[node] and nodes[node].fov or 1.0 end
     _G.setFovY = function(node, v) if nodes[node] then nodes[node].fov = v end end
@@ -94,7 +99,7 @@ local function uninstall()
         "getRotation", "getWorldTranslation", "getWorldRotation", "localDirectionToWorld", "createCamera", "entityExists",
         "getFovY", "setFovY", "getNearClip", "getFarClip", "setNearClip", "setFarClip", "setProjectionOffset",
         "getProjectionOffset", "setCamera", "getCamera", "g_cameraManager", "g_currentMission", "VRBridge",
-        "FSBaseMission", "createTransformGroup", "delete" }) do
+        "FSBaseMission", "createTransformGroup", "setAudioListener", "delete" }) do
         _G[name] = nil
     end
     VRCompanion.cameraNodeLeft = nil
@@ -221,6 +226,24 @@ run("EyeCamerasDeletedWithAVehicleAreRecreatedBeforeRendering", { mode = "AFR", 
     VRCompanion:onPlayerCameraUpdate(playerCamera(), 16.6)
 
     assert(rendered ~= PLAYER and nodes[rendered] ~= nil, "the engine must render through an existing eye camera, got " .. tostring(rendered))
+end)
+
+run("CyclopeanAudioListenerDeletedWithAVehicleIsRecreatedBeforeRendering", { mode = "AFR", pose = validPose() }, function()
+    local boundAudioListener = nil
+    _G.setAudioListener = function(node) boundAudioListener = node end
+
+    VRCompanion:onVehicleCameraUpdate(cabCamera(), 16.6)
+    local oldListener = VRCompanion.cyclopeanAudioListenerNode
+    assert(oldListener ~= nil and nodes[oldListener] ~= nil, "precondition: Cyclopean Audio Listener Node exists")
+    nodes[oldListener] = nil
+
+    VRCompanion:onPlayerCameraUpdate(playerCamera(), 16.6)
+
+    local newListener = VRCompanion.cyclopeanAudioListenerNode
+    assert(newListener ~= nil and newListener ~= 0 and newListener ~= oldListener,
+        "deleted Cyclopean Audio Listener Node must be recreated with a new node id")
+    assert(nodes[newListener] ~= nil, "recreated Cyclopean Audio Listener Node must exist in the scene")
+    assert(boundAudioListener == newListener, "engine audio listener must bind to the recreated node")
 end)
 
 run("WithAGuiMenuOpenTheCabViewIsHeadTrackedOnce", { mode = "AFR", pose = validPose() }, function()

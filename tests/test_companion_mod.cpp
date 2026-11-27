@@ -527,14 +527,11 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
             }
         }
 
-        -- Pre-update cameras with non-zero pose to simulate offset before recentering
         VRCompanion:onVehicleCameraUpdate(mockInsideCam, 16.6)
-        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 16.6)
         assert(math.abs(_G.vehTrans.x - 0.5) < 0.001, "pre-recenter veh x must match simPose")
-        assert(math.abs(_G.playerTrans.x - 0.5) < 0.001, "pre-recenter player x must match simPose")
     )", "=setupRecenterMocks"), 0);
 
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCabCall"), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"(
         local pose = VRBridge.getHeadPose()
@@ -542,15 +539,25 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
         assert(math.abs(pose.y) < 0.001, "recenter must zero y")
         assert(math.abs(pose.z) < 0.001, "recenter must zero z")
 
-        -- Verify camera node positions are actively realigned to driver seat and player character roots
         assert(math.abs(_G.vehTrans.x - 0.0) < 0.001, "realigned vehicle x must be 0")
         assert(math.abs(_G.vehTrans.y - 1.5) < 0.001, "realigned vehicle y must be base seat height 1.5")
         assert(math.abs(_G.vehTrans.z - 0.5) < 0.001, "realigned vehicle z must be base seat depth 0.5")
+        assert(_G.playerTrans.x == nil, "in-cab recenter must not realign on-foot player camera")
+
+        _G.g_currentMission.controlledVehicle = nil
+    )", "=checkCabRecenter"), 0);
+
+    simPose.position = fs25vr::Vector3(1.0f, 0.2f, -0.3f);
+    headset.SetHeadPose(simPose);
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        VRCompanion:onPlayerCameraUpdate(_G.g_currentMission.player.camera, 16.6)
+        assert(math.abs(_G.playerTrans.x - 0.5) < 0.001, "pre-recenter player x must match simPose")
+        VRCompanion:onRecenterAction()
 
         assert(math.abs(_G.playerTrans.x - 0.0) < 0.001, "realigned player x must be 0")
         assert(math.abs(_G.playerTrans.y - 1.8) < 0.001, "realigned player y must be base player height 1.8")
         assert(math.abs(_G.playerTrans.z - 0.0) < 0.001, "realigned player z must be 0")
-    )", "=checkZeroedPoseAndNodes"), 0);
+    )", "=checkOnFootRecenter"), 0);
 
     bool foundRecenterLog = false;
     bool foundVehicleRealignLog = false;
@@ -1950,33 +1957,36 @@ TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclical
         assert(VRCompanion.HUD_STATE_STREAMLINED == 1, "HUD_STATE_STREAMLINED must be 1")
         assert(VRCompanion.HUD_STATE_FULL == 2, "HUD_STATE_FULL must be 2")
 
+        local savedTime = _G.g_time
+        _G.g_time = 1000
+        VRCompanion.lastHudToggleTime = nil
         VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
         assert(VRCompanion:getHudState() == 0, "Initial state must be 0")
 
-        -- 0 -> 1
         local s1 = VRCompanion:cycleHudState()
         assert(s1 == 1, "0 -> 1")
         assert(VRCompanion:getHudState() == 1, "State is 1")
 
-        -- 1 -> 2
+        _G.g_time = 1400
         local s2 = VRCompanion:cycleHudState()
         assert(s2 == 2, "1 -> 2")
         assert(VRCompanion:getHudState() == 2, "State is 2")
 
-        -- 2 -> 0
+        _G.g_time = 1800
         local s3 = VRCompanion:cycleHudState()
         assert(s3 == 0, "2 -> 0")
         assert(VRCompanion:getHudState() == 0, "State is 0")
 
-        -- Clamp check
         VRCompanion:setHudState(-10)
         assert(VRCompanion:getHudState() == 0, "Negative clamped to 0")
         VRCompanion:setHudState(10)
         assert(VRCompanion:getHudState() == 2, "Overflow clamped to 2")
 
-        -- onHudToggleAction
         VRCompanion:setHudState(0)
+        _G.g_time = 2200
         assert(VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1) == 1, "Action advances to 1")
+        VRCompanion.lastHudToggleTime = nil
+        _G.g_time = savedTime
     )luau", "=verifyHudStateMachine"), 0);
 }
 

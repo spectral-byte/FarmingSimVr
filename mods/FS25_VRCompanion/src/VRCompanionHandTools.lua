@@ -439,14 +439,7 @@ local function carryingPlayer(tool)
     return type(player) == "table" and player or nil
 end
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function localCarryingPlayer(tool)
     local player = carryingPlayer(tool)
@@ -665,9 +658,16 @@ local function isLineOutInHand(self, hand)
     return lineOut == true
 end
 
+local function isActiveFlashlightInHand(hand)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool or state.linkedHand ~= hand then return false end
+    local spec = tool.spec_flashlight
+    return type(spec) == "table" and spec.isActive == true
+end
+
 function VRCompanion:isHandKeptInUseByHandTool(hand)
     if self:getHandState(hand).tracked ~= true then return false end
-    return isTriggerUsing(hand) or isLineOutInHand(self, hand)
+    return isTriggerUsing(hand) or isLineOutInHand(self, hand) or isActiveFlashlightInHand(hand)
 end
 
 local FISHING_ROD_STATE_TEXT = { waiting = "line out" }
@@ -1220,8 +1220,14 @@ local function placeFlashlightBeam(tool)
     if spec == nil or spec.lightNode == nil or heldTool() ~= tool then return end
     local x, y, z, dx, dy, dz = VRCompanion:getHandToolRay()
     if x == nil then return end
+    local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length < 1e-6 then return end
+    local ux, uy, uz = 0, 1, 0
+    if math.abs(dy) > 0.99 * length then
+        uy, uz = 0, 1
+    end
     engine("setWorldTranslation")(spec.lightNode, x, y, z)
-    engine("setDirection")(spec.lightNode, dx, dy, dz, 0, 1, 0)
+    engine("setDirection")(spec.lightNode, dx, dy, dz, ux, uy, uz)
 end
 
 WRAP_SPECS.flashlightBeam.make = function(original)
@@ -1394,10 +1400,14 @@ end
 local function updateSprayCanFeedback(self)
     local feedback = state.sprayCan
     local tool = heldTool()
-    local hand = tool ~= nil and toolHandFor(self, tool) or nil
-    local spec = (hand ~= nil and supportedKind(tool) == "spraycan") and tool.spec_sprayCan or nil
-    if spec == nil then
+    if tool == nil or supportedKind(tool) ~= "spraycan" then
         feedback.tool, feedback.typeIndex, feedback.treeNode = nil, nil, nil
+        return
+    end
+    local hand = toolHandFor(self, tool)
+    local spec = hand ~= nil and tool.spec_sprayCan or nil
+    if spec == nil then
+        feedback.treeNode = nil
         return
     end
     if feedback.tool ~= tool then feedback.tool, feedback.typeIndex, feedback.treeNode = tool, nil, nil end
@@ -1527,7 +1537,7 @@ end
 
 local function describeLookRay(tool)
     local player = tool ~= nil and type(tool.getCarryingPlayer) == "function" and tool:getCarryingPlayer() or nil
-    player = player or (g_currentMission or _G.g_currentMission or {}).player
+    player = player or localPlayer()
     if player == nil or type(player.getLookRay) ~= "function" then return "look ray: unknown (no player)" end
     local ok, x, y, z = pcall(player.getLookRay, player)
     if not ok or type(x) ~= "number" then return "look ray: unknown (getLookRay failed)" end

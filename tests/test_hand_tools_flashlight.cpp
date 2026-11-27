@@ -476,3 +476,45 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, NilGameClockDoesNotCrashPendingToo
     )luau", "=nilClockAndMissingField"), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
 }
+
+TEST_F(VirtualGamepadHandToolsFlashlightTest, AFlashlightPointedNearlyStraightUpOrDownKeepsAFiniteNonFlippingBeam) {
+    ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
+
+    AimHand(kRight, 0.25f, -0.10f, -0.30f, 2.3561945f, 0.0f);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(beam()[5] == beam()[5])"), "true");
+    EXPECT_TRUE(BeamFromTheLens()) << BeamAndLens();
+
+    AimHand(kRight, 0.25f, -0.10f, -0.30f, -0.7853982f, 0.0f);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(beam()[5] == beam()[5])"), "true");
+    EXPECT_TRUE(BeamFromTheLens()) << BeamAndLens();
+}
+
+TEST_F(VirtualGamepadHandToolsFlashlightTest, AnActiveFlashlightKeepsTheToolHandInUsePastTheIdleTimeoutUntilSwitchedOff) {
+    ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_TRUE(On());
+
+    AdvanceGameTime(3500);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
+    EXPECT_TRUE(InTheHand());
+    EXPECT_FALSE(WhereTheGamePutsIt());
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_FALSE(On());
+
+    AdvanceGameTime(3500);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false");
+    EXPECT_FALSE(InTheHand());
+    EXPECT_TRUE(WhereTheGamePutsIt());
+}

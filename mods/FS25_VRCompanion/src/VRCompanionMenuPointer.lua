@@ -1,7 +1,7 @@
 VRCompanion = VRCompanion or {}
 
 VRCompanion.MENU_BACK_PRESS = 0.6
-VRCompanion.MENU_BACK_RELEASE = 0.3
+VRCompanion.MENU_BACK_RELEASE = 0.4
 
 local DEFAULT_MOUSE_BUTTON_NONE = 0
 local DEFAULT_MOUSE_BUTTON_LEFT = 1

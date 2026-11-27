@@ -506,5 +506,85 @@ test("RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation", f
     assert(alignMenuQuadCalls == 1, "alignMenuQuad must NOT be called in 3D mode")
 end)
 
+test("Entering2DViewWhileMenuQuadIsOpenRestoresMenuBackgroundCameraImmediately", function()
+    local menuCamNode = 9050
+    local camTrans = { 10, 2, 30 }
+    local camRot = { 0.1, 0.5, 0.0 }
+    local realGetCamera = _G.getCamera
+    local realGetTrans, realSetTrans = _G.getTranslation, _G.setTranslation
+    local realGetRot, realSetRot = _G.getRotation, _G.setRotation
+    local realGui = _G.g_gui
+
+    _G.getCamera = function() return menuCamNode end
+    _G.getTranslation = function(node)
+        if node == menuCamNode then return camTrans[1], camTrans[2], camTrans[3] end
+        return 0, 0, 0
+    end
+    _G.setTranslation = function(node, x, y, z)
+        if node == menuCamNode then camTrans = { x, y, z } end
+    end
+    _G.getRotation = function(node)
+        if node == menuCamNode then return camRot[1], camRot[2], camRot[3] end
+        return 0, 0, 0
+    end
+    _G.setRotation = function(node, rx, ry, rz)
+        if node == menuCamNode then camRot = { rx, ry, rz } end
+    end
+    _G.g_gui = { getIsGuiVisible = function() return true end }
+
+    VRCompanion:set2DViewActive(false)
+    VRCompanion.menuCameraOffsets = {}
+    VRCompanion:update(16.6)
+    assert(VRCompanion:isMenuQuadShown() == true, "precondition: menu quad is open")
+    assert(math.abs(camTrans[1] - 10) > 0.01, "precondition: menu background camera has head offset")
+
+    VRCompanion:set2DViewActive(true)
+
+    assert(math.abs(camTrans[1] - 10) < 0.0001 and math.abs(camTrans[2] - 2) < 0.0001 and math.abs(camTrans[3] - 30) < 0.0001,
+        string.format("menu background camera translation must restore immediately, got (%.3f, %.3f, %.3f)", camTrans[1], camTrans[2], camTrans[3]))
+    assert(math.abs(camRot[1] - 0.1) < 0.0001 and math.abs(camRot[2] - 0.5) < 0.0001 and math.abs(camRot[3] - 0.0) < 0.0001,
+        string.format("menu background camera rotation must restore immediately, got (%.3f, %.3f, %.3f)", camRot[1], camRot[2], camRot[3]))
+    assert(next(VRCompanion.menuCameraOffsets) == nil, "menuCameraOffsets must be cleared")
+
+    _G.g_gui = realGui
+    VRCompanion:update(16.6)
+    VRCompanion:set2DViewActive(false)
+    _G.getCamera = realGetCamera
+    _G.getTranslation, _G.setTranslation = realGetTrans, realSetTrans
+    _G.getRotation, _G.setRotation = realGetRot, realSetRot
+end)
+
+test("MapUnloadResetsTransientStereoLocomotionAndLogState", function()
+    VRCompanion:loadMap("mapUS")
+
+    VRCompanion.renderedFovX = 1.9
+    VRCompanion.outsideCameraHeading = 1.2
+    VRCompanion.lastGameShowingTrackedCamera = false
+    VRCompanion.lastSnapTurnTime = 1234
+    VRCompanion.lastMissionUpdateError = "err"
+    VRCompanion.invalidPoseTicks = 17
+    VRCompanion.vehCamTicks = 23
+    VRCompanion.playerCamTicks = 31
+    VRCompanion.menuCamTicks = 41
+    VRCompanion.missingInputEventsLogged = true
+    VRCompanion.hasLoggedFillLevelsDisplayInfo = true
+    VRCompanion.gameCameraNode = 999
+
+    VRCompanion:deleteMap()
+
+    assert(VRCompanion.renderedFovX == nil, "renderedFovX must reset on map unload")
+    assert(VRCompanion.outsideCameraHeading == nil, "outsideCameraHeading must reset on map unload")
+    assert(VRCompanion.lastGameShowingTrackedCamera == nil, "lastGameShowingTrackedCamera must reset on map unload")
+    assert(VRCompanion.lastSnapTurnTime == nil, "lastSnapTurnTime must reset on map unload")
+    assert(VRCompanion.lastMissionUpdateError == nil, "lastMissionUpdateError must reset on map unload")
+    assert((VRCompanion.invalidPoseTicks or 0) == 0, "invalidPoseTicks must reset on map unload")
+    assert((VRCompanion.vehCamTicks or 0) == 0, "vehCamTicks must reset on map unload")
+    assert((VRCompanion.playerCamTicks or 0) == 0, "playerCamTicks must reset on map unload")
+    assert((VRCompanion.menuCamTicks or 0) == 0, "menuCamTicks must reset on map unload")
+    assert(not VRCompanion.missingInputEventsLogged, "missingInputEventsLogged must reset on map unload")
+    assert(not VRCompanion.hasLoggedFillLevelsDisplayInfo, "hasLoggedFillLevelsDisplayInfo must reset on map unload")
+    assert(VRCompanion.gameCameraNode == nil, "gameCameraNode must reset on map unload")
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_2d_view_mode.luau", failed))

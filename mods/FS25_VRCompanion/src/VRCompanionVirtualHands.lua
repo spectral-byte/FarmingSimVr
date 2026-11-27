@@ -141,10 +141,7 @@ end
 
 local function applyModelToGrip(node, offset)
     local q, o = offset.rotation, offset.gripOrigin
-    local cx, cy, cz = q.y * o.z - q.z * o.y + q.w * o.x, q.z * o.x - q.x * o.z + q.w * o.y, q.x * o.y - q.y * o.x + q.w * o.z
-    local tx = o.x + 2 * (q.y * cz - q.z * cy)
-    local ty = o.y + 2 * (q.z * cx - q.x * cz)
-    local tz = o.z + 2 * (q.x * cy - q.y * cx)
+    local tx, ty, tz = VRCompanion.rotateVectorByQuaternion(q.x, q.y, q.z, q.w, o.x, o.y, o.z)
     engine("setQuaternion")(node, q.x, q.y, q.z, q.w)
     engine("setTranslation")(node, -tx, -ty, -tz)
 end
@@ -375,7 +372,6 @@ local function updateHand(self, hand, unavailable)
                     if placeHolder(self, entry, world) then
                         local holdsTool = self:isHandHoldingHandTool(hand) == true
                         curlFingers(entry, pose, holdsTool)
-                        entry.holdsTool = holdsTool
                         status = "shown"
                         if not entry.geometryLogged then
                             entry.geometryLogged = true

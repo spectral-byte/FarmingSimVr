@@ -256,6 +256,22 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
             <en>an older version</en>
             <de>eine ältere Version</de>
         </text>
+        <text name="vrFishCatch_soldFor">
+            <en>Sold %s for %s</en>
+            <de>%s für %s verkauft</de>
+        </text>
+        <text name="vrFishCatch_sold">
+            <en>Fish sold</en>
+            <de>Fisch verkauft</de>
+        </text>
+        <text name="vrFishCatch_releasedNamed">
+            <en>Released %s</en>
+            <de>%s freigelassen</de>
+        </text>
+        <text name="vrFishCatch_released">
+            <en>Fish released</en>
+            <de>Fisch freigelassen</de>
+        </text>
     </l10n>
     <actions>
         <action name="VR_RECENTER_VIEW" category="ONFOOT VEHICLE"/>

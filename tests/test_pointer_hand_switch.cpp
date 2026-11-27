@@ -227,7 +227,7 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
     EXPECT_EQ(PointerHand(), "0");
 }
 
-TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksThatHandAndIsConsumed) {
+TEST_F(PointerHandSwitchTest, WithBothHandsPickedUpTogetherTheDefaultToolHandIsPointerHandAndAPullOnTheOtherSwitchesAndIsConsumed) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     SetGameTime(10000);
     headset.SetHandPointing(kRight, HandAt(SideOf(kRight) - 0.1f, 0.0f, -0.3f));
@@ -237,20 +237,19 @@ TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksTha
     headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));
     Frames(2);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0) and VRCompanion:isHandInUse(1)"), "true");
-    EXPECT_EQ(PointerHand(), "nil");
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerRay()"), "nil") << "no Pointer Hand, no ray";
-
-    Pull(kRight);
-    Frames(3);
     EXPECT_EQ(PointerHand(), "1");
-    EXPECT_EQ(Executed(), "") << "the picking pull is consumed too";
 
-    Release(kRight);
-    headset.SetHandPointing(kRight, HandAt(SideOf(kRight) + 0.05f, 0.0f, -0.3f));
+    Pull(kLeft);
+    Frames(3);
+    EXPECT_EQ(PointerHand(), "0");
+    EXPECT_EQ(Executed(), "") << "the switching pull is consumed";
+
+    Release(kLeft);
+    headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft) - 0.05f, 0.0f, -0.3f));
     Frames(1);
-    Pull(kRight);
+    Pull(kLeft);
     Frames(1);
-    EXPECT_EQ(Executed(), "rightPoint");
+    EXPECT_EQ(Executed(), "leftPoint");
 }
 
 TEST_F(PointerHandSwitchTest, TheStatusCommandReportsTheCurrentPointerHand) {

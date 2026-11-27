@@ -69,14 +69,7 @@ end
 
 local INSTANCE_WRAPS = { "handsUpdateKinematicNode", "handsJointBroken" }
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function handToolInHand(player)
     if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return false end
@@ -178,10 +171,7 @@ local function takeGrip(self, hand)
     return self:takeVirtualGamepadInput(hand, "grip")
 end
 
-local function qrotate(qx, qy, qz, qw, x, y, z)
-    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
-    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
-end
+local qrotate = VRCompanion.rotateVectorByQuaternion
 
 local handPose = {}
 

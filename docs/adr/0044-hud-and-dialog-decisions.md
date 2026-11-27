@@ -72,7 +72,7 @@ This record holds the non-obvious decisions behind the HUD Groups and the HUD Co
   template, the notification names the species (and the price when sold); otherwise it is "Fish sold" / "Fish released". There is no weight.
   ```
 
-- **`pendingNotice`**: announced once the dialog is gone after an attempt, not before: the call may have done nothing
+- **`VRCompanion:updateFishCatch` (notification on close)**: The catch text is read before calling `onYes` or `onNo`, and the notification is shown only if that call itself closes `FishDialog` (`findFishDialog(self) ~= dialog`). If the call is ignored and the player clicks the opposite button or closes the dialog during the retry window, no notification is shown.
 - **`readCatch`**: Species and price from the dialog's text, nil where it is not the template the probe measured
 - **`VRCompanion:updateFishCatch`, `if type(dialogTarget.isInputDisabled) == "function" then`**: Not while the dialog says it takes no input yet: it would ignore the call
 - **`RETRY_TICKS`, `MAX_ATTEMPTS`**: The answer is asked again because one is not enough, and the dialog gives no sign of when it would be. Checked in the headset on 2026-11-26 (spectral-byte/FarmingSimVr-issues#228): a single `onYes` or `onNo`, sent in the update the fish dialog first appears and with `isInputDisabled()` false, left the dialog open for sell and for release alike. With the retry both closed it on the third attempt, about 0.4 s after it opened. The dialog's own code is not in the readable source, so why it ignores an early answer is not known.
@@ -128,7 +128,7 @@ This record holds the non-obvious decisions behind the HUD Groups and the HUD Co
 - **`VRCompanion:getMapDrawShift`**: How far the map's draw moves from the engine's corner to the Map group, or nothing where the engine's own position applies: the fullscreen map, the Hidden HUD and 2D Floating Window Mode
 - **`VRCompanion:callWithMapLayoutShifted`**: Runs fn(layout, ...) with the layout's position fields moved to the Map group. The layout crops the map to its circle with a native 2D mask it sets in drawBefore, which a mod cannot intercept, and draws its text with natives too, but both take their absolute coordinates from these fields.
 - **`VRCompanion:hookHud`, `if displayName == "InputHelpDisplay" and type(cls.setVisible) == "function" then`**: The help toggle (F1) may set the input help's visibility directly rather than through the HUD
-- **`VRCompanion:hookHud`, `self.mapEngineBaseX`**: The map draws at the engine's corner: its draw methods run as one map draw, during which Overlay:render shifts every overlay and clip rectangle to the Map group's position
+- **`VRCompanion:getMapDrawShift`**: The map draws at the engine's corner (`g_safeFrameOffsetX`, `g_safeFrameOffsetY`, read dynamically): its draw methods run as one map draw, during which Overlay:render shifts every overlay and clip rectangle to the Map group's position
 - **`VRCompanion:hookHud`, `hookMethod(cls, key, function(layout, ...)`**: The layout sets the map's circular mask in drawBefore and places its text, both at absolute coordinates taken from its own position fields, so they run with those fields moved
 - **`VRCompanion:hookHud`, `hookMethod(cls, key, function(...)`**: Hotspots take their position from getMapObjectPosition, shifted below, so the overlay shift must not move them a second time
 - **`VRCompanion:hookHud`, `if type(cls.getMapObjectPosition) == "function" then`**: Hotspots (fields, vehicles) are drawn with natives at the screen position the layout hands out

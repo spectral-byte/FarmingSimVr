@@ -361,3 +361,78 @@ TEST_F(CompanionModTest, ASavedValueThatIsNotAnAnswerLeavesTheDefault) {
     ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.fishCatchAnswer'] = 'keep'; VRCompanion:loadConfiguration()", "=loadGarbage"), 0);
     EXPECT_NE(EvalLua(L, "runCommand('vrFishCatch')").find("ask"), std::string::npos);
 }
+
+TEST_F(CompanionModTest, AnotherStereoDialogInTheAllowListIsLeftAloneByFishCatch) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_FISH_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.STEREO_DIALOGS["OtherStereoDialog"] = true
+        runCommand('vrFishCatch', 'sell')
+        showDialog('OtherStereoDialog', {
+            onYes = function() table.insert(answers, 'sell') end,
+            onNo = function() table.insert(answers, 'release') end,
+        })
+    )luau", "=openOtherStereoDialog"), 0);
+    FRAMES(5);
+    EXPECT_EQ(Answers(L), "");
+    EXPECT_TRUE(DialogIsOpen(L));
+    EXPECT_EQ(NoticeCount(L), 0);
+}
+
+TEST_F(CompanionModTest, ClickingTheOppositeButtonDuringTheRetryWindowShowsNoFalseNotification) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_FISH_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrFishCatch', 'sell')", "=sell"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "showFishDialog({ ignoreFirst = 1 })", "=openFishDialog"), 0);
+    FRAMES(1);
+    ASSERT_TRUE(DialogIsOpen(L));
+    EXPECT_EQ(NoticeCount(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.dialogs[1].target:onNo()", "=manualRelease"), 0);
+    ASSERT_FALSE(DialogIsOpen(L));
+    FRAMES(5);
+    EXPECT_EQ(Answers(L), "release");
+    EXPECT_EQ(NoticeCount(L), 0) << Notices(L);
+}
+
+TEST_F(CompanionModTest, FishCatchNotificationsAreLocalisedInEnglishAndGerman) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_FISH_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local texts = {
+            vrFishCatch_soldFor = "%s für %s verkauft",
+            vrFishCatch_sold = "Fisch verkauft",
+            vrFishCatch_releasedNamed = "%s freigelassen",
+            vrFishCatch_released = "Fisch freigelassen",
+        }
+        _G.g_i18n = {
+            hasText = function(self, name) return texts[name] ~= nil end,
+            getText = function(self, name) return texts[name] or name end,
+        }
+    )luau", "=germanI18n"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "notices = {}; runCommand('vrFishCatch', 'sell'); showFishDialog()", "=sellNamed"), 0);
+    FRAMES(1);
+    EXPECT_EQ(Notices(L), "trout für 100 $ verkauft");
+
+    ASSERT_EQ(RunLuauChunk(L, "notices = {}; showFishDialog({ text = 'Du hast eine Forelle gefangen!' })", "=sellGeneric"), 0);
+    FRAMES(1);
+    EXPECT_EQ(Notices(L), "Fisch verkauft");
+
+    ASSERT_EQ(RunLuauChunk(L, "notices = {}; runCommand('vrFishCatch', 'release'); showFishDialog()", "=releaseNamed"), 0);
+    FRAMES(1);
+    EXPECT_EQ(Notices(L), "trout freigelassen");
+
+    ASSERT_EQ(RunLuauChunk(L, "notices = {}; showFishDialog({ text = 'Du hast eine Forelle gefangen!' })", "=releaseGeneric"), 0);
+    FRAMES(1);
+    EXPECT_EQ(Notices(L), "Fisch freigelassen");
+}

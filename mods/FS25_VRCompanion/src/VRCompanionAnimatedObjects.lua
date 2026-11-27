@@ -46,14 +46,7 @@ end
 
 local state = newState()
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function trackZone(object, otherId, onEnter, onLeave)
     local mission, career = engine("g_currentMission"), engine("FSCareerMissionInfo")
