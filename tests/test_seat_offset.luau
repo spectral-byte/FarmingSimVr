@@ -636,6 +636,48 @@ test("SeatOffsetFollowsTheVehiclesHeadingNotTheMapsDirection", function()
     end
 end)
 
+test("InCabRecenterAfterWalkingOnFootDoesNotOverwriteCabNodesWithOnFootCoordinates", function()
+    setup(poseAt(0.1, 0.05, -0.15))
+    nextCameraNode = nextCameraNode + 1
+    local footNode = nextCameraNode
+    nodeOf(footNode).t = { -40, 1.8, 12 }
+    nodeOf(footNode).parent = 0
+    local playerCam = { cameraNode = footNode, firstPersonCamera = footNode }
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    assert(VRCompanion.activePlayerCamera == playerCam, "precondition: on-foot camera is cached")
+
+    local cabCam = trackedCab(0)
+    local veh = makeVehicle(freshModel(), { cabCam })
+    enter(veh)
+    VRCompanion:consoleCommandSeatOffset("0.1", "0.2", "0.3")
+    VRCompanion:onVehicleCameraUpdate(cabCam, 16.6)
+
+    nodeOf(footNode).t = { -99, 9.9, 99 }
+    VRCompanion:onRecenterAction()
+
+    local eyePos = translationOf(VRCompanion.cameraNodeLeft)
+    local listenerPos = translationOf(VRCompanion.cyclopeanAudioListenerNode)
+    local footPos = translationOf(footNode)
+    assert(near(eyePos.x, -0.3) and near(eyePos.y, 1.8) and near(eyePos.z, 0.3),
+        string.format("eye node must stay at cab seat + offset (-0.3, 1.8, 0.3), got (%.3f, %.3f, %.3f)", eyePos.x, eyePos.y, eyePos.z))
+    assert(near(listenerPos.x, -0.3) and near(listenerPos.y, 1.8) and near(listenerPos.z, 0.3),
+        string.format("listener node must stay at cab seat + offset (-0.3, 1.8, 0.3), got (%.3f, %.3f, %.3f)", listenerPos.x, listenerPos.y, listenerPos.z))
+    assert(near(footPos.x, -99) and near(footPos.y, 9.9) and near(footPos.z, 99),
+        "in-cab recenter must not touch the cached on-foot camera node")
+end)
+
+test("GetCabRestPoseIgnoresZeroHeadTrackingNode", function()
+    setup()
+    local cam = fallbackCab()
+    cam.headTrackingNode = 0
+    nodeOf(0).t = { 99, 99, 99 }
+
+    local rest = VRCompanion:getCabRestPose(cam, CAB, math.pi, 0, math.pi)
+    assert(rest.node == nil, "headTrackingNode == 0 must use the fallback rest pose, not node 0")
+    assert(near(rest.x, 0.3) and near(rest.y, 1.4) and near(rest.z, -0.2),
+        string.format("fallback rest position expected (0.3, 1.4, -0.2), got (%.3f, %.3f, %.3f)", rest.x, rest.y, rest.z))
+end)
+
 print(string.format("Seat Offset Tests: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d Seat Offset test(s) failed", failed))

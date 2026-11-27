@@ -387,6 +387,11 @@ function VRCompanion:initCyclopeanAudioListener(referenceNode)
 end
 
 function VRCompanion:ensureCyclopeanAudioListener(referenceNode)
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    if type(entityExistsFn) == "function" and self.cyclopeanAudioListenerNode ~= nil
+        and self.cyclopeanAudioListenerNode ~= 0 and not entityExistsFn(self.cyclopeanAudioListenerNode) then
+        self.cyclopeanAudioListenerNode = nil
+    end
     if self.cyclopeanAudioListenerNode == nil or self.cyclopeanAudioListenerNode == 0 then
         self:initCyclopeanAudioListener(referenceNode)
     end
@@ -432,8 +437,9 @@ function VRCompanion:set2DViewActive(active)
     if store2DViewActive(self, newActive) then
         if newActive then
             print("[FS25_VR] Entered 2D Floating Window Mode.")
+            self:restoreMenuBackgroundCamera()
             self:restoreCameraProjectionsFor2D()
-            if self.activePlayerCamera ~= nil then
+            if self.activePlayerCamera ~= nil and self:getActiveVehicleCamera() == nil then
                 self:realignPlayerCameraToRoot(self.activePlayerCamera)
             end
             self:restoreHudSafeArea(true)
@@ -1089,10 +1095,10 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     end
 
     local curVeh = self:getControlledVehicle()
-    if curVeh ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVeh] ~= nil then
+    if curVeh ~= nil then
         local activeCam = self:getVehicleActiveCamera(curVeh)
         if activeCam == cam or (activeCam and cam and activeCam.cameraNode == cam.cameraNode) then
-            self.vehicleRotationStates[curVeh].rotY = cam.rotY
+            self:updateVehicleRotationState(curVeh, cam, cam.rotY, nil)
         end
     end
 
@@ -1270,7 +1276,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local finalMidTx, finalMidTy, finalMidTz = tx, ty, tz
     local baseQx, baseQy, baseQz, baseQw = nil, nil, nil, nil
 
-    if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
+    if cam.vrHeadTrackingNode ~= nil and cam.vrHeadTrackingNode ~= 0 and camParent ~= 0 then
         if type(localToLocal) == "function" then
             finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
             finalMidTx, finalMidTy, finalMidTz = localToLocal(cam.vrHeadTrackingNode, camParent, tx, ty, tz)
@@ -1560,5 +1566,14 @@ VRCompanion:registerSubsystem("stereo", {
         self:resetToggleViewDebounce()
         restoreOriginalCameraSettings(self)
         self:leave2DViewOnMapUnload()
+        self.renderedFovX = nil
+        self.outsideCameraHeading = nil
+        self.lastGameShowingTrackedCamera = nil
+        self.trackedCameraShown = nil
+        self.gameCameraNode = nil
+        self.invalidPoseTicks = 0
+        self.vehCamTicks = 0
+        self.playerCamTicks = 0
+        self.menuCamTicks = 0
     end,
 })
