@@ -382,8 +382,7 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out, outRe
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
     local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
     local bridge = VRBridge or (_G and _G.VRBridge)
-    local existsFn = entityExists or (_G and _G.entityExists)
-    if listener == nil or listener == 0 or (type(existsFn) == "function" and not existsFn(listener)) then
+    if not VRCompanion.nodeExists(listener) then
         return false, "the Cyclopean Audio Listener Node does not exist"
     end
     if not headIsPlacedInTheWorld(self) then
@@ -523,9 +522,7 @@ local function noteRayInHead(self, ray)
     local inHead = state.rayInHead
     local listener = self.cyclopeanAudioListenerNode
     local worldToLocalFn = worldToLocal or (_G and _G.worldToLocal)
-    local existsFn = entityExists or (_G and _G.entityExists)
-    if listener == nil or listener == 0 or (type(existsFn) == "function" and not existsFn(listener))
-        or type(worldToLocalFn) ~= "function" then
+    if not VRCompanion.nodeExists(listener) or type(worldToLocalFn) ~= "function" then
         return
     end
     local okO, ox, oy, oz = pcall(worldToLocalFn, listener, ray.ox, ray.oy, ray.oz)
@@ -656,9 +653,7 @@ function VRCompanion:placePointerRayForRender()
     if not state.ray.visible or not inHead.valid then return end
     local listener = self.cyclopeanAudioListenerNode
     local localToWorldFn = localToWorld or (_G and _G.localToWorld)
-    local existsFn = entityExists or (_G and _G.entityExists)
-    if listener == nil or listener == 0 or (type(existsFn) == "function" and not existsFn(listener))
-        or type(localToWorldFn) ~= "function" then
+    if not VRCompanion.nodeExists(listener) or type(localToWorldFn) ~= "function" then
         return
     end
     local okO, ox, oy, oz = pcall(localToWorldFn, listener, inHead.ox, inHead.oy, inHead.oz)

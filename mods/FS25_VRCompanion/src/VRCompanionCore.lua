@@ -43,6 +43,12 @@ function VRCompanion.rotateVectorByQuaternion(qx, qy, qz, qw, x, y, z)
     return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
 end
 
+function VRCompanion.nodeExists(node)
+    if node == nil or node == 0 then return false end
+    local exists = VRCompanion.getEngineGlobal("entityExists")
+    return type(exists) ~= "function" or exists(node)
+end
+
 VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
 
 local lookRayAimers = {}

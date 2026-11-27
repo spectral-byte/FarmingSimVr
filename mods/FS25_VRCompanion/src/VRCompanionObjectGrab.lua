@@ -201,11 +201,7 @@ local function carryNodes(hands)
     return kinematic, rotation
 end
 
-local function nodeExists(node)
-    if node == nil or node == 0 then return false end
-    local exists = engine("entityExists")
-    return type(exists) ~= "function" or exists(node)
-end
+local nodeExists = VRCompanion.nodeExists
 
 local function recordGrabOffset(self, carry)
     local hands = carry.hands

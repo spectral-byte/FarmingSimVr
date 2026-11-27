@@ -266,3 +266,32 @@ TEST_F(VirtualGamepadCabUseTest, WheelGrabDoesNotGrabWhenTakeVirtualGamepadInput
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "false");
 }
+
+TEST_F(VirtualGamepadCabUseTest, HoveringTheRimWithGripAlreadySqueezedKeepsShoulderBindingWhileReleasedHoverReservesGrip) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+
+    headset.SetHandInputs(kLeft, Grip(1.0f));
+    FRAMES(1);
+    ASSERT_NE(Pad().wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
+
+    BRING_HAND(kLeft, RimPoint(L, kRimRadius, 0.0));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(0)"), "false");
+    EXPECT_NE(Pad().wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
+    EXPECT_EQ(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("left grip"), std::string::npos);
+
+    headset.SetHandInputs(kLeft, Grip(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(Pad().wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("left grip"), std::string::npos);
+
+    headset.SetHandInputs(kLeft, Grip(1.0f));
+    AdvanceGameTime(16.667);
+    headset.NextFrame();
+    EXPECT_EQ(Pad().wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.667)", "=update"), 0);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(0)"), "true");
+    EXPECT_EQ(Pad().wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
+}

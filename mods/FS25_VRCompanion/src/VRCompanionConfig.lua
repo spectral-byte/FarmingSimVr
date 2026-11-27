@@ -263,6 +263,26 @@ function VRCompanion:saveConfiguration(xmlPath)
     return false
 end
 
+local SCALAR_SETTING_DEFAULTS = {
+    { field = "hudConvergenceDepth", defaultKey = "DEFAULT_HUD_DEPTH" },
+    { field = "showHudLoadNotification", defaultKey = "DEFAULT_SHOW_HUD_LOAD_NOTIFICATION" },
+    { field = "recenterVrTrackingSpace", defaultKey = "DEFAULT_RECENTER_VR_TRACKING_SPACE" },
+    { field = "snapTurnAngle", defaultKey = "DEFAULT_SNAP_TURN_ANGLE" },
+}
+
+local function applyScalarSettingDefaults(self, onlyIfNil)
+    for _, entry in ipairs(SCALAR_SETTING_DEFAULTS) do
+        if not onlyIfNil or self[entry.field] == nil then
+            self[entry.field] = self[entry.defaultKey]
+        end
+    end
+    for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+        if not onlyIfNil or self[field] == nil then
+            self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
+        end
+    end
+end
+
 function VRCompanion:loadConfiguration(xmlPath)
     local safeAreaHorizontal = self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
     local safeAreaVertical = self.DEFAULT_HUD_SAFE_AREA_VERTICAL
@@ -288,13 +308,7 @@ function VRCompanion:loadConfiguration(xmlPath)
     local deleteXmlFn = delete or _G.delete
 
     if type(loadXmlFn) == "function" then
-        self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
-        self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
-        self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
-        self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
-        for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
-            self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
-        end
+        applyScalarSettingDefaults(self, false)
         self:runSubsystemResetSettings()
     end
 
@@ -409,23 +423,7 @@ function VRCompanion:loadConfiguration(xmlPath)
         end
     end
 
-    if self.hudConvergenceDepth == nil then
-        self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
-    end
-    if self.showHudLoadNotification == nil then
-        self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
-    end
-    if self.recenterVrTrackingSpace == nil then
-        self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
-    end
-    if self.snapTurnAngle == nil then
-        self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
-    end
-    for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
-        if self[field] == nil then
-            self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
-        end
-    end
+    applyScalarSettingDefaults(self, true)
     self.hudGroupLayout = groupLayouts
     self.persistedHudState = persistedHudState
     self.controlsExpanded = controlsExpanded

@@ -69,12 +69,11 @@ end
 local state = newState()
 
 local engine = VRCompanion.getEngineGlobal
+local nodeExists = VRCompanion.nodeExists
 
 local function deleteNode(node)
     local deleteFn = engine("delete")
-    if node == nil or node == 0 or type(deleteFn) ~= "function" then return end
-    local exists = engine("entityExists")
-    if type(exists) == "function" and not exists(node) then return end
+    if not nodeExists(node) or type(deleteFn) ~= "function" then return end
     pcall(deleteFn, node)
 end
 
@@ -244,12 +243,6 @@ local function curlFingers(entry, pose, holdsTool)
     end
 end
 
-local function nodeExists(node)
-    if node == nil or node == 0 then return false end
-    local exists = engine("entityExists")
-    return type(exists) ~= "function" or exists(node)
-end
-
 local function worldToAnchorSpace(anchor, aqx, aqy, aqz, aqw, x, y, z, qx, qy, qz, qw, out)
     local worldToLocal = engine("worldToLocal")
     if type(worldToLocal) ~= "function" then
@@ -342,11 +335,9 @@ local function placeHolder(entry, world, anchor, aqx, aqy, aqz, aqw)
 end
 
 local function handsWereDeleted()
-    local exists = engine("entityExists")
-    if type(exists) ~= "function" then return false end
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
-        if entry ~= nil and not exists(entry.holder) then return true end
+        if entry ~= nil and entry.holder ~= nil and entry.holder ~= 0 and not nodeExists(entry.holder) then return true end
     end
     return false
 end
@@ -401,9 +392,7 @@ end
 
 function VRCompanion:getVirtualHandHolder(hand)
     local entry = state.hands[hand]
-    if entry == nil or entry.holder == nil then return nil end
-    local exists = engine("entityExists")
-    if type(exists) == "function" and not exists(entry.holder) then return nil end
+    if entry == nil or not nodeExists(entry.holder) then return nil end
     return entry.holder
 end
 
