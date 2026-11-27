@@ -46,8 +46,8 @@ function VRCompanion:consoleCommandPerfTrace(arg)
     end
     local seconds = self.PERF_TRACE_DEFAULT_SECONDS
     if arg ~= nil and arg ~= "" then
-        seconds = tonumber(arg)
-        if seconds == nil or seconds < 1 or seconds > self.PERF_TRACE_MAX_SECONDS then
+        seconds = VRCompanion.parseFiniteNumber(arg, 1, self.PERF_TRACE_MAX_SECONDS)
+        if seconds == nil then
             return USAGE
         end
         seconds = math.floor(seconds)

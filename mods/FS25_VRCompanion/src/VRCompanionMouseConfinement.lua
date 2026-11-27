@@ -61,6 +61,7 @@ VRCompanion:registerSubsystem("mouseConfinement", {
     mapLoad = function(self) self:applyMouseConfinement() end,
     saveSettings = function(self, xmlFile, xml) self:saveMouseConfinementSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadMouseConfinementSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.mouseConfinement = self.DEFAULT_MOUSE_CONFINEMENT end,
     consoleCommands = {
         { name = "vrMouseConfinement", description = "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]", method = "consoleCommandSetMouseConfinement" },
     },

@@ -122,7 +122,7 @@ local function isHoldingHandTool(self, hand)
 end
 
 local function isCarryingHeldObject(self, hand)
-    return self:isHandCarryingHeldObject(hand) == true
+    return not self:isMenuQuadShown() and self:isHandCarryingHeldObject(hand) == true
 end
 
 local function isPointerCandidate(self, hand)
@@ -146,6 +146,11 @@ local function choosePointerHand(self)
         if hand ~= previous and self:isObjectGrabSqueeze(hand) == true then
             return hand
         end
+    end
+    if previous == nil then
+        local toolHand = type(self.getToolHand) == "function" and self:getToolHand() or nil
+        if toolHand == 0 or toolHand == 1 then return toolHand end
+        return self.MOTION_HAND_RIGHT
     end
     return previous
 end
@@ -338,10 +343,7 @@ function VRCompanion:resetMotionControllerMovement()
     end
 end
 
-local function qrotate(qx, qy, qz, qw, x, y, z)
-    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
-    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
-end
+local qrotate = VRCompanion.rotateVectorByQuaternion
 
 local function headIsPlacedInTheWorld(self)
     if self:isMenuQuadShown() or self.is2DViewActive or self.trackedCameraShown == false then return false end
@@ -538,7 +540,7 @@ function VRCompanion:updatePointerRay(dt)
     hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onCouplingPoint)
     if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ end
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
-    if not hasTarget then
+    if hitX == nil then
         grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
     end
     local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil, grabbable and grabDistance or nil)
@@ -677,7 +679,7 @@ end
 local SETTING_KEY_CONE = "vrSettings.pointerConeDegrees"
 
 local function validPointerCone(self, degrees)
-    return type(degrees) == "number" and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
+    return VRCompanion.isFiniteNumber(degrees) and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
 end
 
 function VRCompanion:savePointerConeSetting(xmlFile, xml)
@@ -701,7 +703,7 @@ function VRCompanion:consoleCommandSetPointerCone(arg)
         return string.format("Pointer Ray cone: %s degrees (default %s). %s",
             tostring(self.pointerConeDegrees), tostring(self.DEFAULT_POINTER_CONE_DEGREES), usage)
     end
-    local degrees = tonumber(arg)
+    local degrees = VRCompanion.parseFiniteNumber(arg)
     if not validPointerCone(self, degrees) then
         return usage
     end
@@ -799,6 +801,10 @@ VRCompanion:registerSubsystem("motionControllers", {
     update = function(self, dt) self:updateMotionControllers(dt) end,
     saveSettings = function(self, xmlFile, xml) self:saveMotionControllerSettings(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadMotionControllerSettings(xmlFile, xml) end,
+    resetSettings = function(self)
+        self.motionControllersEnabled = self.DEFAULT_MOTION_CONTROLLERS_ENABLED
+        self.pointerConeDegrees = self.DEFAULT_POINTER_CONE_DEGREES
+    end,
     mapUnload = function(self) self:resetMotionControllers() end,
     consoleCommands = {
         { name = "vrPointerDiagnostics", description = "Report why the Pointer Ray may not select Click Points: vrPointerDiagnostics", method = "consoleCommandPointerDiagnostics" },

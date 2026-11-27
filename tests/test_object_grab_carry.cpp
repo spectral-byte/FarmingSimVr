@@ -318,3 +318,40 @@ TEST_F(VirtualGamepadObjectGrabCarryTest, UnloadingTheMapGivesTheHandsToolItsOwn
     EXPECT_EQ(EvalLua(L, "tostring(hands.updateKinematicNode == StubHandTool.handsRegistered.updateKinematicNode)"), "true");
     EXPECT_EQ(EvalLua(L, "tostring(HandToolHands.updateKinematicNode == StubHandTool.handsRegistered.updateKinematicNode)"), "true");
 }
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, ReleasingTheGripWhilePausedDoesNotDropOrThrowAndTheCarryingHandCanPointInMenus) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(EvalLua(L, "tostring(VRCompanion:getPointerHand())"), "nil");
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getPointerHand())"), "1") << "the carrying hand can point in menus";
+
+    Squeeze(kRight, 0.0f);
+    FRAMES(5);
+    EXPECT_EQ(Drops(), 0) << "releasing grip while paused does not drop the Held Object";
+    EXPECT_EQ(Number(L, "#StubHandTool.throws"), 0);
+    EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode == bale.node)"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(Drops(), 1) << "once unpaused with grip released, it drops cleanly";
+    EXPECT_EQ(Number(L, "#StubHandTool.throws"), 0);
+}
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, ReSqueezingTheGripBeforeClosingTheMenuResumesCarryingWithoutDropping) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu"), 0);
+    FRAMES(2);
+    Squeeze(kRight, 0.0f);
+    FRAMES(2);
+    Squeeze(kRight, 1.0f);
+    FRAMES(1);
+    ASSERT_EQ(Drops(), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(Drops(), 0);
+    EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode == bale.node)"), "true");
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getPointerHand())"), "nil");
+}

@@ -160,6 +160,7 @@ VRCompanion:registerSubsystem("fishCatch", {
     updateEarly = function(self) self:updateFishCatch() end,
     saveSettings = function(self, xmlFile, xml) self:saveFishCatchSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadFishCatchSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.fishCatchAnswer = self.DEFAULT_FISH_CATCH_ANSWER end,
     mapUnload = function(self)
         forgetDialog()
         warnedNoMethod = false

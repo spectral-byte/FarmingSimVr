@@ -173,9 +173,12 @@ function VRCompanion:traceEyeFrame(eyeIndex, camNode, subPass, frameDt)
 end
 
 function VRCompanion:consoleCommandEyePairTrace(arg)
-    local frames = math.floor(tonumber(arg) or self.EYE_PAIR_TRACE_DEFAULT_FRAMES)
-    if frames < 1 then
-        return string.format("Usage: vrEyePairTrace [frames, default %d]", self.EYE_PAIR_TRACE_DEFAULT_FRAMES)
+    local frames = self.EYE_PAIR_TRACE_DEFAULT_FRAMES
+    if arg ~= nil and arg ~= "" then
+        frames = VRCompanion.parseFiniteNumber(arg, 1, nil, true)
+        if frames == nil then
+            return string.format("Usage: vrEyePairTrace [frames, default %d]", self.EYE_PAIR_TRACE_DEFAULT_FRAMES)
+        end
     end
     trace = { frames = frames }
     return string.format("Tracing %d eye frames into the log", frames)

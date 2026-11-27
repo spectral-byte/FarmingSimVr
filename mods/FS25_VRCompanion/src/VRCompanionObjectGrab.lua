@@ -33,6 +33,7 @@ local function newState()
         dt = 0,              -- the dt of this update
         swing = { samples = {}, rig = nil, last = nil },  -- the carrying hand's recent places in the world, and the last release
         lastSnapMs = nil,
+        aimBehind = VRCompanion.OBJECT_GRAB_REACH_BEHIND,
         peeked = { player = nil, node = nil, target = nil, waiting = false },
     }
 end
@@ -68,14 +69,7 @@ end
 
 local INSTANCE_WRAPS = { "handsUpdateKinematicNode", "handsJointBroken" }
 
-local function localPlayer()
-    local player = engine("g_localPlayer")
-    if player == nil then
-        local mission = engine("g_currentMission")
-        player = type(mission) == "table" and mission.player or nil
-    end
-    return player
-end
+local localPlayer = VRCompanion.getLocalPlayer
 
 local function handToolInHand(player)
     if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return false end
@@ -108,18 +102,52 @@ local function whyNotAiming(self, player)
     return nil
 end
 
-local function aimedRay(self, player)
+local checkPose = {}
+local checkHit = {}
+
+local function onCheckHit(self, node, x, y, z, distance)
+    self.node, self.distance = node, distance
+    return true
+end
+checkHit.onHit = onCheckHit
+
+local function aimingRay(self, player)
     local why = whyNotAiming(self, player)
     if why ~= nil then return nil, why end
     if self.pointerHand == nil then return nil, "there is no Pointer Hand" end
+    if not self:isPointerRayInControl() then return nil, "the desk mouse controls the pointer" end
     local ray = self:getPointerRay()
     if ray == nil then return nil, "the Pointer Ray is not placed" end
-    local behind = self.OBJECT_GRAB_REACH_BEHIND
-    return ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind, ray.dx, ray.dy, ray.dz
+    return ray, nil
+end
+
+local function unoccludedReachBehind(player, ray, behind)
+    local rayCast, key = engine("raycastClosest"), engine("HandToolHands")
+    local hands = emptyHands(player)
+    if type(rayCast) ~= "function" or type(key) ~= "table" or hands == nil or type(hands.getCanPickUpNode) ~= "function" then
+        return behind
+    end
+    checkHit.node, checkHit.distance = nil, nil
+    local ok = pcall(rayCast, ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind,
+        ray.dx, ray.dy, ray.dz, behind, "onHit", checkHit, key.TARGET_MASK)
+    if not ok or checkHit.node == nil then return behind end
+    local can, canPickUp = pcall(hands.getCanPickUpNode, hands, checkHit.node)
+    if can and canPickUp == true then return behind end
+    return 0
+end
+
+local function aimedRay(self, player)
+    local ray, why = aimingRay(self, player)
+    if ray == nil then return nil, why end
+    local behind = unoccludedReachBehind(player, ray, self.OBJECT_GRAB_REACH_BEHIND)
+    return ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind, ray.dx, ray.dy, ray.dz, behind
 end
 
 VRCompanion:registerLookRayAimer("objectGrab", function(player)
-    return aimedRay(VRCompanion, player)
+    local ox, oy, oz, dx, dy, dz, behind = aimedRay(VRCompanion, player)
+    if ox == nil then return nil, oy end
+    state.aimBehind = behind
+    return ox, oy, oz, dx, dy, dz
 end)
 
 local function padGripHeld(hand)
@@ -143,10 +171,7 @@ local function takeGrip(self, hand)
     return self:takeVirtualGamepadInput(hand, "grip")
 end
 
-local function qrotate(qx, qy, qz, qw, x, y, z)
-    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
-    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
-end
+local qrotate = VRCompanion.rotateVectorByQuaternion
 
 local handPose = {}
 
@@ -285,15 +310,6 @@ end
 
 local OFF_HAND_MINIMUM_DISTANCE = 0.5
 
-local checkPose = {}
-local checkHit = {}
-
-local function onCheckHit(self, node, x, y, z, distance)
-    self.node, self.distance = node, distance
-    return true
-end
-checkHit.onHit = onCheckHit
-
 local function pointsAtGrabbable(self, hands, hand)
     local rayCast, key = engine("raycastClosest"), engine("HandToolHands")
     local spec = hands.spec_hands
@@ -305,19 +321,31 @@ local function pointsAtGrabbable(self, hands, hand)
     if self:headRelativePoseToWorld(tx, ty, tz, 0, 0, 0, 1, checkPose) ~= true then return false end
     local dx, dy, dz = qrotate(checkPose.qx, checkPose.qy, checkPose.qz, checkPose.qw, tdx, tdy, tdz)
     local behind = self.OBJECT_GRAB_REACH_BEHIND
+    local pickupDistance = spec.pickupDistance or 0
     checkHit.node, checkHit.distance = nil, nil
     local ok = pcall(rayCast, checkPose.x - dx * behind, checkPose.y - dy * behind, checkPose.z - dz * behind, dx, dy, dz,
-        spec.pickupDistance or 0, "onHit", checkHit, key.TARGET_MASK)
-    if not ok or checkHit.node == nil or (checkHit.distance or 0) < OFF_HAND_MINIMUM_DISTANCE then return false end
-    local can, canPickUp = pcall(hands.getCanPickUpNode, hands, checkHit.node)
-    return can and canPickUp == true
+        pickupDistance, "onHit", checkHit, key.TARGET_MASK)
+    if ok and checkHit.node ~= nil and (checkHit.distance or 0) >= OFF_HAND_MINIMUM_DISTANCE then
+        local can, canPickUp = pcall(hands.getCanPickUpNode, hands, checkHit.node)
+        if can and canPickUp == true then return true end
+    end
+    if ok and checkHit.node ~= nil and (checkHit.distance or 0) < behind then
+        checkHit.node, checkHit.distance = nil, nil
+        local forwardOk = pcall(rayCast, checkPose.x, checkPose.y, checkPose.z, dx, dy, dz,
+            math.max(0, pickupDistance - behind), "onHit", checkHit, key.TARGET_MASK)
+        if forwardOk and checkHit.node ~= nil then
+            local can, canPickUp = pcall(hands.getCanPickUpNode, hands, checkHit.node)
+            return can and canPickUp == true
+        end
+    end
+    return false
 end
 
 local function updateOffHand(self)
     state.offHandSqueezed = nil
     if state.carry ~= nil then return end
     local player = localPlayer()
-    if whyNotAiming(self, player) ~= nil then return end
+    if whyNotAiming(self, player) ~= nil or not self:isPointerRayInControl() then return end
     local hands = emptyHands(player)
     for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
         if hand ~= self.pointerHand and self:isHandInUse(hand) and pointsAtGrabbable(self, hands, hand) then
@@ -366,7 +394,10 @@ local function sampleSwing(self)
         return
     end
     local hand = handGripInWorld(self, carry.hand)
-    if hand == nil or self:headRelativePoseToWorld(0, 0, 0, 0, 0, 0, 1, rigPose) ~= true then return end
+    if self:doesMenuTakeInput() or hand == nil or self:headRelativePoseToWorld(0, 0, 0, 0, 0, 0, 1, rigPose) ~= true then
+        if swing.rig ~= nil or #swing.samples > 0 then swing.samples, swing.rig = {}, nil end
+        return
+    end
     local rig = swing.rig
     if rig ~= nil then
         local dx, dy, dz = rigPose.x - rig.x, rigPose.y - rig.y, rigPose.z - rig.z
@@ -385,6 +416,11 @@ local function sampleSwing(self)
         swing.samples = {}
         return
     end
+    local last = samples[#samples]
+    if last ~= nil and last.t ~= nil and now < last.t then
+        swing.samples = {}
+        samples = swing.samples
+    end
     samples[#samples + 1] = { t = now, x = hand.x, y = hand.y, z = hand.z }
     while #samples > 1 and now - samples[1].t > self.OBJECT_GRAB_THROW_WINDOW_MS do table.remove(samples, 1) end
 end
@@ -392,10 +428,12 @@ end
 -- The hand's velocity in the world (m/s) from its oldest to its newest sample in the window: vx, vy, vz, speed; nil when the hand has
 -- not been seen moving over two samples, or when the game clock is not available.
 local function handVelocity(self)
-    if self:getCurrentTimeMs() == nil then return nil end
+    local now = self:getCurrentTimeMs()
+    if now == nil then return nil end
     local samples = state.swing.samples
     local first, last = samples[1], samples[#samples]
     if first == nil or last == first or first.t == nil or last.t == nil or last.t <= first.t then return nil end
+    if now < last.t or now - last.t > self.OBJECT_GRAB_THROW_WINDOW_MS then return nil end
     local seconds = (last.t - first.t) / 1000
     local vx, vy, vz = (last.x - first.x) / seconds, (last.y - first.y) / seconds, (last.z - first.z) / seconds
     return vx, vy, vz, math.sqrt(vx * vx + vy * vy + vz * vz)
@@ -439,6 +477,7 @@ local function mustDropOnEnd(self, carry)
 end
 
 local function gripWasLetGo(self, carry)
+    if self:doesMenuTakeInput() then return false end
     local pose = self:getHandState(carry.hand)
     return type(pose) == "table" and pose.tracked == true and not state.gripDown[carry.hand]
 end
@@ -494,7 +533,7 @@ function VRCompanion:peekObjectGrabRayTarget()
     local peeked = state.peeked
     peeked.target = nil
     local player = localPlayer()
-    if player == nil or aimedRay(self, player) == nil then
+    if player == nil or aimingRay(self, player) == nil then
         state.landedNode = nil
         return false
     end
@@ -508,18 +547,18 @@ function VRCompanion:peekObjectGrabRayTarget()
         return false
     end
     peeked.player, peeked.node, peeked.target, peeked.waiting = player, node, target, waiting
-    return true, x, y, z, (tonumber(target.distance) or 0) - self.OBJECT_GRAB_REACH_BEHIND
+    return true, x, y, z, (tonumber(target.distance) or 0) - (state.aimBehind or self.OBJECT_GRAB_REACH_BEHIND)
 end
 
 function VRCompanion:settleObjectGrabRayTarget(isTarget)
     local peeked = state.peeked
     local target = peeked.target
     peeked.target = nil
-    if target == nil then return end
     if not isTarget then
         state.landedNode = nil
         return
     end
+    if target == nil then return end
     if peeked.node ~= state.landedNode then
         state.landedNode = peeked.node
         self:pulsePointerHand(self.OBJECT_GRAB_LAND_PULSE_MS, self.OBJECT_GRAB_LAND_PULSE_STRENGTH)
@@ -531,7 +570,7 @@ local function drawIsHeldBack(tool)
     if type(tool) ~= "table" or type(tool.getCarryingPlayer) ~= "function" then return false end
     local ok, player = pcall(tool.getCarryingPlayer, tool)
     if not ok or player == nil or player ~= localPlayer() then return false end
-    return aimedRay(VRCompanion, player) ~= nil
+    return aimingRay(VRCompanion, player) ~= nil
 end
 
 WRAP_SPECS.handsOnDraw.make = function(original)
@@ -609,13 +648,13 @@ local function statusField(self)
         return "Object Grab: off (the setting is off: vrObjectGrab on turns it on)"
     end
     if state.carry ~= nil then return "Object Grab: on (carrying)" end
-    local ray, why = aimedRay(self, localPlayer())
+    local ray, why = aimingRay(self, localPlayer())
     if ray ~= nil then return "Object Grab: on (aiming)" end
     return "Object Grab: off (" .. tostring(why) .. ")"
 end
 
 local function aimingField(self)
-    local ray = aimedRay(self, localPlayer())
+    local ray = aimingRay(self, localPlayer())
     if ray == nil or self.pointerHand == nil then return "aiming: no" end
     return "aiming: the " .. handName(self.pointerHand) .. " hand (the Pointer Hand)"
 end
@@ -628,7 +667,7 @@ local function limitsField(hands)
 end
 
 local function rayTargetField(self, player, hands)
-    if aimedRay(self, player) == nil then return "Pointer Ray on: nothing (not aiming)" end
+    if aimingRay(self, player) == nil then return "Pointer Ray on: nothing (not aiming)" end
     local key = engine("HandToolHands")
     local targeter = type(player) == "table" and player.targeter or nil
     local target = nil
@@ -641,7 +680,7 @@ local function rayTargetField(self, player, hands)
     local distance = tonumber(target.distance) or 0
     local mass = nodeMass(target.node)
     local text = string.format("Pointer Ray on: an object %.2f m from the fingertip (%.2f m along the look ray)",
-        distance - self.OBJECT_GRAB_REACH_BEHIND, distance)
+        distance - (state.aimBehind or self.OBJECT_GRAB_REACH_BEHIND), distance)
     if mass ~= nil then
         text = text .. string.format(", mass %.3f t%s", mass, limit ~= nil and string.format(" of %.3f t", limit) or "")
     end
@@ -745,6 +784,7 @@ VRCompanion:registerSubsystem("objectGrab", {
     mapUnload = function(self) self:resetObjectGrab() end,
     saveSettings = function(self, xmlFile, xml) self:saveObjectGrabSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadObjectGrabSetting(xmlFile, xml) end,
+    resetSettings = function(self) self.objectGrabEnabled = self.DEFAULT_OBJECT_GRAB_ENABLED end,
     consoleCommands = {
         { name = "vrObjectGrab", description = "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", method = "consoleCommandSetObjectGrab" },
         { name = "vrObjectGrabDiagnostics", description = "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", method = "consoleCommandObjectGrabDiagnostics" },
