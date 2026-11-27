@@ -13,7 +13,7 @@ local MAX_ATTEMPTS = 5
 local answeredDialog = nil
 local attempts = 0
 local lastAttemptTick = nil
-local pendingNotice = nil
+local loggedGiveUp = false
 local loggedWaiting = false
 local warnedNoMethod = false
 
@@ -21,8 +21,14 @@ local function forgetDialog()
     answeredDialog = nil
     attempts = 0
     lastAttemptTick = nil
-    pendingNotice = nil
+    loggedGiveUp = false
     loggedWaiting = false
+end
+
+local function findFishDialog(self)
+    local gui = g_gui or (_G and _G.g_gui)
+    if type(gui) ~= "table" or gui.currentDialogName ~= "FishDialog" then return nil end
+    return self:findStereoDialog(gui)
 end
 
 local function showNotification(text)
@@ -41,22 +47,28 @@ end
 
 local function notificationText(choice, species, price)
     if choice == "sell" then
-        if species ~= nil then return string.format("Sold %s for %s", species, price) end
-        return "Fish sold"
+        if species ~= nil then
+            return VRCompanion.formatLocalisedText("vrFishCatch_soldFor", "Sold %s for %s", species, price)
+        end
+        return VRCompanion.getLocalisedText("vrFishCatch_sold", "Fish sold")
     end
-    if species ~= nil then return string.format("Released %s", species) end
-    return "Fish released"
+    if species ~= nil then
+        return VRCompanion.formatLocalisedText("vrFishCatch_releasedNamed", "Released %s", species)
+    end
+    return VRCompanion.getLocalisedText("vrFishCatch_released", "Fish released")
 end
 
 function VRCompanion:updateFishCatch()
     local choice = self.fishCatchAnswer
-    local dialog = self:findStereoDialog()
+    local dialog = findFishDialog(self)
     if dialog == nil then
-        if pendingNotice ~= nil then showNotification(pendingNotice) end
         forgetDialog()
         return
     end
-    if choice ~= "sell" and choice ~= "release" then return end
+    if choice ~= "sell" and choice ~= "release" then
+        forgetDialog()
+        return
+    end
     if dialog ~= answeredDialog then
         forgetDialog()
         answeredDialog = dialog
@@ -65,8 +77,8 @@ function VRCompanion:updateFishCatch()
     local tick = self.frameTicks or 0
     if lastAttemptTick ~= nil and tick - lastAttemptTick < RETRY_TICKS then return end
     if attempts >= MAX_ATTEMPTS then
-        if pendingNotice ~= nil then
-            pendingNotice = nil
+        if not loggedGiveUp then
+            loggedGiveUp = true
             print(string.format("[FS25_VR] vrFishCatch %s: the dialog is still open after %d attempts; it is left for the player.", choice, attempts))
         end
         return
@@ -96,19 +108,16 @@ function VRCompanion:updateFishCatch()
 
     attempts = attempts + 1
     lastAttemptTick = tick
-    if pendingNotice == nil then
-        local species, price = readCatch(dialogTarget)
-        pendingNotice = notificationText(choice, species, price)
-    end
+    local species, price = readCatch(dialogTarget)
     print(string.format("[FS25_VR] vrFishCatch %s: calling the dialog's %s (attempt %d).", choice, methodName, attempts))
     local ok, err = pcall(dialogTarget[methodName], dialogTarget)
     if not ok then
         print(string.format("[FS25_VR] vrFishCatch %s: calling the dialog's %s failed: %s", choice, methodName, tostring(err)))
         return
     end
-    if self:findStereoDialog() ~= dialog then
-        showNotification(pendingNotice)
-        pendingNotice = nil
+    if findFishDialog(self) ~= dialog then
+        showNotification(notificationText(choice, species, price))
+        forgetDialog()
     end
 end
 

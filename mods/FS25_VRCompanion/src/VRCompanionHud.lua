@@ -630,11 +630,51 @@ function VRCompanion:getFillLevelsBlockSize(display)
     return width, height
 end
 
+local lastFillLevelsPlacement = {
+    display = nil,
+    frameTicks = nil,
+    scale = nil,
+    offset = nil,
+    marginX = nil,
+    marginY = nil,
+    w = nil,
+    h = nil,
+    x = nil,
+    y = nil,
+    sm = nil,
+}
+
+local function isFillLevelsPlacementCurrent(self, display)
+    if lastFillLevelsPlacement.display ~= display then return false end
+    if lastFillLevelsPlacement.frameTicks ~= self.frameTicks then return false end
+    local uiScale = self:getHudGroupScale("speedometer")
+    if display.vrUiScale ~= uiScale or lastFillLevelsPlacement.scale ~= uiScale then return false end
+    local currentOffset = self.currentConvergenceOffset or 0.0
+    if lastFillLevelsPlacement.offset ~= currentOffset then return false end
+    local layout = self:getHudGroupLayout("speedometer")
+    if lastFillLevelsPlacement.marginX ~= layout.marginX or lastFillLevelsPlacement.marginY ~= layout.marginY then return false end
+    if display.x ~= lastFillLevelsPlacement.x or display.y ~= lastFillLevelsPlacement.y then return false end
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local sm = (hud ~= nil) and (hud.speedMeter or hud.speedMeterDisplay) or nil
+    if lastFillLevelsPlacement.sm ~= sm then return false end
+    local w, h = self:getFillLevelsBlockSize(display)
+    if lastFillLevelsPlacement.w ~= w or lastFillLevelsPlacement.h ~= h then return false end
+    return true
+end
+
 function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     if display == nil then return end
 
     local currentOffset = offset or self.currentConvergenceOffset or 0.0
     local uiScale = self:getHudGroupScale("speedometer")
+    if display.vrUiScale ~= uiScale then
+        display.vrUiScale = uiScale
+        if type(display.setScale) == "function" then
+            pcall(display.setScale, display, uiScale)
+        end
+    end
+
     local flPosX, fillBottom = self:getHudDisplayPosition(display, "FillLevelsDisplay", currentOffset)
 
     display.anchorX = flPosX
@@ -649,13 +689,6 @@ function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     display.y = fillBottom
     display.offsetX = 0
     display.offsetY = 0
-
-    if display.vrUiScale ~= uiScale then
-        display.vrUiScale = uiScale
-        if type(display.setScale) == "function" then
-            pcall(display.setScale, display, uiScale)
-        end
-    end
 
     if type(display.setPosition) == "function" then
         pcall(display.setPosition, display, flPosX, fillBottom)
@@ -711,6 +744,20 @@ function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
         pcall(sm.setPosition, sm, smX, smBottom)
     end
 
+    local layout = self:getHudGroupLayout("speedometer")
+    local w, h = self:getFillLevelsBlockSize(display)
+    lastFillLevelsPlacement.display = display
+    lastFillLevelsPlacement.frameTicks = self.frameTicks
+    lastFillLevelsPlacement.scale = uiScale
+    lastFillLevelsPlacement.offset = currentOffset
+    lastFillLevelsPlacement.marginX = layout.marginX
+    lastFillLevelsPlacement.marginY = layout.marginY
+    lastFillLevelsPlacement.w = w
+    lastFillLevelsPlacement.h = h
+    lastFillLevelsPlacement.x = flPosX
+    lastFillLevelsPlacement.y = fillBottom
+    lastFillLevelsPlacement.sm = sm
+
     return flPosX, fillBottom, smBottom
 end
 
@@ -742,11 +789,8 @@ function VRCompanion:updateHudConvergence(dt)
 
     if self.currentConvergenceDisparity == nil or dt == nil then
         self.currentConvergenceDisparity = targetDisparity
-    else
-        local dtSec = 0.0166
-        if dt > 0 then
-            dtSec = (dt > 1.0) and (dt * 0.001) or dt
-        end
+    elseif type(dt) == "number" and dt > 0 and dt == dt then
+        local dtSec = (dt > 1.0) and (dt * 0.001) or dt
         local smoothSpeed = self.CONVERGENCE_SMOOTH_SPEED or 12.0
         local step = math.min(1.0, dtSec * smoothSpeed)
         self.currentConvergenceDisparity = self.currentConvergenceDisparity + (targetDisparity - self.currentConvergenceDisparity) * step
@@ -923,9 +967,12 @@ function VRCompanion:setHudState(newState)
 end
 
 function VRCompanion:cycleHudState()
-    local curTime = g_time
-    if curTime ~= nil and self.lastHudToggleTime ~= nil and (curTime - self.lastHudToggleTime) < 300 then
-        return self:getHudState()
+    local curTime = self:getCurrentTimeMs()
+    if curTime ~= nil and self.lastHudToggleTime ~= nil then
+        local elapsed = curTime - self.lastHudToggleTime
+        if elapsed >= 0 and elapsed < 300 then
+            return self:getHudState()
+        end
     end
     self.lastHudToggleTime = curTime
 
@@ -1054,15 +1101,15 @@ end
 function VRCompanion:positionHudDisplay(display, displayName)
     if display == nil then return end
 
+    if displayName == "FillLevelsDisplay" then
+        self:positionFillLevelsUnderSpeedometer(display)
+        return
+    end
+
     local scale = self:getHudDisplayScale(displayName)
 
     if type(display.setScale) == "function" then
         pcall(function() display:setScale(scale) end)
-    end
-
-    if displayName == "FillLevelsDisplay" then
-        self:positionFillLevelsUnderSpeedometer(display)
-        return
     end
 
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
@@ -1148,6 +1195,23 @@ function VRCompanion:applyHudSafeArea()
         self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop))
 end
 
+local function restoreHudDisplay(display, restoredScale)
+    if display == nil then return end
+    display.vrUiScale = nil
+    if type(display.setScale) == "function" then
+        pcall(display.setScale, display, restoredScale)
+    end
+    if type(display.storeScaledValues) == "function" then
+        pcall(display.storeScaledValues, display)
+    end
+    if type(display.reposition) == "function" then
+        pcall(display.reposition, display)
+    end
+    if type(display.updatePosition) == "function" then
+        pcall(display.updatePosition, display)
+    end
+end
+
 function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     local left = 0.0
     local right = 1.0
@@ -1193,6 +1257,7 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     self.hudAnchorTop = baseTop
     self.currentConvergenceOffset = 0.0
     self.currentConvergenceDisparity = 0.0
+    lastFillLevelsPlacement.display = nil
 
     local restoredScale = self.origUiScale or 1.0
     if not preserveOrigAnchors then
@@ -1202,28 +1267,18 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
     if hud ~= nil then
-        local standardDisplays = {
-            hud.speedMeter or hud.speedMeterDisplay,
-            hud.inputHelp or hud.inputHelpDisplay,
-            hud.gameInfo or hud.gameInfoDisplay,
-            hud.contextAction or hud.contextActionDisplay,
-            hud.ingameMap or hud.ingameMapDisplay
-        }
-        for _, display in ipairs(standardDisplays) do
-            if display ~= nil then
-                if type(display.storeScaledValues) == "function" then
-                    pcall(function() display:storeScaledValues() end)
-                end
-                if type(display.setScale) == "function" then
-                    pcall(function() display:setScale(restoredScale) end)
-                end
-                if type(display.reposition) == "function" then
-                    pcall(function() display:reposition() end)
-                end
-            end
+        local fillLevels = self:getFillLevelsDisplay(hud)
+        local speedMeter = hud.speedMeter or hud.speedMeterDisplay
+        restoreHudDisplay(speedMeter, restoredScale)
+        restoreHudDisplay(hud.inputHelp or hud.inputHelpDisplay, restoredScale)
+        restoreHudDisplay(hud.gameInfo or hud.gameInfoDisplay, restoredScale)
+        restoreHudDisplay(hud.contextAction or hud.contextActionDisplay, restoredScale)
+        restoreHudDisplay(hud.ingameMap or hud.ingameMapDisplay, restoredScale)
+        if fillLevels ~= nil and fillLevels ~= speedMeter then
+            restoreHudDisplay(fillLevels, restoredScale)
         end
         if type(hud.storeScaledValues) == "function" then
-            pcall(function() hud:storeScaledValues() end)
+            pcall(hud.storeScaledValues, hud)
         end
     end
     print("[FS25_VR] Restored standard 2D HUD corner anchors.")
@@ -1244,7 +1299,9 @@ function VRCompanion:getMapDrawShift()
     if map == nil or map.isFullscreen == true then return nil end
     if self.is2DViewActive or self:getHudState() == self.HUD_STATE_HIDDEN then return nil end
     local x, y = self:getHudDisplayPosition(map, "IngameMap", self.currentConvergenceOffset)
-    return x - (self.mapEngineBaseX or 0.0), y - (self.mapEngineBaseY or 0.0)
+    local baseX = g_safeFrameOffsetX or (_G and _G.g_safeFrameOffsetX) or 0.0
+    local baseY = g_safeFrameOffsetY or (_G and _G.g_safeFrameOffsetY) or 0.0
+    return x - baseX, y - baseY
 end
 
 function VRCompanion:runMapDraw(fn, ...)
@@ -1301,7 +1358,8 @@ function VRCompanion:hookHud()
                     end
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
-                        if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
+                        if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive
+                            and not isFillLevelsPlacementCurrent(self, displaySelf) then
                             self:positionFillLevelsUnderSpeedometer(displaySelf)
                         end
                         if not self.hasLoggedFillLevelsDisplayInfo then
@@ -1357,8 +1415,6 @@ function VRCompanion:hookHud()
         end
     end
 
-    self.mapEngineBaseX = _G.g_safeFrameOffsetX or 0.0
-    self.mapEngineBaseY = _G.g_safeFrameOffsetY or 0.0
     self.mapDrawDepth = 0
     self.mapHotspotDepth = 0
     for _, className in ipairs(MAP_DRAW_CLASSES) do
@@ -1603,13 +1659,15 @@ VRCompanion:registerSubsystem("hud", {
         if self.DEFAULT_HUD_DEPTH ~= nil then
             self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
         end
+        self.lastHudToggleTime = nil
         self.activeFillLevelsDisplay = nil
+        lastFillLevelsPlacement.display = nil
         self:stopHudTrace()
         self.hudEyeTestEye = nil
     end,
     saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
     consoleCommands = {
-        { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
+        { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 2.5 by default): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
     },
 })

@@ -1335,7 +1335,7 @@ test("VrHudGroupAppliesSavesAndConfirmsOnScreen", function()
     assert(near(saved.store["vrSettings.hudGroupMapMarginHorizontal"], 0.12), "saved horizontal margin")
     assert(near(saved.store["vrSettings.hudGroupMapMarginVertical"], 0.34), "saved vertical margin")
     assert(near(saved.store["vrSettings.hudGroupMapScale"], 0.70), "saved scale")
-    assert(#warnings == 1 and string.find(warnings[1], "map", 1, true) and string.find(warnings[1], "Saved", 1, true),
+    assert(#warnings == 1 and string.find(warnings[1], "Map", 1, true) and string.find(warnings[1], "Saved", 1, true),
         "shows an on-screen confirmation")
     assert(string.find(result, "map", 1, true) and not string.find(result, "Usage", 1, true), "console reply confirms the change")
 
@@ -1703,6 +1703,126 @@ test("TwoDFloatingWindowModeDrawsTheGroupsAtTheirOwnSizeWhateverTheHudDepth", fu
         VRCompanion.is2DViewActive = false
         assert(near(scale, 0.82), "2D Floating Window Mode ignores the HUD depth, got " .. scale)
     end)
+end)
+
+test("RestoreHudSafeAreaRestoresFillLevelsScaleBeforeStoreAndClearsVrUiScale", function()
+    _G.GameSettings = { SETTING = { UI_SCALE = "uiScale" } }
+    _G.g_gameSettings = { getValue = function() return 1.20 end }
+    local calls = {}
+    local function makeTracked(name)
+        return {
+            width = 0.12,
+            height = 0.04,
+            scale = 1.20,
+            setPosition = function(self, x, y) self.position = { x = x, y = y } end,
+            setScale = function(self, s)
+                self.scale = s
+                table.insert(calls, name .. ":setScale:" .. string.format("%.2f", s))
+            end,
+            storeScaledValues = function(self)
+                table.insert(calls, name .. ":storeScaledValues:" .. string.format("%.2f", self.scale))
+            end,
+            reposition = function(self)
+                self.repositioned = true
+                table.insert(calls, name .. ":reposition")
+            end,
+        }
+    end
+    local hud = {
+        speedMeter = makeTracked("speedMeter"),
+        fillLevels = makeTracked("fillLevels"),
+        inputHelp = makeTracked("inputHelp"),
+        gameInfo = makeTracked("gameInfo"),
+        contextAction = makeTracked("contextAction"),
+        ingameMap = makeTracked("ingameMap"),
+    }
+    loadMapWith(hud)
+    assert(hud.fillLevels.vrUiScale ~= nil, "fillLevels has vrUiScale in VR")
+
+    calls = {}
+    VRCompanion:set2DViewActive(true)
+    assert(hud.fillLevels.vrUiScale == nil, "2D mode clears fillLevels.vrUiScale")
+    assert(near(hud.fillLevels.scale, 1.20), "2D mode restores fillLevels scale to base 1.20")
+    assert(hud.fillLevels.repositioned == true, "2D mode repositions fillLevels")
+
+    local function indexOf(needle)
+        for i, entry in ipairs(calls) do
+            if entry == needle then return i end
+        end
+        return nil
+    end
+    for _, name in ipairs({ "speedMeter", "fillLevels", "inputHelp", "gameInfo", "contextAction", "ingameMap" }) do
+        local setIdx = indexOf(name .. ":setScale:1.20")
+        local storeIdx = indexOf(name .. ":storeScaledValues:1.20")
+        local repoIdx = indexOf(name .. ":reposition")
+        assert(setIdx ~= nil and storeIdx ~= nil and repoIdx ~= nil, name .. " missing restore calls")
+        assert(setIdx < storeIdx and storeIdx < repoIdx, name .. " must call setScale before storeScaledValues before reposition")
+    end
+
+    VRCompanion:set2DViewActive(false)
+    assert(hud.fillLevels.vrUiScale ~= nil, "returning to VR re-applies fillLevels.vrUiScale")
+    unloadMap()
+    assert(hud.fillLevels.vrUiScale == nil, "map unload clears fillLevels.vrUiScale")
+    assert(near(hud.fillLevels.scale, 1.20), "map unload restores fillLevels scale")
+    _G.GameSettings = nil
+    _G.g_gameSettings = nil
+end)
+
+test("FillLevelsSetsScaleBeforeMeasuringPositionAndDeduplicatesSameFrameDraw", function()
+    local setPosCalls = 0
+    local hud = makeStackHud(1)
+    hud.fillLevels.getWidth = function(self) return 0.16 * (self.scale or 1.0) end
+    hud.fillLevels.getHeight = function(self) return 0.06 * (self.scale or 1.0) end
+    hud.fillLevels.setScale = function(self, s) self.scale = s end
+    hud.fillLevels.scale = 1.0
+    local origSetPos = hud.fillLevels.setPosition
+    hud.fillLevels.setPosition = function(self, x, y)
+        setPosCalls = setPosCalls + 1
+        return origSetPos(self, x, y)
+    end
+    _G.FillLevelsDisplay = { draw = function() end }
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(near(hud.fillLevels.position.x, 0.65 - 0.16 * 0.50),
+        "FillLevels position must use width measured after setScale, got " .. tostring(hud.fillLevels.position.x))
+
+    VRCompanion:update(16)
+    local callsAfterUpdate = setPosCalls
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(setPosCalls == callsAfterUpdate, "same-frame draw after updateHudConvergence skips redundant repositioning")
+
+    hud.fillLevels.fillLevelData = { {}, {} }
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(setPosCalls == callsAfterUpdate + 1, "changing fillLevelData in draw triggers restack")
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+    _G.FillLevelsDisplay = nil
+    VRCompanion.activeFillLevelsDisplay = nil
+end)
+
+test("MapDrawShiftReadsSafeFrameOffsetsDynamically", function()
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.01, 0.01
+    _G.IngameMap = { draw = function() end, getIsVisible = function() return true end }
+    local hud = makeHud()
+    hud.ingameMap = _G.IngameMap
+    loadMapWith(hud)
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    VRCompanion:setHudGroupLayout("map", 0.20, 0.25)
+    VRCompanion.currentConvergenceOffset = 0.0
+
+    local dx1, dy1 = VRCompanion:getMapDrawShift()
+    assert(near(dx1, 0.20 - 0.01) and near(dy1, 0.25 - 0.01), "uses initial safe frame offsets")
+
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.05, 0.04
+    local dx2, dy2 = VRCompanion:getMapDrawShift()
+    assert(near(dx2, 0.20 - 0.05) and near(dy2, 0.25 - 0.04), "reads updated g_safeFrameOffsetX/Y dynamically")
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+    _G.IngameMap = nil
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

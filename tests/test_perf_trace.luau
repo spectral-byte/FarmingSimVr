@@ -86,6 +86,8 @@ end)
 test("StartingATraceTimesTheGameUpdateTheModUpdateTheCameraAndTheDraw", function()
     local reply = VRCompanion:consoleCommandPerfTrace("5")
     assert(string.find(reply, "for 5 s into fs25_vr.log", 1, true), reply)
+    assert(string.find(reply, "version.dll", 1, true), "must name version.dll: " .. reply)
+    assert(string.find(reply, "dxgi.dll", 1, true) == nil, "must not name dxgi.dll: " .. reply)
     assert(VRCompanion.perfTracing == true, "the trace runs")
     assert(_G.perfCalls[1] == "start 5", calls())
     _G.perfCalls = {}
@@ -136,6 +138,8 @@ test("WithoutTheInjectorTheCommandSaysSo", function()
     VRBridge = saved
     assert(ok, tostring(reply))
     assert(string.find(reply, "needs the Injector", 1, true), reply)
+    assert(string.find(reply, "version.dll", 1, true), "must name version.dll: " .. reply)
+    assert(string.find(reply, "dxgi.dll", 1, true) == nil, "must not name dxgi.dll: " .. reply)
     assert(VRCompanion.perfTracing == false)
 end)
 

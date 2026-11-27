@@ -96,7 +96,7 @@ std::string Command(const std::string& name, const std::vector<std::string>& arg
 
 std::string CycleHud(int presses, const std::string& before = "") {
     std::string chunk = before + "\nrunCommand('vrHudState', '0')";
-    for (int i = 0; i < presses; ++i) chunk += "\n_G.shown = {}\nVRCompanion:cycleHudState()";
+    for (int i = 0; i < presses; ++i) chunk += "\n_G.shown = {}\nVRCompanion.lastHudToggleTime = nil\nVRCompanion:cycleHudState()";
     return chunk;
 }
 
@@ -128,8 +128,8 @@ const std::vector<Notification>& Notifications() {
           "VR HUD Safe Area: Horizontal=0.05, Vertical=0.04 (Saved)",
           "VR-HUD-Sicherheitsbereich: Horizontal=0.05, Vertikal=0.04 (Gespeichert)" },
         { "HUD Group margins and scale", Command("vrHudGroup", { "map", "0.1", "0.2", "1.5" }),
-          "VR HUD map group: Horizontal=0.10, Vertical=0.20, Scale=1.50x (Saved)",
-          "VR-HUD-Gruppe map: Horizontal=0.10, Vertikal=0.20, Skalierung=1.50x (Gespeichert)" },
+          "VR HUD Map group: Horizontal=0.10, Vertical=0.20, Scale=1.50x (Saved)",
+          "VR-HUD-Gruppe Karte: Horizontal=0.10, Vertikal=0.20, Skalierung=1.50x (Gespeichert)" },
         { "HUD state set Hidden", Command("vrHudState", { "0" }), "VR HUD: Hidden (0)", "VR-HUD: Ausgeblendet (0)" },
         { "HUD state set Streamlined", Command("vrHudState", { "1" }), "VR HUD: Streamlined (1)", "VR-HUD: Reduziert (1)" },
         { "HUD state set Full", Command("vrHudState", { "2" }), "VR HUD: Full (2)", "VR-HUD: Vollständig (2)" },

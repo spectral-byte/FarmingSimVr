@@ -121,7 +121,7 @@ function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
                 end
                 if type(inputBinding.setActionEventText) == "function" then
                     pcall(function()
-                        local txt = (g_i18n and g_i18n:getText(row.textKey)) or row.fallbackText
+                        local txt = VRCompanion.getLocalisedText(row.textKey, row.fallbackText)
                         inputBinding:setActionEventText(eventId, txt)
                     end)
                 end
@@ -204,7 +204,7 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
         pcall(function()
             mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_groupLayoutSet",
                 "VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)",
-                groupName, layout.marginX, layout.marginY, layout.scale), 2500)
+                self:getHudGroupText(groupName), layout.marginX, layout.marginY, layout.scale), 2500)
         end)
     end
     return string.format("VR HUD %s group updated and saved: horizontal=%.2f, vertical=%.2f, scale=%.2f",

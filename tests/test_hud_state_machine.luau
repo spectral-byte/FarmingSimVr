@@ -36,6 +36,9 @@ test("DefinesThreeStageHudStateConstants", function()
 end)
 
 test("CyclesThroughThreeStageStateMachine", function()
+    local savedTime = _G.g_time
+    _G.g_time = 1000
+    VRCompanion.lastHudToggleTime = nil
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     assert(VRCompanion:getHudState() == 0, "Initial state must be 0 (Hidden)")
 
@@ -43,13 +46,17 @@ test("CyclesThroughThreeStageStateMachine", function()
     assert(s1 == 1, "First cycle must advance to 1 (Streamlined)")
     assert(VRCompanion:getHudState() == 1, "getHudState must report 1")
 
+    _G.g_time = 1400
     local s2 = VRCompanion:cycleHudState()
     assert(s2 == 2, "Second cycle must advance to 2 (Full)")
     assert(VRCompanion:getHudState() == 2, "getHudState must report 2")
 
+    _G.g_time = 1800
     local s3 = VRCompanion:cycleHudState()
     assert(s3 == 0, "Third cycle must return to 0 (Hidden)")
     assert(VRCompanion:getHudState() == 0, "getHudState must report 0")
+    VRCompanion.lastHudToggleTime = nil
+    _G.g_time = savedTime
 end)
 
 test("ClampsHudStateValuesWithinRange", function()
@@ -61,18 +68,64 @@ test("ClampsHudStateValuesWithinRange", function()
 end)
 
 test("OnHudToggleActionAdvancesStateMachine", function()
+    local savedTime = _G.g_time
+    _G.g_time = 1000
+    VRCompanion.lastHudToggleTime = nil
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
     local res1 = VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1)
     assert(res1 == 1, "onHudToggleAction must advance state to 1")
     assert(VRCompanion:getHudState() == 1, "hudState must be 1")
 
+    _G.g_time = 1400
     local res2 = VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1)
     assert(res2 == 2, "onHudToggleAction must advance state to 2")
     assert(VRCompanion:getHudState() == 2, "hudState must be 2")
 
+    _G.g_time = 1800
     local res3 = VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1)
     assert(res3 == 0, "onHudToggleAction must return state to 0")
     assert(VRCompanion:getHudState() == 0, "hudState must be 0")
+    VRCompanion.lastHudToggleTime = nil
+    _G.g_time = savedTime
+end)
+
+test("CycleHudStateDebouncesRapidPressesAndAllowsToggleAfterReload", function()
+    local savedTime = _G.g_time
+    _G.g_time = 10000
+    VRCompanion.lastHudToggleTime = nil
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+
+    assert(VRCompanion:cycleHudState() == 1, "first press advances to Streamlined")
+    _G.g_time = 10100
+    assert(VRCompanion:cycleHudState() == 1, "press within 300ms is debounced")
+    _G.g_time = 10300
+    assert(VRCompanion:cycleHudState() == 2, "press at 300ms advances to Full")
+
+    _G.g_time = 500
+    assert(VRCompanion:cycleHudState() == 0, "backward clock reset after reload does not lock out toggle")
+
+    _G.g_time = 50000
+    assert(VRCompanion:cycleHudState() == 1, "toggles before unload")
+    assert(VRCompanion.lastHudToggleTime == 50000)
+    VRCompanion:deleteMap()
+    assert(VRCompanion.lastHudToggleTime == nil, "map unload clears lastHudToggleTime")
+    _G.g_time = 100
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    assert(VRCompanion:cycleHudState() == 1, "toggle works immediately after map reload")
+
+    VRCompanion.lastHudToggleTime = nil
+    _G.g_time = savedTime
+end)
+
+test("VrDialogDepthDescriptionReportsDefaultHudDepth", function()
+    local commands = {}
+    local origAdd = _G.addConsoleCommand
+    _G.addConsoleCommand = function(name, desc, method) commands[name] = desc end
+    VRCompanion:addSubsystemConsoleCommands()
+    _G.addConsoleCommand = origAdd
+    assert(commands.vrDialogDepth ~= nil, "vrDialogDepth must be registered")
+    assert(string.find(commands.vrDialogDepth, "1.8", 1, true) == nil, "must not claim HUD is at 1.8: " .. commands.vrDialogDepth)
+    assert(string.find(commands.vrDialogDepth, "2.5", 1, true) ~= nil, "must report 2.5 default: " .. commands.vrDialogDepth)
 end)
 
 test("IsDisplayVisibleFiltersComponentsAcrossAllThreeStates", function()
@@ -874,6 +927,7 @@ test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
 
         VRCompanion:cycleHudState()
         assert(observed.store["vrSettings.hudState"] == "Streamlined", "the HUD Toggle Action saves the new state")
+        VRCompanion.lastHudToggleTime = nil
         VRCompanion:cycleHudState()
         assert(observed.store["vrSettings.hudState"] == "Full", "cycling again saves Full")
 
