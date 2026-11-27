@@ -870,6 +870,44 @@ test("UnloadRestoresTheClassesAndTheVehiclesStillAlive", function()
     _G.g_currentMission = nil
 end)
 
+test("InheritedVehicleInstancesAreNotDoubleWrappedAndLeaveNoWrapperAfterUnload", function()
+    local calls = 0
+    local origClassSpeed = function(self, dt) calls = calls + 1; return 10 / dt end
+    _G.Vehicle = { updateVehicleSpeed = origClassSpeed }
+    local veh = setmetatable({}, { __index = _G.Vehicle })
+    _G.g_currentMission = { vehicles = { veh } }
+
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion:hookVehicleSpeed()
+    assert(rawget(veh, "updateVehicleSpeed") == nil, "inherited vehicle must not get an own wrapper copy")
+
+    assert(veh:updateVehicleSpeed(0.0) == nil, "dt=0 blocked via Vehicle class guard")
+    assert(calls == 0)
+    assert(math.abs(veh:updateVehicleSpeed(2.0) - 5.0) < 1e-6, "valid dt runs original once")
+    assert(calls == 1)
+
+    local wrappedClass = _G.Vehicle.updateVehicleSpeed
+    local thirdPartyCalls = 0
+    local thirdPartyWrap = function(self, dt)
+        thirdPartyCalls = thirdPartyCalls + 1
+        return wrappedClass(self, dt)
+    end
+    _G.Vehicle.updateVehicleSpeed = thirdPartyWrap
+
+    VRCompanion:refreshVehicleSpeedGuards()
+    assert(rawget(veh, "updateVehicleSpeed") == nil, "refresh must not double-wrap inheriting vehicle under third-party wrap")
+
+    VRCompanion:unhookVehicleSpeed()
+    assert(_G.Vehicle.updateVehicleSpeed == thirdPartyWrap, "unhookVehicleSpeed must preserve downstream third-party wrapper")
+    assert(rawget(veh, "updateVehicleSpeed") == nil, "live vehicle must have no VRCompanion wrapper pinned on unload")
+
+    assert(math.abs(veh:updateVehicleSpeed(2.0) - 5.0) < 1e-6)
+    assert(thirdPartyCalls == 1 and calls == 2)
+
+    _G.Vehicle = nil
+    _G.g_currentMission = nil
+end)
+
 test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
     local setTransCalls = {}
 
