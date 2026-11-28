@@ -16,6 +16,7 @@ public:
     FunctionDetour& operator=(FunctionDetour&& other) noexcept;
 
     bool Install(void* targetFunction, void* detourFunction);
+    bool Disable();
     bool Uninstall();
 
     void* GetOriginal() const { return m_original.load(std::memory_order_acquire); }

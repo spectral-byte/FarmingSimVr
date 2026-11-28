@@ -88,6 +88,29 @@ const char* StringArgument(lua_State* L, int index) {
     return lua_type(L, index) == LUA_TSTRING ? lua_tostring(L, index) : nullptr;
 }
 
+enum class DualBackendCombine {
+    ActiveAnyInactiveAll,
+    ActiveAllInactiveAny,
+};
+
+bool CombineUpscalerBackends(const NgxInterceptor* ngx, const FidelityFxInterceptor* ffx,
+                             bool ngxValue, bool ffxValue, DualBackendCombine combine) {
+    const bool ngxActive = ngx && (ngx->IsAttached() || ngx->GetActiveVirtualHandleCount() > 0);
+    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
+
+    if (ngxActive && !ffxActive) return ngxValue;
+    if (ffxActive && !ngxActive) return ffxValue;
+    if (ngxActive && ffxActive) {
+        return combine == DualBackendCombine::ActiveAnyInactiveAll ? (ngxValue || ffxValue) : (ngxValue && ffxValue);
+    }
+    if (ngx && ffx) {
+        return combine == DualBackendCombine::ActiveAnyInactiveAll ? (ngxValue && ffxValue) : (ngxValue || ffxValue);
+    }
+    if (ngx) return ngxValue;
+    if (ffx) return ffxValue;
+    return false;
+}
+
 }
 
 VRBridge& VRBridge::FromUpvalue(lua_State* L) {
@@ -113,50 +136,26 @@ FidelityFxInterceptor* VRBridge::ResolveFidelityFxInterceptor() const {
 
 bool VRBridge::SetMvFixEnabled(bool enabled) {
     FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
-    if (!m_ngxInterceptor && !ffx) return false;
-
-    const bool ngxActive =
-        m_ngxInterceptor && (m_ngxInterceptor->IsAttached() || m_ngxInterceptor->GetActiveVirtualHandleCount() > 0);
-    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
-
     const bool ngxOk = m_ngxInterceptor ? (m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled) : false;
     const bool ffxOk = ffx ? (ffx->SetMvFixEnabled(enabled) == enabled) : false;
-
-    if (ngxActive && !ffxActive) return ngxOk;
-    if (ffxActive && !ngxActive) return ffxOk;
-    if (ngxActive && ffxActive) return ngxOk || ffxOk;
-    if (m_ngxInterceptor && ffx) return ngxOk && ffxOk;
-    return m_ngxInterceptor ? ngxOk : ffxOk;
+    return CombineUpscalerBackends(m_ngxInterceptor.get(), ffx, ngxOk, ffxOk,
+                                   DualBackendCombine::ActiveAnyInactiveAll);
 }
 
 bool VRBridge::IsMvFixEnabled() const {
     FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
-    const bool ngxActive =
-        m_ngxInterceptor && (m_ngxInterceptor->IsAttached() || m_ngxInterceptor->GetActiveVirtualHandleCount() > 0);
-    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
-
-    if (ngxActive && !ffxActive) return m_ngxInterceptor->IsMvFixEnabled();
-    if (ffxActive && !ngxActive) return ffx->IsMvFixEnabled();
-    if (ngxActive && ffxActive) return m_ngxInterceptor->IsMvFixEnabled() || ffx->IsMvFixEnabled();
-    if (m_ngxInterceptor && ffx) return m_ngxInterceptor->IsMvFixEnabled() && ffx->IsMvFixEnabled();
-    if (m_ngxInterceptor) return m_ngxInterceptor->IsMvFixEnabled();
-    if (ffx) return ffx->IsMvFixEnabled();
-    return false;
+    const bool ngxEnabled = m_ngxInterceptor ? m_ngxInterceptor->IsMvFixEnabled() : false;
+    const bool ffxEnabled = ffx ? ffx->IsMvFixEnabled() : false;
+    return CombineUpscalerBackends(m_ngxInterceptor.get(), ffx, ngxEnabled, ffxEnabled,
+                                   DualBackendCombine::ActiveAnyInactiveAll);
 }
 
 bool VRBridge::IsMvFixDisabledForSession() const {
     FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
-    const bool ngxActive =
-        m_ngxInterceptor && (m_ngxInterceptor->IsAttached() || m_ngxInterceptor->GetActiveVirtualHandleCount() > 0);
-    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
-
-    if (ngxActive && !ffxActive) return m_ngxInterceptor->IsMvFixDisabledForSession();
-    if (ffxActive && !ngxActive) return ffx->IsMvFixDisabledForSession();
-    if (ngxActive && ffxActive) return m_ngxInterceptor->IsMvFixDisabledForSession() && ffx->IsMvFixDisabledForSession();
-    if (m_ngxInterceptor && ffx) return m_ngxInterceptor->IsMvFixDisabledForSession() || ffx->IsMvFixDisabledForSession();
-    if (m_ngxInterceptor) return m_ngxInterceptor->IsMvFixDisabledForSession();
-    if (ffx) return ffx->IsMvFixDisabledForSession();
-    return false;
+    const bool ngxDisabled = m_ngxInterceptor ? m_ngxInterceptor->IsMvFixDisabledForSession() : false;
+    const bool ffxDisabled = ffx ? ffx->IsMvFixDisabledForSession() : false;
+    return CombineUpscalerBackends(m_ngxInterceptor.get(), ffx, ngxDisabled, ffxDisabled,
+                                   DualBackendCombine::ActiveAllInactiveAny);
 }
 
 const char* VRBridge::DescribeMvFixState() const {
@@ -1127,8 +1126,7 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
 
     FS25VR_TRACE_THREAD("VRBridge.setRenderingMode");
     if (lua_gettop(L) < 1) {
-        lua_pushboolean(L, 0);
-        return 1;
+        return 0;
     }
 
     VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
@@ -1142,8 +1140,7 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
 
     if (!hasTarget) {
         LogWarn("[VRBridge] setRenderingMode: ignoring unknown rendering mode argument.");
-        lua_pushboolean(L, 0);
-        return 1;
+        return 0;
     }
 
     if (self->m_openXrManager && self->m_openXrManager->IsActive()) {
@@ -1151,8 +1148,7 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
     } else {
         self->SetRenderingMode(targetMode);
     }
-    lua_pushboolean(L, 1);
-    return 1;
+    return 0;
 }
 
 int VRBridge::Lua_GetSubPassIndex(lua_State* L) {

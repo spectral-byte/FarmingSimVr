@@ -161,6 +161,19 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
     return true;
 }
 
+bool FunctionDetour::Disable() {
+    if (!m_installed.load(std::memory_order_acquire) || !m_target) {
+        return false;
+    }
+
+    const MH_STATUS disableStatus = MH_DisableHook(m_target);
+    if (disableStatus != MH_OK && disableStatus != MH_ERROR_DISABLED && disableStatus != MH_ERROR_NOT_CREATED) {
+        LogError(std::string("FunctionDetour: MH_DisableHook failed: ") + MH_StatusToString(disableStatus));
+        return false;
+    }
+    return true;
+}
+
 bool FunctionDetour::Uninstall() {
     if (!m_installed.load(std::memory_order_acquire) || !m_target) {
         return false;

@@ -108,14 +108,30 @@ bool UploadPixelsToResource(ID3D12Device* device, ID3D12CommandQueue* queue, ID3
     ID3D12CommandList* lists[] = { cmdList.Get() };
     queue->ExecuteCommandLists(1, lists);
 
+    auto detachInFlight = [&]() {
+        uploadBuffer.Detach();
+        cmdAlloc.Detach();
+        cmdList.Detach();
+        fence.Detach();
+    };
+
     if (FAILED(queue->Signal(fence.Get(), 1))) {
+        detachInFlight();
         return false;
     }
-    if (fence->GetCompletedValue() < 1) {
+    const UINT64 completed = fence->GetCompletedValue();
+    if (completed == UINT64_MAX) {
+        detachInFlight();
+        return false;
+    }
+    if (completed < 1) {
         if (FAILED(fence->SetEventOnCompletion(1, hEvent.Get()))) {
+            detachInFlight();
             return false;
         }
         if (WaitForSingleObject(hEvent.Get(), kCursorUploadWaitTimeoutMs) != WAIT_OBJECT_0) {
+            hEvent.Release();
+            detachInFlight();
             return false;
         }
     }
@@ -284,7 +300,9 @@ bool OpenXrCursorOverlay::CreateSwapchain(XrSession session, std::shared_ptr<IOp
     m_textureUploaded = false;
 
     if (device && queue) {
-        UploadTexture(device, queue, dispatch);
+        if (!UploadTexture(device, queue, dispatch) && !m_hasSwapchain) {
+            return false;
+        }
     }
 
     LogInfo("OpenXrCursorOverlay: Created cursor swapchain (" + std::to_string(width) + "x" + std::to_string(height) + ").");
@@ -346,17 +364,23 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
         return false;
     }
 
+    auto failAfterAcquire = [&](XrResult failureResult) {
+        DestroySwapchain(dispatch);
+        m_lastXrResult = failureResult;
+        return false;
+    };
+
     XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = XR_INFINITE_DURATION;
     res = dispatch->WaitSwapchainImage(m_swapchain.handle, &waitInfo);
     if (XR_FAILED(res)) {
-        m_lastXrResult = res;
+        XrResult failureResult = res;
         XrSwapchainImageReleaseInfo relInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
         XrResult relRes = dispatch->ReleaseSwapchainImage(m_swapchain.handle, &relInfo);
         if (XR_FAILED(relRes) && res != XR_ERROR_SESSION_LOST && res != XR_ERROR_INSTANCE_LOST) {
-            m_lastXrResult = relRes;
+            failureResult = relRes;
         }
-        return false;
+        return failAfterAcquire(failureResult);
     }
 
     bool uploaded = false;
@@ -370,11 +394,10 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
     XrSwapchainImageReleaseInfo relInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
     XrResult relRes = dispatch->ReleaseSwapchainImage(m_swapchain.handle, &relInfo);
     if (XR_FAILED(relRes)) {
-        m_lastXrResult = relRes;
-        return false;
+        return failAfterAcquire(relRes);
     }
     if (!uploaded) {
-        return false;
+        return failAfterAcquire(XR_SUCCESS);
     }
 
     m_textureUploaded = true;
@@ -394,6 +417,13 @@ bool OpenXrCursorOverlay::PrepareCompositionLayer(const XrCompositionLayerQuad& 
         return false;
     }
 
+    if (!m_textureUploaded && device && queue && dispatch) {
+        if (!UploadTexture(device, queue, dispatch)) {
+            m_hasLastSubmittedCursorQuadLayer = false;
+            return false;
+        }
+    }
+
     outCursorQuadLayer.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
     outCursorQuadLayer.next = nullptr;
     outCursorQuadLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
@@ -406,10 +436,6 @@ bool OpenXrCursorOverlay::PrepareCompositionLayer(const XrCompositionLayerQuad& 
         static_cast<int32_t>(m_swapchain.height)
     };
     outCursorQuadLayer.subImage.imageArrayIndex = 0;
-
-    if (!m_textureUploaded && device && queue && dispatch) {
-        UploadTexture(device, queue, dispatch);
-    }
 
     float cSize = cursorState.size > 0.0f ? cursorState.size : MenuCursorState::kDefaultCursorSize;
     outCursorQuadLayer.pose = ComputeCursorQuadPose(menuQuad.pose, menuQuad.size, cursorState, cSize, cSize);
