@@ -415,16 +415,21 @@ TEST_F(DllLifecycleTest, DxgiProxyAndOpenXrManagerSkipComReleaseDuringTerminatio
     EXPECT_EQ(fakeQueue.releaseCalls.load(), 0);
     ResetProcessTerminatingForTesting();
 
-    Microsoft::WRL::ComPtr<IDXGIFactory4> dxgiFactory;
-    Microsoft::WRL::ComPtr<IDXGIAdapter> warp;
-    Microsoft::WRL::ComPtr<ID3D12Device> device;
-    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory))) &&
-        SUCCEEDED(dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) &&
-        SUCCEEDED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+    EXPECT_EXIT({
+        Microsoft::WRL::ComPtr<IDXGIFactory4> dxgiFactory;
+        Microsoft::WRL::ComPtr<IDXGIAdapter> warp;
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory))) ||
+            FAILED(dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
+            FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+            ExitProcess(0);
+        }
         D3D12_COMMAND_QUEUE_DESC queueDesc{};
         queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
-        ASSERT_TRUE(SUCCEEDED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue))));
+        if (FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue)))) {
+            ExitProcess(1);
+        }
 
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -438,8 +443,10 @@ TEST_F(DllLifecycleTest, DxgiProxyAndOpenXrManagerSkipComReleaseDuringTerminatio
         resDesc.SampleDesc.Count = 1;
         resDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         Microsoft::WRL::ComPtr<ID3D12Resource> backBuffer;
-        ASSERT_TRUE(SUCCEEDED(device->CreateCommittedResource(
-            &heap, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&backBuffer))));
+        if (FAILED(device->CreateCommittedResource(
+                &heap, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&backBuffer)))) {
+            ExitProcess(2);
+        }
 
         auto openXrManager = std::make_unique<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
         openXrManager->SetD3D12DeviceAndQueue(device.Get(), queue.Get());
@@ -451,9 +458,11 @@ TEST_F(DllLifecycleTest, DxgiProxyAndOpenXrManagerSkipComReleaseDuringTerminatio
         OnProcessDetach(reinterpret_cast<LPVOID>(1));
         openXrManager.reset();
 
-        EXPECT_EQ(ComRefCount(device.Get()), devRefBefore);
-        EXPECT_EQ(ComRefCount(queue.Get()), queueRefBefore);
-    }
+        if (ComRefCount(device.Get()) != devRefBefore || ComRefCount(queue.Get()) != queueRefBefore) {
+            ExitProcess(3);
+        }
+        ExitProcess(0);
+    }, ::testing::ExitedWithCode(0), "");
 }
 
 }
