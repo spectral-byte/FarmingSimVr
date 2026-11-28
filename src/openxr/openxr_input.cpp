@@ -149,7 +149,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
 }
 
 bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSession session) {
-    if (m_attempted) return m_ready;
+    if (m_attempted) return m_ready.load();
     m_attempted = true;
     m_session = session;
 
@@ -218,13 +218,13 @@ bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSessi
         spaceInfo.action = m_aimPoseAction;
     }
 
-    m_ready = true;
+    m_ready.store(true);
     LogInfo("OpenXrInput: Motion Controller action set declared and attached.");
     return true;
 }
 
 void OpenXrInput::Sync(IOpenXrDispatch& dispatch, XrSession session) {
-    if (!m_ready) return;
+    if (!m_ready.load()) return;
 
     XrActiveActionSet active{};
     active.actionSet = m_actionSet;
@@ -309,7 +309,7 @@ static bool LocatePoseSpace(IOpenXrDispatch& dispatch, XrSpace space, bool activ
 }
 
 void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTime time) {
-    if (!m_ready) return;
+    if (!m_ready.load()) return;
     for (uint32_t hand = 0; hand < kHandCount; ++hand) {
         HandState& state = m_hands[hand];
         state.aim = HeadPose{};
@@ -322,7 +322,7 @@ void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTi
 
 bool OpenXrInput::PulseHaptic(IOpenXrDispatch& dispatch, XrSession session, uint32_t hand, int64_t durationNs,
                               float amplitude) {
-    if (!m_ready || hand >= kHandCount || session == XR_NULL_HANDLE || m_hapticAction == XR_NULL_HANDLE) {
+    if (!m_ready.load() || hand >= kHandCount || session == XR_NULL_HANDLE || m_hapticAction == XR_NULL_HANDLE) {
         return false;
     }
     XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
@@ -353,7 +353,7 @@ void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
     m_hapticAction = XR_NULL_HANDLE;
     m_handPaths = {};
     m_session = XR_NULL_HANDLE;
-    m_ready = false;
+    m_ready.store(false);
     m_attempted = false;
     ResetHands();
 }

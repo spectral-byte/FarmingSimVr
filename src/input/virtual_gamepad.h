@@ -97,11 +97,11 @@ private:
     // The ones below run with m_mutex held.
     const char* SessionProblemLocked() const;
     bool AllHooksInstalledLocked() const;
-    Status EvaluateLocked();
-    bool IsPadSlotLocked(DWORD userIndex);
-    bool RealPadPresentLocked(DWORD slot);
+    Status Evaluate(std::unique_lock<std::mutex>& lock);
+    bool IsPadSlot(std::unique_lock<std::mutex>& lock, DWORD userIndex);
+    static bool ProbeRealPad(const RealPadProbe& probe, GetStateFn realGetState, DWORD slot);
     XINPUT_GAMEPAD BuildGamepadLocked();
-    void ApplyRightStickChordLocked(const HandState& right, XINPUT_GAMEPAD& pad);
+    void ApplyRightStickChordLocked(const HandState& right, XINPUT_GAMEPAD& pad, bool stickClickSuppressed);
     void ResetRightStickChordLocked();
 
     void InstallHooksLocked();
@@ -139,6 +139,9 @@ private:
     FunctionDetour m_detourGetState;
     FunctionDetour m_detourGetCapabilities;
     FunctionDetour m_detourSetState;
+    GetStateFn m_targetGetState = nullptr;
+    GetCapabilitiesFn m_targetGetCapabilities = nullptr;
+    SetStateFn m_targetSetState = nullptr;
 };
 
 }

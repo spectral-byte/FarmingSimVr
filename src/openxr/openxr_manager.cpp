@@ -117,7 +117,7 @@ bool OpenXrManager::Initialize() {
 
     if (!CheckD3D12ExtensionSupport()) {
         LogInfo("Required OpenXR D3D12 extension unavailable. Entering Pass-Through Mode.");
-        m_state = OpenXrState::PassThrough;
+        m_state.store(OpenXrState::PassThrough);
         return true;
     }
 
@@ -142,7 +142,7 @@ bool OpenXrManager::Initialize() {
         std::stringstream ss;
         ss << "xrCreateInstance failed (result " << res << "). Silently entering Pass-Through Mode.";
         LogInfo(ss.str());
-        m_state = OpenXrState::PassThrough;
+        m_state.store(OpenXrState::PassThrough);
         return true;
     }
     m_runtimeInfo.win32TimeConversionEnabled = m_win32TimeConversionAvailable;
@@ -175,7 +175,7 @@ bool OpenXrManager::Initialize() {
 
         m_dispatch->DestroyInstance(m_instance);
         m_instance = XR_NULL_HANDLE;
-        m_state = OpenXrState::PassThrough;
+        m_state.store(OpenXrState::PassThrough);
         return true;
     }
 
@@ -231,7 +231,7 @@ bool OpenXrManager::Initialize() {
 
         m_dispatch->DestroyInstance(m_instance);
         m_instance = XR_NULL_HANDLE;
-        m_state = OpenXrState::PassThrough;
+        m_state.store(OpenXrState::PassThrough);
         return true;
     }
 
@@ -243,7 +243,7 @@ bool OpenXrManager::Initialize() {
        << std::hex << m_runtimeInfo.minFeatureLevel << std::dec << ").";
     LogInfo(ss.str());
 
-    m_state = OpenXrState::Active;
+    m_state.store(OpenXrState::Active);
     LogInfo("OpenXR lifecycle successfully established in Active VR Mode.");
     return true;
 }
@@ -263,21 +263,22 @@ void OpenXrManager::Shutdown() {
         m_dispatch->DestroySpace(m_baseLocalSpace);
         m_baseLocalSpace = XR_NULL_HANDLE;
     }
-    if (m_sessionRunning && m_session != XR_NULL_HANDLE) {
+    const XrSession session = m_session.load();
+    if (m_sessionRunning && session != XR_NULL_HANDLE) {
         LogInfo("Ending OpenXR session...");
-        m_dispatch->EndSession(m_session);
+        m_dispatch->EndSession(session);
         m_sessionRunning = false;
     }
-    if (m_session != XR_NULL_HANDLE) {
-        m_dispatch->DestroySession(m_session);
-        m_session = XR_NULL_HANDLE;
+    if (session != XR_NULL_HANDLE) {
+        m_dispatch->DestroySession(session);
+        m_session.store(XR_NULL_HANDLE);
     }
     if (m_instance != XR_NULL_HANDLE) {
         LogInfo("Shutting down OpenXR instance...");
         m_dispatch->DestroyInstance(m_instance);
         m_instance = XR_NULL_HANDLE;
     }
-    m_state = OpenXrState::Uninitialized;
+    m_state.store(OpenXrState::Uninitialized);
     m_sessionRunning = false;
     m_sessionState = XR_SESSION_STATE_UNKNOWN;
     m_beginSessionFailures = 0;
@@ -304,14 +305,14 @@ void OpenXrManager::Shutdown() {
 }
 
 bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queue) {
-    if (m_state != OpenXrState::Active || m_instance == XR_NULL_HANDLE) {
+    if (m_state.load() != OpenXrState::Active || m_instance == XR_NULL_HANDLE) {
         return false;
     }
     if (device) m_device = device;
     if (queue) m_queue = queue;
     m_eyeCopy.SetDeviceAndQueue(m_device, m_queue);
 
-    if (m_session != XR_NULL_HANDLE) {
+    if (m_session.load() != XR_NULL_HANDLE) {
         return true;
     }
 
@@ -323,23 +324,25 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
     sessionInfo.next = (m_device != nullptr) ? &d3d12Binding : nullptr;
     sessionInfo.systemId = m_runtimeInfo.systemId;
 
-    XrResult res = m_dispatch->CreateSession(m_instance, &sessionInfo, &m_session);
+    XrSession createdSession = XR_NULL_HANDLE;
+    XrResult res = m_dispatch->CreateSession(m_instance, &sessionInfo, &createdSession);
     if (XR_FAILED(res)) {
-        m_session = XR_NULL_HANDLE;
+        m_session.store(XR_NULL_HANDLE);
         LogError("OpenXrManager: The OpenXR runtime refused to create the session (result " + std::to_string(res) +
                  "). Continuing in Pass-Through Mode.");
         ReleaseAndEnterPassThrough("session refused");
         return false;
     }
+    m_session.store(createdSession);
     m_sessionState = XR_SESSION_STATE_IDLE;
     LogInfo("OpenXrManager: Session created successfully; waiting for the runtime to report READY.");
 
-    m_input.Create(*m_dispatch, m_instance, m_session);
+    m_input.Create(*m_dispatch, m_instance, createdSession);
     return true;
 }
 
 void OpenXrManager::PollEvents() {
-    if (m_instance == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
+    if (m_instance == XR_NULL_HANDLE || m_state.load() != OpenXrState::Active) {
         return;
     }
 
@@ -378,7 +381,7 @@ void OpenXrManager::PollEvents() {
             break;
         }
 
-        if (m_state != OpenXrState::Active) {
+        if (m_state.load() != OpenXrState::Active) {
             return;
         }
     }
@@ -474,7 +477,7 @@ void OpenXrManager::ReleaseAndEnterPassThrough(const char* reason) {
     m_frameBegun = false;
     m_sessionRunning = false;
     Shutdown();
-    m_state = OpenXrState::PassThrough;
+    m_state.store(OpenXrState::PassThrough);
 }
 
 bool OpenXrManager::CreateTrackingSpaces() {
@@ -625,7 +628,7 @@ void OpenXrManager::RefreshHandState(XrTime time, bool resync) {
 }
 
 HandState OpenXrManager::GetHandState(uint32_t hand) {
-    if (hand >= OpenXrInput::kHandCount || m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE ||
+    if (hand >= OpenXrInput::kHandCount || m_state.load() != OpenXrState::Active || m_session.load() == XR_NULL_HANDLE ||
         m_localSpace == XR_NULL_HANDLE || !m_input.IsReady()) {
         return HandState{};
     }
@@ -641,12 +644,13 @@ HandState OpenXrManager::GetHandState(uint32_t hand) {
 }
 
 bool OpenXrManager::PulseHaptic(uint32_t hand, double durationSeconds, float amplitude) {
-    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE || !(durationSeconds > 0.0)) {
+    const XrSession session = m_session.load();
+    if (m_state.load() != OpenXrState::Active || session == XR_NULL_HANDLE || !(durationSeconds > 0.0)) {
         return false;
     }
     const float strength = std::min(1.0f, std::max(0.0f, amplitude));
     const double nanoseconds = std::min(durationSeconds * 1.0e9, 1.0e10);  // at most 10 s
-    return m_input.PulseHaptic(*m_dispatch, m_session, hand, static_cast<int64_t>(std::llround(nanoseconds)), strength);
+    return m_input.PulseHaptic(*m_dispatch, session, hand, static_cast<int64_t>(std::llround(nanoseconds)), strength);
 }
 
 void OpenXrManager::Recenter() {
@@ -896,7 +900,7 @@ EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
         eyeIndex = 0;
     }
 
-    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE) {
+    if (m_state.load() != OpenXrState::Active || m_session.load() == XR_NULL_HANDLE) {
         return m_eyeProjections[eyeIndex];
     }
 
@@ -927,7 +931,7 @@ void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQu
     if (device) m_device = device;
     if (queue) m_queue = queue;
     m_eyeCopy.SetDeviceAndQueue(m_device, m_queue);
-    if (m_session == XR_NULL_HANDLE && m_state == OpenXrState::Active && m_device && m_queue) {
+    if (m_session.load() == XR_NULL_HANDLE && m_state.load() == OpenXrState::Active && m_device && m_queue) {
         CreateSession(m_device, m_queue);
         CreateTrackingSpaces();
     }
@@ -983,8 +987,8 @@ void OpenXrManager::EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBuffer
 }
 
 bool OpenXrManager::EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat) {
-    if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
-        return m_state == OpenXrState::Active;
+    if (m_session.load() == XR_NULL_HANDLE || m_state.load() != OpenXrState::Active) {
+        return m_state.load() == OpenXrState::Active;
     }
     if (NegotiateEyeSwapchainFormat(backBufferFormat) == DXGI_FORMAT_UNKNOWN) {
         EnterPassThroughForIncompatibleFormat(backBufferFormat);
@@ -994,7 +998,7 @@ bool OpenXrManager::EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat
 }
 
 bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FORMAT format) {
-    if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
+    if (m_session.load() == XR_NULL_HANDLE || m_state.load() != OpenXrState::Active) {
         return false;
     }
     if (m_hasEyeSwapchains) {

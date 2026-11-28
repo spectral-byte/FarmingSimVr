@@ -33,8 +33,8 @@ public:
     const std::string& GetVersion() const { return m_version; }
     bool IsReady() const;
     bool PerformHandshake();
-    bool IsCompanionActive() const { return m_handshakeCompleted; }
-    void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
+    bool IsCompanionActive() const { return m_handshakeCompleted.load(); }
+    void SetCompanionActive(bool active) { m_handshakeCompleted.store(active); }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
     std::shared_ptr<NgxInterceptor> GetNgxInterceptor() const { return m_ngxInterceptor; }
 
@@ -74,7 +74,7 @@ public:
         if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
             return m_subPassIndex.load();
         }
-        return m_frameParity;
+        return m_frameParity.load();
     }
     uint32_t GetFrameParity() const { return GetActiveEye(); }
     uint64_t GetFrameIndex() const { return m_frameIndex; }
@@ -85,11 +85,11 @@ public:
     void SetIpd(float ipd);
     HeadPose GetEyePose(uint32_t eyeIndex);
 
-    bool IsMenuVisible() const { return m_menuVisible; }
+    bool IsMenuVisible() const { return m_menuVisible.load(); }
     void SetMenuVisible(bool visible);
     void AlignMenuQuad();
 
-    bool Is2DViewActive() const { return m_2dViewActive; }
+    bool Is2DViewActive() const { return m_2dViewActive.load(); }
     void Set2DViewActive(bool active);
 
     bool IsDesktopMirrorEnabled() const { return m_desktopMirrorEnabled; }
@@ -269,9 +269,9 @@ private:
     VirtualGamepad m_virtualGamepad{m_openXrManager};
     CameraRecordStore m_cameraRecords;
     std::string m_version;
-    bool m_handshakeCompleted = false;
-    bool m_menuVisible = false;
-    bool m_2dViewActive = false;
+    std::atomic<bool> m_handshakeCompleted{false};
+    std::atomic<bool> m_menuVisible{false};
+    std::atomic<bool> m_2dViewActive{false};
     bool m_desktopMirrorEnabled = true;
     bool m_mouseConfinementEnabled = true;
     float m_fovOverscan = 0.0f;
@@ -284,7 +284,7 @@ private:
     std::atomic<int> m_pendingRenderingMode{kNoPendingMode};
     std::atomic<uint32_t> m_subPassIndex{0}; // 0 = first sub-pass of the pair (advances simulation), 1 = second
 
-    uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)
+    std::atomic<uint32_t> m_frameParity{0}; // 0 = Left (2k), 1 = Right (2k+1)
     uint64_t m_frameIndex = 0;
     float m_simulatedIpd = 0.064f;
     bool m_hasCustomIpd = false;

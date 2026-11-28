@@ -5,7 +5,9 @@
 #include "fake_openxr_runtime.h"
 #include "ngx/ngx_interceptor.h"
 #include "luacode.h"
+#include <atomic>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -1532,4 +1534,85 @@ TEST_F(VrBridgeTest, SwitchingTheStereoPresentationModeDiscardsCameraRecords) {
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
 
     EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+}
+
+TEST_F(VrBridgeTest, HandshakeAndSetRenderingModeParseIntegersAndStringsConsistentlyAndRejectUnknownModes) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    const int status = RunLuauString(L, R"luau(
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass")
+
+        assert(VRBridge.handshake("bogus").renderingMode == "SequentialDualPass")
+        assert(VRBridge.handshake(2).renderingMode == "SequentialDualPass")
+        assert(VRBridge.handshake(-1).renderingMode == "SequentialDualPass")
+        assert(VRBridge.handshake(1.5).renderingMode == "SequentialDualPass")
+
+        assert(VRBridge.handshake(0).renderingMode == "AFR")
+        assert(VRBridge.setRenderingMode("bogus") == false)
+        assert(VRBridge.getRenderingMode() == "AFR")
+        assert(VRBridge.setRenderingMode(2) == false)
+        assert(VRBridge.getRenderingMode() == "AFR")
+        assert(VRBridge.setRenderingMode(-1) == false)
+        assert(VRBridge.getRenderingMode() == "AFR")
+        assert(VRBridge.setRenderingMode(1.5) == false)
+        assert(VRBridge.getRenderingMode() == "AFR")
+
+        assert(VRBridge.setRenderingMode(1) == true)
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass")
+        assert(VRBridge.setRenderingMode("bogus") == false)
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass")
+
+        assert(VRBridge.setRenderingMode("0") == true)
+        assert(VRBridge.getRenderingMode() == "AFR")
+        assert(VRBridge.handshake("1").renderingMode == "SequentialDualPass")
+        assert(VRBridge.handshake("0").renderingMode == "AFR")
+        assert(VRBridge.handshake(1).renderingMode == "SequentialDualPass")
+    )luau");
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+
+TEST_F(VrBridgeTest, CrossThreadAtomicFlagsAndOverridesAreReadableConcurrently) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, ngx);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+
+    std::atomic<bool> stop{false};
+    std::thread reader([&] {
+        while (!stop.load()) {
+            (void)bridge.IsCompanionActive();
+            (void)bridge.IsMenuVisible();
+            (void)bridge.Is2DViewActive();
+            (void)bridge.GetActiveEye();
+            (void)ngx->GetDlssPresetOverride();
+            (void)ngx->GetSharpnessOverride();
+            (void)ngx->IsForceSharpnessOverride();
+            (void)ngx->GetMvScaleMultiplierX();
+            (void)ngx->GetMvScaleMultiplierY();
+            (void)ngx->GetSdpMvScaleMultiplierX();
+            (void)ngx->GetSdpMvScaleMultiplierY();
+            (void)headset.manager->GetState();
+            (void)headset.manager->HasSession();
+            (void)headset.manager->HasMotionControllerActions();
+        }
+    });
+
+    for (int i = 0; i < 200; ++i) {
+        const bool flag = (i % 2) == 0;
+        bridge.SetCompanionActive(flag);
+        bridge.SetMenuVisible(flag);
+        bridge.Set2DViewActive(!flag);
+        bridge.SetFrameParity(static_cast<uint32_t>(i));
+        ngx->SetDlssPresetOverride(10 + (i % 3));
+        ngx->SetSharpnessOverride(flag ? 0.5f : 0.75f, flag);
+        ngx->SetMvScaleMultiplier(flag ? 1.0f : 2.0f, flag ? 1.0f : 2.0f);
+        ngx->SetSdpMvScaleMultiplier(flag ? 1.0f : 1.5f, flag ? 1.0f : 1.5f);
+    }
+
+    stop.store(true);
+    reader.join();
 }

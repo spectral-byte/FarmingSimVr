@@ -129,25 +129,25 @@ public:
     static constexpr bool kDefaultMvFixEnabled = true;
     static constexpr float kDefaultAfrMvScale = 2.0f;
 
-    int GetDlssPresetOverride() const { return m_dlssPresetOverride; }
-    void SetDlssPresetOverride(int preset) { m_dlssPresetOverride = preset; }
-    float GetSharpnessOverride() const { return m_sharpnessOverride; }
+    int GetDlssPresetOverride() const { return m_dlssPresetOverride.load(); }
+    void SetDlssPresetOverride(int preset) { m_dlssPresetOverride.store(preset); }
+    float GetSharpnessOverride() const { return m_sharpnessOverride.load(); }
     void SetSharpnessOverride(float sharpness, bool force = true) {
-        m_sharpnessOverride = sharpness;
-        m_forceSharpnessOverride = force;
+        m_sharpnessOverride.store(sharpness);
+        m_forceSharpnessOverride.store(force);
     }
-    bool IsForceSharpnessOverride() const { return m_forceSharpnessOverride; }
-    float GetMvScaleMultiplierX() const { return m_mvScaleMultiplierX; }
-    float GetMvScaleMultiplierY() const { return m_mvScaleMultiplierY; }
+    bool IsForceSharpnessOverride() const { return m_forceSharpnessOverride.load(); }
+    float GetMvScaleMultiplierX() const { return m_mvScaleMultiplierX.load(); }
+    float GetMvScaleMultiplierY() const { return m_mvScaleMultiplierY.load(); }
     void SetMvScaleMultiplier(float scaleX, float scaleY) {
-        m_mvScaleMultiplierX = scaleX;
-        m_mvScaleMultiplierY = scaleY;
+        m_mvScaleMultiplierX.store(scaleX);
+        m_mvScaleMultiplierY.store(scaleY);
     }
-    float GetSdpMvScaleMultiplierX() const { return m_sdpMvScaleMultiplierX; }
-    float GetSdpMvScaleMultiplierY() const { return m_sdpMvScaleMultiplierY; }
+    float GetSdpMvScaleMultiplierX() const { return m_sdpMvScaleMultiplierX.load(); }
+    float GetSdpMvScaleMultiplierY() const { return m_sdpMvScaleMultiplierY.load(); }
     void SetSdpMvScaleMultiplier(float scaleX, float scaleY) {
-        m_sdpMvScaleMultiplierX = scaleX;
-        m_sdpMvScaleMultiplierY = scaleY;
+        m_sdpMvScaleMultiplierX.store(scaleX);
+        m_sdpMvScaleMultiplierY.store(scaleY);
     }
 
     bool SetMvFixEnabled(bool enabled);
@@ -205,13 +205,13 @@ private:
     class DxgiProxy* m_dxgiProxy = nullptr;
     class OpenXrManager* m_openXrManager = nullptr;
 
-    int m_dlssPresetOverride = kDefaultDlssPresetOverride;
-    float m_sharpnessOverride = kDefaultSharpnessOverride;
-    bool m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
-    float m_mvScaleMultiplierX = kDefaultAfrMvScale;
-    float m_mvScaleMultiplierY = kDefaultAfrMvScale;
-    float m_sdpMvScaleMultiplierX = 1.0f;
-    float m_sdpMvScaleMultiplierY = 1.0f;
+    std::atomic<int> m_dlssPresetOverride{kDefaultDlssPresetOverride};
+    std::atomic<float> m_sharpnessOverride{kDefaultSharpnessOverride};
+    std::atomic<bool> m_forceSharpnessOverride{kDefaultForceSharpnessOverride};
+    std::atomic<float> m_mvScaleMultiplierX{kDefaultAfrMvScale};
+    std::atomic<float> m_mvScaleMultiplierY{kDefaultAfrMvScale};
+    std::atomic<float> m_sdpMvScaleMultiplierX{1.0f};
+    std::atomic<float> m_sdpMvScaleMultiplierY{1.0f};
     std::atomic<uint64_t> m_evalCount{0};
 
     ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,

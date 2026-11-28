@@ -29,6 +29,26 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
     return false;
 }
 
+static bool ParseRenderingModeArg(lua_State* L, int index, VRRenderingMode& outMode) {
+    const int type = lua_type(L, index);
+    if (type == LUA_TNUMBER) {
+        const double value = lua_tonumber(L, index);
+        if (value == 0.0) {
+            outMode = VRRenderingMode::AFR;
+            return true;
+        }
+        if (value == 1.0) {
+            outMode = VRRenderingMode::SequentialDualPass;
+            return true;
+        }
+        return false;
+    }
+    if (type == LUA_TSTRING) {
+        return ParseRenderingMode(lua_tostring(L, index), outMode);
+    }
+    return false;
+}
+
 namespace {
 
 class CollectorHold {
@@ -177,7 +197,7 @@ bool VRBridge::IsReady() const {
 }
 
 bool VRBridge::PerformHandshake() {
-    m_handshakeCompleted = true;
+    m_handshakeCompleted.store(true);
     m_subPassIndex.store(0);
     SetFrameParity(0);
     LogInfo("[VRBridge] Native-to-Luau handshake completed successfully. SubPassIndex and FrameParity aligned to 0.");
@@ -205,15 +225,12 @@ int VRBridge::Lua_IsReady(lua_State* L) {
 int VRBridge::Lua_Handshake(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
-    if (lua_gettop(L) >= 1) {
-        if (lua_isnumber(L, 1)) {
-            int val = lua_tointeger(L, 1);
-            self->SetRenderingMode((val == 1) ? VRRenderingMode::SequentialDualPass : VRRenderingMode::AFR);
-        } else if (lua_isstring(L, 1)) {
-            VRRenderingMode parsedMode;
-            if (ParseRenderingMode(lua_tostring(L, 1), parsedMode)) {
-                self->SetRenderingMode(parsedMode);
-            }
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        VRRenderingMode parsedMode;
+        if (ParseRenderingModeArg(L, 1, parsedMode)) {
+            self->SetRenderingMode(parsedMode);
+        } else {
+            LogWarn("[VRBridge] Handshake: ignoring unknown rendering mode argument.");
         }
     }
 
@@ -296,14 +313,14 @@ bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
 }
 
 PanelHit VRBridge::GetPanelHit(uint32_t hand) {
-    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+    if (m_openXrManager && (m_menuVisible.load() || m_2dViewActive.load())) {
         return m_openXrManager->GetPanelHit(hand);
     }
     return {};
 }
 
 PanelHit VRBridge::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
-    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+    if (m_openXrManager && (m_menuVisible.load() || m_2dViewActive.load())) {
         return m_openXrManager->GetPanelHitAlongRay(hand, origin, direction);
     }
     return {};
@@ -446,6 +463,7 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
         FillPoseTable(L, outIndex, pose);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushPoseTable(L, pose);
     }
     return 1;
@@ -499,6 +517,7 @@ int VRBridge::Lua_GetHandState(lua_State* L) {
         FillHandStateTable(L, outIndex, state);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushHandStateTable(L, state);
     }
     return 1;
@@ -647,6 +666,7 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
         FillEyeProjectionTable(L, outIndex, proj, eyeIndex);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushEyeProjectionTable(L, proj, eyeIndex);
     }
     return 1;
@@ -654,9 +674,9 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
 
 void VRBridge::ResetSubPassAndParity() {
     if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
-        m_frameParity = 0;
+        m_frameParity.store(0);
     } else {
-        m_frameParity = static_cast<uint32_t>(m_frameIndex % 2);
+        m_frameParity.store(static_cast<uint32_t>(m_frameIndex % 2));
     }
     m_subPassIndex.store(0);
 }
@@ -697,8 +717,9 @@ bool VRBridge::LatchPendingRenderingMode() {
 }
 
 void VRBridge::SetFrameParity(uint32_t parity) {
-    m_frameParity = parity % 2;
-    if (static_cast<uint32_t>(m_frameIndex % 2) != m_frameParity) {
+    const uint32_t normalized = parity % 2;
+    m_frameParity.store(normalized);
+    if (static_cast<uint32_t>(m_frameIndex % 2) != normalized) {
         m_frameIndex++;
     }
 }
@@ -759,6 +780,7 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
         FillPoseTable(L, outIndex, pose, static_cast<int>(eyeIndex));
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushPoseTable(L, pose, static_cast<int>(eyeIndex));
     }
     return 1;
@@ -766,13 +788,12 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
 
 void VRBridge::UpdateFovOverscanSuspension() {
     if (m_openXrManager) {
-        m_openXrManager->SetFovOverscanSuspended(m_menuVisible || m_2dViewActive);
+        m_openXrManager->SetFovOverscanSuspended(m_menuVisible.load() || m_2dViewActive.load());
     }
 }
 
 void VRBridge::SetMenuVisible(bool visible) {
-    if (m_menuVisible != visible) {
-        m_menuVisible = visible;
+    if (m_menuVisible.exchange(visible) != visible) {
         UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
@@ -828,6 +849,7 @@ int VRBridge::Lua_GetPanelHit(lua_State* L) {
         FillPanelHitTable(L, outIndex, hit);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
         FillPanelHitTable(L, -1, hit);
     }
@@ -862,6 +884,7 @@ int VRBridge::Lua_GetPanelHitAlongRay(lua_State* L) {
         FillPanelHitTable(L, outIndex, hit);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
         FillPanelHitTable(L, -1, hit);
     }
@@ -899,8 +922,7 @@ int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
 }
 
 void VRBridge::Set2DViewActive(bool active) {
-    if (m_2dViewActive != active) {
-        m_2dViewActive = active;
+    if (m_2dViewActive.exchange(active) != active) {
         UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
@@ -1043,39 +1065,33 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.setRenderingMode");
-    if (lua_gettop(L) >= 1) {
-        VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
-        bool hasTarget = false;
-        if (lua_isnumber(L, 1)) {
-            int val = lua_tointeger(L, 1);
-            targetMode = (val == 0) ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
-            hasTarget = true;
-        } else if (lua_isstring(L, 1)) {
-            const char* s = lua_tostring(L, 1);
-            if (s && (_stricmp(s, "toggle") == 0)) {
-                targetMode = self->IsSequentialDualPass() ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
-                hasTarget = true;
-            } else {
-                VRRenderingMode parsedMode;
-                if (ParseRenderingMode(s, parsedMode)) {
-                    targetMode = parsedMode;
-                    hasTarget = true;
-                } else {
-                    targetMode = VRRenderingMode::SequentialDualPass;
-                    hasTarget = true;
-                }
-            }
-        }
-
-        if (hasTarget) {
-            if (self->m_openXrManager && self->m_openXrManager->IsActive()) {
-                self->SetPendingRenderingMode(targetMode);
-            } else {
-                self->SetRenderingMode(targetMode);
-            }
-        }
+    if (lua_gettop(L) < 1) {
+        lua_pushboolean(L, 0);
+        return 1;
     }
-    return 0;
+
+    VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
+    bool hasTarget = false;
+    if (const char* s = StringArgument(L, 1); s && _stricmp(s, "toggle") == 0) {
+        targetMode = self->IsSequentialDualPass() ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
+        hasTarget = true;
+    } else {
+        hasTarget = ParseRenderingModeArg(L, 1, targetMode);
+    }
+
+    if (!hasTarget) {
+        LogWarn("[VRBridge] setRenderingMode: ignoring unknown rendering mode argument.");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    if (self->m_openXrManager && self->m_openXrManager->IsActive()) {
+        self->SetPendingRenderingMode(targetMode);
+    } else {
+        self->SetRenderingMode(targetMode);
+    }
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 int VRBridge::Lua_GetSubPassIndex(lua_State* L) {
@@ -1247,17 +1263,37 @@ int VRBridge::Lua_SetDlssSdpMvScale(lua_State* L) {
     return 1;
 }
 
+static bool HasValidCameraRecordArgTypes(lua_State* L) {
+    if (lua_gettop(L) < 11) return false;
+    for (int i = 1; i <= 11; ++i) {
+        if (lua_type(L, i) != LUA_TNUMBER) return false;
+    }
+    for (int i = 12; i <= 13; ++i) {
+        const int type = lua_type(L, i);
+        if (type != LUA_TNONE && type != LUA_TNIL && type != LUA_TNUMBER) return false;
+    }
+    return true;
+}
+
 int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
-    CameraRecord record;
-    record.eye = static_cast<uint32_t>((std::max)(0, static_cast<int>(luaL_checkinteger(L, 1))));
-    for (int i = 0; i < 3; ++i) record.position[i] = luaL_checknumber(L, 2 + i);
-    for (int i = 0; i < 4; ++i) record.orientation[i] = luaL_checknumber(L, 5 + i);
-    record.fovY = static_cast<float>(luaL_checknumber(L, 9));
-    record.nearClip = static_cast<float>(luaL_checknumber(L, 10));
-    record.farClip = static_cast<float>(luaL_checknumber(L, 11));
-    record.projOffsetX = static_cast<float>(luaL_optnumber(L, 12, 0.0));
-    record.projOffsetY = static_cast<float>(luaL_optnumber(L, 13, 0.0));
     VRBridge* self = &FromUpvalue(L);
+    CameraRecord record;
+    const auto readArgs = [&] {
+        record.eye = static_cast<uint32_t>((std::max)(0, static_cast<int>(luaL_checkinteger(L, 1))));
+        for (int i = 0; i < 3; ++i) record.position[i] = luaL_checknumber(L, 2 + i);
+        for (int i = 0; i < 4; ++i) record.orientation[i] = luaL_checknumber(L, 5 + i);
+        record.fovY = static_cast<float>(luaL_checknumber(L, 9));
+        record.nearClip = static_cast<float>(luaL_checknumber(L, 10));
+        record.farClip = static_cast<float>(luaL_checknumber(L, 11));
+        record.projOffsetX = static_cast<float>(luaL_optnumber(L, 12, 0.0));
+        record.projOffsetY = static_cast<float>(luaL_optnumber(L, 13, 0.0));
+    };
+    if (HasValidCameraRecordArgTypes(L)) {
+        readArgs();
+    } else {
+        CollectorHold collectorHold(L);
+        readArgs();
+    }
     lua_pushboolean(L, self->m_cameraRecords.Report(record) ? 1 : 0);
     return 1;
 }

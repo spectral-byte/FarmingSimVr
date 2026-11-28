@@ -532,6 +532,7 @@ TEST_F(VirtualGamepadTest, WithAllFourSlotsTakenByRealPadsThereIsNoPadAndTheLogS
     EXPECT_EQ(lines, 1);
 
     Pad().SetRealPadProbeForTesting([](DWORD slot) { return slot != 1; });
+    AdvanceGameTime(2000);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "1");
 }
@@ -599,4 +600,56 @@ TEST_F(VirtualGamepadTest, ARealPadPluggedIntoThePadsSlotMakesItGiveTheSlotUpAnd
     EXPECT_EQ(Read(2).Gamepad.bRightTrigger, 255);
     XINPUT_STATE state{};
     EXPECT_EQ(Pad().GetState(3, &state), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED)) << "slot 3 is the real pad's now";
+}
+
+TEST_F(VirtualGamepadTest, FullSlotXInputPollingIsThrottledAndProbesRunOutsideTheMutex) {
+    int probeCalls = 0;
+    Pad().SetRealPadProbeForTesting([&](DWORD) {
+        ++probeCalls;
+        Pad().SetInputsInUse(kLeft, 0);
+        return true;
+    });
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+
+    probeCalls = 0;
+    AdvanceGameTime(2000);
+    NextFrame(&headset);
+    EXPECT_EQ(probeCalls, 4);
+
+    for (int i = 0; i < 10; ++i) {
+        NextFrame(&headset);
+        XINPUT_STATE state{};
+        EXPECT_EQ(Pad().GetState(0, &state), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED));
+        EXPECT_EQ(EvalLua(L, "select(1, VRBridge.getVirtualGamepad())"), "false");
+    }
+    EXPECT_EQ(probeCalls, 4);
+
+    AdvanceGameTime(1000);
+    NextFrame(&headset);
+    EXPECT_EQ(probeCalls, 8);
+}
+
+TEST_F(VirtualGamepadTest, SuppressedRightStickClickSuppressesPendingAndTriggeredReleasePulses) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    ASSERT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
+
+    Pad().SetInputsInUse(kRight, fs25vr::VirtualGamepad::kInputStickClick);
+    EXPECT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
+
+    Hold(kRight, {});
+    Pad().SetInputsInUse(kRight, 0);
+    EXPECT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
+
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    ASSERT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
+    Hold(kRight, {});
+    ASSERT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB);
+
+    Pad().SetInputsInUse(kRight, fs25vr::VirtualGamepad::kInputStickClick);
+    EXPECT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
+    Pad().SetInputsInUse(kRight, 0);
+    EXPECT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
 }
