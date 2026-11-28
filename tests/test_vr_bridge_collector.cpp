@@ -1,4 +1,5 @@
 #include "vr_bridge_fixture.h"
+#include "luacode.h"
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -155,10 +156,31 @@ TEST_F(VrBridgeCollectorTest, APerFrameCallNeverTouchesTheCollector) {
         if (entry.kind != Kind::PerFrame) continue;
         ++perFrame;
         for (Args args : {Args::None, Args::Numbers}) {
+            if (args == Args::None && std::string(entry.name) == "reportCameraRecord") continue;
             SCOPED_TRACE(Describe(entry, args, true));
             lua_checkstack(L, 64);
             PushBridgeFunction(entry.name);
-            Call(args);
+            int tableSlot = 0;
+            lua_pushvalue(L, 1);
+            int warmupArgc = 0;
+            if (args == Args::Numbers) {
+                for (int i = 0; i < kNumberArgs; ++i) lua_pushnumber(L, 1.0);
+                warmupArgc = kNumberArgs;
+            }
+            const int warmupStatus = lua_pcall(L, warmupArgc, LUA_MULTRET, 0);
+            if (warmupStatus == LUA_OK && lua_gettop(L) > 1 && lua_istable(L, -1)) {
+                if (args == Args::None) {
+                    lua_settop(L, 0);
+                    continue;
+                }
+                lua_pushvalue(L, -1);
+                lua_replace(L, 2);
+                lua_settop(L, 2);
+                tableSlot = 2;
+            } else {
+                lua_settop(L, 1);
+            }
+
             lua_gc(L, LUA_GCCOLLECT, 0);  // the threshold is now twice the live heap
             lua_checkstack(L, 64);
             lua_gc(L, LUA_GCSETSTEPMUL, 1000000);
@@ -166,7 +188,18 @@ TEST_F(VrBridgeCollectorTest, APerFrameCallNeverTouchesTheCollector) {
             lua_pop(L, 1);
             g_destructorRan = false;
 
-            Call(args);
+            lua_pushvalue(L, 1);
+            int callArgc = 0;
+            if (args == Args::Numbers) {
+                for (int i = 0; i < kNumberArgs; ++i) lua_pushnumber(L, 1.0);
+                callArgc = kNumberArgs;
+                if (tableSlot != 0) {
+                    lua_pushvalue(L, tableSlot);
+                    ++callArgc;
+                }
+            }
+            ASSERT_EQ(lua_pcall(L, callArgc, LUA_MULTRET, 0), LUA_OK);
+            lua_settop(L, tableSlot ? tableSlot : 1);
 
             EXPECT_TRUE(CollectorRunning());
             for (int i = 0; i < 40; ++i) {
@@ -195,4 +228,72 @@ TEST_F(VrBridgeCollectorTest, APerFrameCallLeavesAStoppedCollectorStopped) {
         EXPECT_FALSE(CollectorRunning());
         lua_settop(L, 0);
     }
+}
+
+TEST_F(VrBridgeCollectorTest, ColdPathPerFrameTableGettersAndCameraRecordValidationHoldTheCollectorWhenCollectionIsDue) {
+    struct ColdCase {
+        const char* name;
+        std::vector<double> numbers;
+        bool passIncompleteTable;
+        bool expectError;
+    };
+    const ColdCase cases[] = {
+        {"getHeadPose", {}, false, false},
+        {"getHeadPose", {}, true, false},
+        {"getHandState", {0.0}, false, false},
+        {"getHandState", {0.0}, true, false},
+        {"getEyeProjection", {0.0}, false, false},
+        {"getEyeProjection", {0.0}, true, false},
+        {"getEyePose", {0.0}, false, false},
+        {"getEyePose", {0.0}, true, false},
+        {"getPanelHit", {0.0}, false, false},
+        {"getPanelHit", {0.0}, true, false},
+        {"getPanelHitAlongRay", {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0}, false, false},
+        {"getPanelHitAlongRay", {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0}, true, false},
+        {"reportCameraRecord", {0.0, 1.0, 2.0}, false, true},
+    };
+
+    const char* loopCode = "return function(fn, ...) for i = 1, 8 do fn(...) end end";
+    size_t loopBytecodeSize = 0;
+    char* loopBytecode = luau_compile(loopCode, std::strlen(loopCode), nullptr, &loopBytecodeSize);
+    ASSERT_NE(loopBytecode, nullptr);
+
+    for (const ColdCase& c : cases) {
+        for (bool collectorRunning : {true, false}) {
+            SCOPED_TRACE(std::string("VRBridge.") + c.name + (c.passIncompleteTable ? "(incompleteTable)" : "(cold)") +
+                         (collectorRunning ? " running" : " stopped"));
+            lua_checkstack(L, 64);
+            if (c.expectError) {
+                PushBridgeFunction(c.name);
+                MakeCollectionDue(collectorRunning);
+                for (int call = 0; call < 8; ++call) {
+                    lua_pushvalue(L, 1);
+                    int argc = 0;
+                    for (double n : c.numbers) {
+                        lua_pushnumber(L, n);
+                        ++argc;
+                    }
+                    EXPECT_NE(lua_pcall(L, argc, LUA_MULTRET, 0), LUA_OK);
+                    lua_settop(L, 1);
+                }
+            } else {
+                ASSERT_EQ(luau_load(L, "=cold_loop", loopBytecode, loopBytecodeSize, 0), 0);
+                ASSERT_EQ(lua_pcall(L, 0, 1, 0), LUA_OK);
+                PushBridgeFunction(c.name);
+                for (double n : c.numbers) lua_pushnumber(L, n);
+                if (c.passIncompleteTable) lua_createtable(L, 0, 1);
+                const int argCount = 1 + static_cast<int>(c.numbers.size()) + (c.passIncompleteTable ? 1 : 0);
+                MakeCollectionDue(collectorRunning);
+                EXPECT_EQ(lua_pcall(L, argCount, 0, 0), LUA_OK);
+            }
+
+            EXPECT_EQ(CollectorRunning(), collectorRunning);
+            EXPECT_FALSE(g_destructorRan) << "a collection ran during the cold-path call";
+            if (collectorRunning) {
+                EXPECT_TRUE(GameAllocatesUntilTheUserdataIsFreed());
+            }
+            lua_settop(L, 0);
+        }
+    }
+    free(loopBytecode);
 }

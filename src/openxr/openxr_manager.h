@@ -194,16 +194,16 @@ public:
 
     uint64_t GetSubmittedFramePairCount() const { return m_submittedFramePairCount; }
 
-    OpenXrState GetState() const { return m_state; }
-    bool IsPassThrough() const { return m_state == OpenXrState::PassThrough; }
-    bool IsActive() const { return m_state == OpenXrState::Active; }
+    OpenXrState GetState() const { return m_state.load(); }
+    bool IsPassThrough() const { return m_state.load() == OpenXrState::PassThrough; }
+    bool IsActive() const { return m_state.load() == OpenXrState::Active; }
 
     const OpenXrRuntimeInfo& GetRuntimeInfo() const { return m_runtimeInfo; }
-    XrSession GetSession() const { return m_session; }
+    XrSession GetSession() const { return m_session.load(); }
     XrSpace GetLocalSpace() const { return m_localSpace; }
     XrSpace GetBaseLocalSpace() const { return m_baseLocalSpace; }
     XrSpace GetViewSpace() const { return m_viewSpace; }
-    bool HasSession() const { return m_session != XR_NULL_HANDLE; }
+    bool HasSession() const { return m_session.load() != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
     bool IsSessionFocused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     XrSessionState GetSessionState() const { return m_sessionState; }
@@ -231,11 +231,11 @@ public:
 
 private:
     std::shared_ptr<IOpenXrDispatch> m_dispatch;
-    OpenXrState m_state = OpenXrState::Uninitialized;
+    std::atomic<OpenXrState> m_state{OpenXrState::Uninitialized};
     XrInstance m_instance = XR_NULL_HANDLE;
     OpenXrRuntimeInfo m_runtimeInfo;
 
-    XrSession m_session = XR_NULL_HANDLE;
+    std::atomic<XrSession> m_session{XR_NULL_HANDLE};
     bool m_sessionRunning = false;
     XrSessionState m_sessionState = XR_SESSION_STATE_UNKNOWN;
     uint32_t m_beginSessionFailures = 0;
