@@ -132,6 +132,7 @@ std::string SnapshotTextureToBmp(ID3D12Device* device, ID3D12CommandQueue* queue
     UINT64 rowSize = 0;
     UINT64 totalBytes = 0;
     device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rows, &rowSize, &totalBytes);
+    if (totalBytes == 0) return "texture has zero copyable bytes";
 
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_READBACK;
@@ -155,13 +156,16 @@ std::string SnapshotTextureToBmp(ID3D12Device* device, ID3D12CommandQueue* queue
         return "could not create a command list";
     }
 
+    const bool needsTransition = state != D3D12_RESOURCE_STATE_COPY_SOURCE;
     D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = texture;
-    barrier.Transition.StateBefore = state;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    list->ResourceBarrier(1, &barrier);
+    if (needsTransition) {
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = texture;
+        barrier.Transition.StateBefore = state;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        list->ResourceBarrier(1, &barrier);
+    }
     D3D12_TEXTURE_COPY_LOCATION destination{};
     destination.pResource = readback.Get();
     destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -171,22 +175,48 @@ std::string SnapshotTextureToBmp(ID3D12Device* device, ID3D12CommandQueue* queue
     source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     source.SubresourceIndex = 0;
     list->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    list->ResourceBarrier(1, &barrier);
+    if (needsTransition) {
+        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+        list->ResourceBarrier(1, &barrier);
+    }
     if (FAILED(list->Close())) return "could not record the copy";
 
     ComPtr<ID3D12Fence> fence;
     if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return "could not create a fence";
     ID3D12CommandList* lists[] = { list.Get() };
     queue->ExecuteCommandLists(1, lists);
-    queue->Signal(fence.Get(), 1);
-    if (fence->GetCompletedValue() < 1) {
+    auto leakInFlightResources = [&]() {
+        readback.Detach();
+        allocator.Detach();
+        list.Detach();
+        fence.Detach();
+    };
+    if (FAILED(queue->Signal(fence.Get(), 1))) {
+        leakInFlightResources();
+        return "could not signal the copy fence";
+    }
+    const UINT64 completed = fence->GetCompletedValue();
+    if (completed == UINT64_MAX) {
+        leakInFlightResources();
+        return "the GPU device was removed";
+    }
+    if (completed < 1) {
         HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!event) return "could not create an event";
-        fence->SetEventOnCompletion(1, event);
+        if (!event) {
+            leakInFlightResources();
+            return "could not create an event";
+        }
+        if (FAILED(fence->SetEventOnCompletion(1, event))) {
+            CloseHandle(event);
+            leakInFlightResources();
+            return "could not arm the copy fence event";
+        }
         const DWORD waited = WaitForSingleObject(event, 5000);
+        if (waited != WAIT_OBJECT_0) {
+            leakInFlightResources();
+            return "the GPU did not finish the copy within 5 s";
+        }
         CloseHandle(event);
-        if (waited != WAIT_OBJECT_0) return "the GPU did not finish the copy within 5 s";
     }
 
     void* mapped = nullptr;

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "core/perf_trace.h"
 #include "openxr/openxr_manager.h"
 #include "openxr/d3d12_eye_copy.h"
 #include "fake_openxr_runtime.h"
@@ -292,6 +293,271 @@ TEST(OpenXrEyeCopyD3D12Test, TheModuleCopiesAndClearsWithoutAnyOpenXrHandle) {
         ADD_FAILURE() << "D3D12 debug layer: " << error;
     }
     EXPECT_TRUE(errors.empty());
+}
+
+class WarpDevice {
+public:
+    std::string unavailableReason;
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandQueue> queue;
+
+    WarpDevice() {
+        ComPtr<IDXGIFactory4> factory;
+        ComPtr<IDXGIAdapter> warp;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)))) {
+            unavailableReason = "no WARP adapter";
+            return;
+        }
+        if (FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+            unavailableReason = "could not create a WARP D3D12 device";
+            return;
+        }
+        D3D12_COMMAND_QUEUE_DESC queueDesc{};
+        queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue)))) {
+            unavailableReason = "could not create command queue";
+            device.Reset();
+        }
+    }
+
+    ComPtr<ID3D12Resource> CreateEyeImage(UINT width, UINT height) {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        ComPtr<ID3D12Resource> image;
+        device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                        nullptr, IID_PPV_ARGS(&image));
+        return image;
+    }
+
+    ComPtr<ID3D12Resource> CreateBackBuffer(UINT width, UINT height) {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        ComPtr<ID3D12Resource> backBuffer;
+        device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PRESENT,
+                                        nullptr, IID_PPV_ARGS(&backBuffer));
+        return backBuffer;
+    }
+
+    void WaitForQueue() {
+        ComPtr<ID3D12Fence> fence;
+        device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        queue->Signal(fence.Get(), 1);
+        fence->SetEventOnCompletion(1, event);
+        WaitForSingleObject(event, INFINITE);
+        CloseHandle(event);
+    }
+};
+
+TEST(OpenXrEyeCopyD3D12Test, UsesFourSlotRingAndReleasesPriorResourcesOnDeviceChange) {
+    EXPECT_EQ(D3D12EyeCopy::kRingSize, 4u);
+
+    WarpDevice gpu;
+    if (!gpu.unavailableReason.empty()) {
+        GTEST_SKIP() << gpu.unavailableReason;
+    }
+
+    D3D12_COMMAND_QUEUE_DESC queueDesc{};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ComPtr<ID3D12CommandQueue> queue2;
+    ASSERT_TRUE(SUCCEEDED(gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue2))));
+
+    constexpr UINT kWidth = 128;
+    constexpr UINT kHeight = 64;
+    ComPtr<ID3D12Resource> bb = gpu.CreateBackBuffer(kWidth, kHeight);
+    ComPtr<ID3D12Resource> eye = gpu.CreateEyeImage(kWidth, kHeight);
+    ASSERT_TRUE(bb && eye);
+
+    auto deviceRefCount = [&]() {
+        gpu.device->AddRef();
+        return gpu.device->Release();
+    };
+    const ULONG baselineRefs = deviceRefCount();
+
+    int64_t nowNs = 0;
+    std::vector<std::string> traceLines;
+    PerfTrace& trace = PerfTrace::Instance();
+    trace.SetClock([&nowNs] { return nowNs += 100000; });
+    trace.SetSink([&traceLines](const std::string& line) { traceLines.push_back(line); });
+    trace.Start(10);
+
+    {
+        D3D12EyeCopy eyeCopy;
+        eyeCopy.SetDeviceAndQueue(gpu.device.Get(), gpu.queue.Get());
+        for (uint32_t i = 0; i < 8; ++i) {
+            eyeCopy.Copy(bb.Get(), eye.Get(), kWidth, kHeight);
+        }
+        EXPECT_TRUE(eyeCopy.ClearToBlack(bb.Get()));
+        EXPECT_GT(deviceRefCount(), baselineRefs);
+
+        eyeCopy.SetDeviceAndQueue(gpu.device.Get(), queue2.Get());
+        EXPECT_EQ(deviceRefCount(), baselineRefs);
+
+        for (uint32_t i = 0; i < 8; ++i) {
+            eyeCopy.Copy(bb.Get(), eye.Get(), kWidth, kHeight);
+        }
+        EXPECT_TRUE(eyeCopy.ClearToBlack(bb.Get()));
+        EXPECT_GT(deviceRefCount(), baselineRefs);
+
+        eyeCopy.SetDeviceAndQueue(nullptr, nullptr);
+        EXPECT_EQ(deviceRefCount(), baselineRefs);
+    }
+
+    trace.Stop();
+    trace.SetClock(nullptr);
+    trace.SetSink(nullptr);
+
+    gpu.WaitForQueue();
+    EXPECT_TRUE(SUCCEEDED(gpu.device->GetDeviceRemovedReason()));
+    ASSERT_FALSE(traceLines.empty());
+    EXPECT_NE(traceLines.back().find("| GPU eye copy "), std::string::npos) << traceLines.back();
+}
+
+namespace {
+
+class QueueHookWrapper final : public ID3D12CommandQueue {
+public:
+    explicit QueueHookWrapper(ID3D12CommandQueue* inner) : m_inner(inner) {}
+
+    bool failGetTimestampFrequency = false;
+    bool failSignal = false;
+    uint32_t clockCalibrationCalls = 0;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        return m_inner->QueryInterface(riid, ppvObject);
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return m_inner->AddRef(); }
+    ULONG STDMETHODCALLTYPE Release() override { return m_inner->Release(); }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT* pDataSize, void* pData) override {
+        return m_inner->GetPrivateData(guid, pDataSize, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT DataSize, const void* pData) override {
+        return m_inner->SetPrivateData(guid, DataSize, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown* pData) override {
+        return m_inner->SetPrivateDataInterface(guid, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetName(LPCWSTR Name) override { return m_inner->SetName(Name); }
+    HRESULT STDMETHODCALLTYPE GetDevice(REFIID riid, void** ppvDevice) override {
+        return m_inner->GetDevice(riid, ppvDevice);
+    }
+    void STDMETHODCALLTYPE UpdateTileMappings(ID3D12Resource* a, UINT b, const D3D12_TILED_RESOURCE_COORDINATE* c,
+        const D3D12_TILE_REGION_SIZE* d, ID3D12Heap* e, UINT f, const D3D12_TILE_RANGE_FLAGS* g,
+        const UINT* h, const UINT* i, D3D12_TILE_MAPPING_FLAGS j) override {
+        m_inner->UpdateTileMappings(a, b, c, d, e, f, g, h, i, j);
+    }
+    void STDMETHODCALLTYPE CopyTileMappings(ID3D12Resource* a, const D3D12_TILED_RESOURCE_COORDINATE* b,
+        ID3D12Resource* c, const D3D12_TILED_RESOURCE_COORDINATE* d, const D3D12_TILE_REGION_SIZE* e,
+        D3D12_TILE_MAPPING_FLAGS f) override {
+        m_inner->CopyTileMappings(a, b, c, d, e, f);
+    }
+    void STDMETHODCALLTYPE ExecuteCommandLists(UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists) override {
+        m_inner->ExecuteCommandLists(NumCommandLists, ppCommandLists);
+    }
+    void STDMETHODCALLTYPE SetMarker(UINT Metadata, const void* pData, UINT Size) override {
+        m_inner->SetMarker(Metadata, pData, Size);
+    }
+    void STDMETHODCALLTYPE BeginEvent(UINT Metadata, const void* pData, UINT Size) override {
+        m_inner->BeginEvent(Metadata, pData, Size);
+    }
+    void STDMETHODCALLTYPE EndEvent() override { m_inner->EndEvent(); }
+    HRESULT STDMETHODCALLTYPE Signal(ID3D12Fence* pFence, UINT64 Value) override {
+        if (failSignal) return E_FAIL;
+        return m_inner->Signal(pFence, Value);
+    }
+    HRESULT STDMETHODCALLTYPE Wait(ID3D12Fence* pFence, UINT64 Value) override {
+        return m_inner->Wait(pFence, Value);
+    }
+    HRESULT STDMETHODCALLTYPE GetTimestampFrequency(UINT64* pFrequency) override {
+        if (failGetTimestampFrequency) return E_FAIL;
+        return m_inner->GetTimestampFrequency(pFrequency);
+    }
+    HRESULT STDMETHODCALLTYPE GetClockCalibration(UINT64* pGpuTimestamp, UINT64* pCpuTimestamp) override {
+        ++clockCalibrationCalls;
+        return m_inner->GetClockCalibration(pGpuTimestamp, pCpuTimestamp);
+    }
+    D3D12_COMMAND_QUEUE_DESC STDMETHODCALLTYPE GetDesc() override { return m_inner->GetDesc(); }
+
+private:
+    ID3D12CommandQueue* m_inner;
+};
+
+}
+
+TEST(OpenXrEyeCopyD3D12Test, ReleaseResetsTimestampFailureAndCalibrationStateAndHandlesSignalFailure) {
+    WarpDevice gpu;
+    if (!gpu.unavailableReason.empty()) {
+        GTEST_SKIP() << gpu.unavailableReason;
+    }
+    constexpr UINT kWidth = 64;
+    constexpr UINT kHeight = 64;
+    ComPtr<ID3D12Resource> bb = gpu.CreateBackBuffer(kWidth, kHeight);
+    ComPtr<ID3D12Resource> eye = gpu.CreateEyeImage(kWidth, kHeight);
+    ASSERT_TRUE(bb && eye);
+
+    QueueHookWrapper queue(gpu.queue.Get());
+    queue.failGetTimestampFrequency = true;
+
+    int64_t nowNs = 0;
+    std::vector<std::string> traceLines;
+    PerfTrace& trace = PerfTrace::Instance();
+    trace.SetClock([&nowNs] { return nowNs += 100000; });
+    trace.SetSink([&traceLines](const std::string& line) { traceLines.push_back(line); });
+    trace.Start(10);
+
+    D3D12EyeCopy eyeCopy;
+    eyeCopy.SetDeviceAndQueue(gpu.device.Get(), &queue);
+    for (uint32_t i = 0; i < 6; ++i) {
+        eyeCopy.Copy(bb.Get(), eye.Get(), kWidth, kHeight);
+    }
+    gpu.WaitForQueue();
+    eyeCopy.Release();
+
+    queue.failGetTimestampFrequency = false;
+    for (uint32_t i = 0; i < 6; ++i) {
+        eyeCopy.Copy(bb.Get(), eye.Get(), kWidth, kHeight);
+    }
+    EXPECT_EQ(queue.clockCalibrationCalls, 1u);
+
+    gpu.WaitForQueue();
+    eyeCopy.Release();
+    for (uint32_t i = 0; i < 5; ++i) {
+        eyeCopy.Copy(bb.Get(), eye.Get(), kWidth, kHeight);
+    }
+    EXPECT_EQ(queue.clockCalibrationCalls, 2u);
+
+    queue.failSignal = true;
+    EXPECT_FALSE(eyeCopy.ClearToBlack(bb.Get()));
+    eyeCopy.Copy(bb.Get(), eye.Get(), kWidth, kHeight);
+    queue.failSignal = false;
+    gpu.WaitForQueue();
+    eyeCopy.Release();
+
+    trace.Stop();
+    trace.SetClock(nullptr);
+    trace.SetSink(nullptr);
+
+    EXPECT_TRUE(SUCCEEDED(gpu.device->GetDeviceRemovedReason()));
+    ASSERT_FALSE(traceLines.empty());
+    EXPECT_NE(traceLines.back().find("| GPU eye copy "), std::string::npos) << traceLines.back();
 }
 
 }

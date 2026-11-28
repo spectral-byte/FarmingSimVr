@@ -152,6 +152,12 @@ InjectorRuntime::~InjectorRuntime() {
     m_deps.ngxInterceptor->SetDxgiProxy(nullptr);
     m_deps.ngxInterceptor->SetVRBridge(nullptr);
     m_deps.ngxInterceptor->SetOpenXrManager(nullptr);
+
+    if (m_deps.openXrManager && m_proxy &&
+        (m_proxy->GetD3D12Device() != nullptr || m_proxy->GetD3D12CommandQueue() != nullptr)) {
+        m_deps.openXrManager->Shutdown();
+    }
+    m_proxy.reset();
 }
 
 }

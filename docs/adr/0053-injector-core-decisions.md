@@ -120,6 +120,7 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 - **`InjectorRuntime::~InjectorRuntime`, `if (IsProcessTerminating()) {`**: A thread killed at termination may hold the detour, registry or NGX locks: take none of them.
 - **`InjectorRuntime::~InjectorRuntime`, `m_proxy->SetOwnedByRuntime(false);`**: Remove this runtime's detours while hooks can still find it, so none fires without its original.
 - **`InjectorRuntime::~InjectorRuntime`, `m_deps.ngxInterceptor->SetFidelityFxInterceptor(nullptr);`**: Do not leave the NGX interceptor pointing at objects we are about to free.
+- **`InjectorRuntime::~InjectorRuntime`, `m_deps.openXrManager->Shutdown();`**: When `m_proxy` holds an `ID3D12Device` or `ID3D12CommandQueue`, destroy OpenXR and `D3D12EyeCopy` resources while `m_proxy` still holds those D3D12 references, before `m_proxy.reset()` releases them; leave device-less external `OpenXrManager` instances intact when callers share them across runtimes.
 
 ### `src/core/injector_runtime.h`
 
@@ -186,6 +187,7 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 ### `src/core/texture_snapshot.h`
 
 - **`DecodePixelToBgr8`**: Diagnostics (`vrEyeSnapshot`): what the Injector hands an eye, written to a picture file that can be looked at. The texture is copied to the CPU on the given queue and the call blocks until the GPU has done the copy, so it is for one-off use only, never every frame.
+- **`SnapshotTextureToBmp`** (`src/core/texture_snapshot.cpp`): Skip `ResourceBarrier` transitions when the source texture is already in `D3D12_RESOURCE_STATE_COPY_SOURCE` because D3D12 forbids same-state `COPY_SOURCE -> COPY_SOURCE` barriers. After `ExecuteCommandLists`, if `Signal`, `GetCompletedValue() == UINT64_MAX`, `CreateEventW`, `SetEventOnCompletion`, or `WaitForSingleObject` fails or times out, detach the in-flight GPU objects (`readback`, `allocator`, `list`, `fence`) — and omit `CloseHandle` on the event when `SetEventOnCompletion` was already armed — rather than destroying resources or closing a handle the GPU or driver may still reference.
 
 ### `src/core/thread_trace.cpp`
 
