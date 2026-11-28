@@ -3,6 +3,7 @@
 #include "core/injector_version.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_runtime.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 #include "ngx/ngx_interceptor.h"
 #include "luacode.h"
 #include <string>
@@ -1359,6 +1360,102 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
         assert(VRBridge.setDlssNearClip(0.1) == false, "setDlssNearClip must fail without NGX")
     )";
     EXPECT_EQ(RunLuauString(L, testScript), 0);
+}
+
+TEST_F(VrBridgeTest, SetDlssMvFixSurfacesFfxStateWithoutNgxAndIsolatesNgxFailure) {
+    auto ffx = std::make_shared<fs25vr::FidelityFxInterceptor>();
+    fs25vr::VRBridge ffxOnlyBridge(nullptr, nullptr, std::string(fs25vr::kInjectorVersion), ffx);
+    ASSERT_TRUE(ffxOnlyBridge.Inject(L));
+
+    EXPECT_STREQ(ffxOnlyBridge.DescribeMvFixState(), "on");
+    EXPECT_EQ(RunLuauString(L, R"(
+        assert(VRBridge.setDlssMvFix(false) == true, "setDlssMvFix off failed with FFX only")
+        assert(VRBridge.setDlssMvFix(true) == true, "setDlssMvFix on failed with FFX only")
+        assert(VRBridge.dlssDiag(16) == true, "dlssDiag failed with FFX only")
+    )"), 0);
+    EXPECT_TRUE(ffx->IsMvFixEnabled());
+    EXPECT_EQ(ffx->GetDiagDispatchesRemaining(), 16u);
+}
+
+TEST_F(VrBridgeTest, SetDlssMvFixSurfacesActiveUpscalerFailureIndependently) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    auto ffx = std::make_shared<fs25vr::FidelityFxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx, std::string(fs25vr::kInjectorVersion), ffx);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    static volatile int s_dummyFfxCalls = 0;
+    struct DummyFfx {
+        __declspec(noinline) static fs25vr::ffxReturnCode_t Create(fs25vr::ffxContext* ctx,
+                                                                  fs25vr::ffxCreateContextDescHeader*,
+                                                                  const fs25vr::ffxAllocationCallbacks*) {
+            static int s_id = 1;
+            s_dummyFfxCalls = s_dummyFfxCalls + 1;
+            *ctx = reinterpret_cast<fs25vr::ffxContext>(static_cast<uintptr_t>(++s_id));
+            return fs25vr::FFX_API_RETURN_OK;
+        }
+        __declspec(noinline) static fs25vr::ffxReturnCode_t Destroy(fs25vr::ffxContext* ctx,
+                                                                   const fs25vr::ffxAllocationCallbacks*) {
+            s_dummyFfxCalls = s_dummyFfxCalls + 2;
+            *ctx = nullptr;
+            return fs25vr::FFX_API_RETURN_OK;
+        }
+    };
+    ASSERT_TRUE(ffx->AttachDirect(&DummyFfx::Create, &DummyFfx::Destroy));
+
+    ngx->SetMotionVectorPassFactory([](ID3D12GraphicsCommandList*) {
+        return std::unique_ptr<fs25vr::IMotionVectorPass>();
+    });
+    static volatile int s_dummyNgxCalls = 0;
+    struct DummyNgx {
+        __declspec(noinline) static fs25vr::NVSDK_NGX_Result Create(ID3D12GraphicsCommandList*, fs25vr::NVSDK_NGX_Feature,
+                                                                    fs25vr::NVSDK_NGX_Parameter*,
+                                                                    fs25vr::NVSDK_NGX_Handle** out) {
+            static unsigned int s_id = 1;
+            s_dummyNgxCalls = s_dummyNgxCalls + 1;
+            auto* h = new fs25vr::NVSDK_NGX_Handle();
+            h->Id = s_id++;
+            *out = h;
+            return fs25vr::NVSDK_NGX_Result_Success;
+        }
+        __declspec(noinline) static fs25vr::NVSDK_NGX_Result Release(fs25vr::NVSDK_NGX_Handle* h) {
+            s_dummyNgxCalls = s_dummyNgxCalls + 2;
+            delete h;
+            return fs25vr::NVSDK_NGX_Result_Success;
+        }
+        __declspec(noinline) static fs25vr::NVSDK_NGX_Result Eval(ID3D12GraphicsCommandList*,
+                                                                  const fs25vr::NVSDK_NGX_Handle*,
+                                                                  const fs25vr::NVSDK_NGX_Parameter*,
+                                                                  fs25vr::PFN_NVSDK_NGX_ProgressCallback) {
+            s_dummyNgxCalls = s_dummyNgxCalls + 4;
+            return fs25vr::NVSDK_NGX_Result_Success;
+        }
+    };
+    ASSERT_TRUE(ngx->AttachDirect(&DummyNgx::Create, &DummyNgx::Release, &DummyNgx::Eval));
+    ngx->SetVRBridge(&bridge);
+    fs25vr::NgxParameterImpl params;
+    params.Set(fs25vr::NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(fs25vr::NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(fs25vr::NVSDK_NGX_Parameter_Depth, reinterpret_cast<ID3D12Resource*>(static_cast<uintptr_t>(0x1)));
+    params.Set(fs25vr::NVSDK_NGX_Parameter_MotionVectors, reinterpret_cast<ID3D12Resource*>(static_cast<uintptr_t>(0x2)));
+    auto pfnCreate = &DummyNgx::Create;
+    auto pfnRelease = &DummyNgx::Release;
+    auto pfnEval = &DummyNgx::Eval;
+    fs25vr::NVSDK_NGX_Handle* ngxHandle = nullptr;
+    ASSERT_EQ(pfnCreate(nullptr, fs25vr::NVSDK_NGX_Feature_SuperSampling, &params, &ngxHandle),
+              fs25vr::NVSDK_NGX_Result_Success);
+    pfnEval(reinterpret_cast<ID3D12GraphicsCommandList*>(static_cast<uintptr_t>(0x3)), ngxHandle, &params, nullptr);
+    ASSERT_TRUE(ngx->IsMvFixDisabledForSession());
+    pfnRelease(ngxHandle);
+    ngx->Detach();
+
+    EXPECT_FALSE(ngx->IsAttached());
+    EXPECT_TRUE(ffx->IsAttached());
+    EXPECT_STREQ(bridge.DescribeMvFixState(), "on");
+    EXPECT_EQ(RunLuauString(L, R"(
+        assert(VRBridge.setDlssMvFix(true) == true, "active FFX should remain controllable when unattached NGX failed")
+    )"), 0);
+
+    ffx->DetachAll();
 }
 
 TEST_F(VrBridgeTest, ReportCameraRecordStampsTheRecordForTheEyeThatRendered) {

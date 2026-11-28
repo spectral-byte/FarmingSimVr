@@ -43,6 +43,7 @@ public:
     size_t GetActiveVirtualContextCount() const;
     bool IsVirtualContext(ffxContext context) const;
     VirtualFfxContext* GetVirtualContext(ffxContext context) const;
+    InFlightLease<VirtualFfxContext> AcquireVirtualContext(ffxContext context) const;
 
     // Dispatch diagnostics, matching the DLSS ones: while armed, every upscale dispatch logs a trace line
     // and feeds a per-context jitter summary, logged when the countdown reaches zero. Armed when a context
@@ -63,9 +64,14 @@ public:
     // (1 means the contexts strictly alternated).
     uint32_t GetDiagLongestContextRun() const;
 
+    static constexpr bool kDefaultMvFixEnabled = true;
+
     void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
+    bool SetMvFixEnabled(bool enabled);
+    bool IsMvFixEnabled() const { return m_mvFixEnabled.load(); }
     bool IsMvFixDisabledForSession() const { return m_mvFixDisabled.load(); }
     std::string GetMvFixDisableReason() const;
+    const char* DescribeMvFixState() const;
 
     void TriggerDiscontinuityFlush();
     bool ConsumeDiscontinuity(uint32_t contextIndex);
@@ -109,7 +115,7 @@ private:
     FunctionDetour m_detourDispatch;
 
     std::atomic<uint32_t> m_nextVirtualId{2000};
-    std::unordered_map<ffxContext, std::unique_ptr<VirtualFfxContext>> m_virtualContexts;
+    std::unordered_map<ffxContext, std::shared_ptr<VirtualFfxContext>> m_virtualContexts;
 
     std::atomic<uint64_t> m_dispatchCount{0};
     std::atomic<int> m_lastRenderingMode{-1};
@@ -120,6 +126,7 @@ private:
     MotionVectorPassFactory m_mvPassFactory;
     std::unique_ptr<IMotionVectorPass> m_mvPass;
     std::string m_mvFixDisableReason;
+    std::atomic<bool> m_mvFixEnabled{kDefaultMvFixEnabled};
     std::atomic<bool> m_mvFixDisabled{false};
 
     std::atomic<uint32_t> m_diagRemaining{0};

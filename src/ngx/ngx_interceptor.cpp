@@ -5,16 +5,135 @@
 #include "proxy/dxgi_proxy.h"
 #include "openxr/openxr_manager.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
-#include <cwctype>
-#include <cmath>
 #include <algorithm>
-#include <sstream>
-#include <iomanip>
 #include <chrono>
+#include <cmath>
+#include <cwctype>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 namespace fs25vr {
 
 namespace {
+struct TrackedNgxParamRegistry {
+    std::mutex mutex;
+    std::unordered_map<const NVSDK_NGX_Parameter*, const NgxParameterImpl*> instances;
+};
+
+TrackedNgxParamRegistry& NgxParamRegistry() {
+    static auto* registry = new TrackedNgxParamRegistry();
+    return *registry;
+}
+
+struct KnownNgxKey {
+    const char* name;
+    NgxParamType type;
+};
+
+constexpr KnownNgxKey kKnownNgxKeys[] = {
+    {NVSDK_NGX_Parameter_Width, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_Height, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_OutWidth, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_OutHeight, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_PerfQualityValue, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_RTXValue, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_Reset, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_CreationNodeMask, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_VisibilityNodeMask, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_Color, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Output, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Depth, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_MotionVectors, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Jitter_Offset_X, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_Jitter_Offset_Y, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_MV_Scale_X, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_MV_Scale_Y, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_MV_Offset_X, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_MV_Offset_Y, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_Sharpness, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_InWidth, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_InHeight, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Width, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Height, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_ExposureTexture, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_PreExposure, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Exposure_Texture, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_DLSS_Pre_Exposure, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Exposure, NgxParamType::Float},
+    {NVSDK_NGX_Parameter_TonemapperType, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, NgxParamType::D3D12Resource},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_Resource_Width, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_Resource_Height, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, NgxParamType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, NgxParamType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, NgxParamType::Uint}
+};
+
+bool IsDataOrImageResourceLoad(DWORD dwFlags, HMODULE hMod) {
+    constexpr DWORD kDataFlags =
+        LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+    if ((dwFlags & kDataFlags) != 0) return true;
+    return (reinterpret_cast<uintptr_t>(hMod) & static_cast<uintptr_t>(3)) != 0;
+}
+
+struct SavedPresetKey {
+    const char* name = nullptr;
+    bool wrote = false;
+    bool hadPrev = false;
+    int prevVal = 0;
+};
+
+struct SavedPresetOverrides {
+    SavedPresetKey keys[7] = {
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality}
+    };
+
+    void Apply(NVSDK_NGX_Parameter* params, int presetOverride, bool preserveExplicitBase) {
+        if (presetOverride <= 0 || !params) return;
+        for (size_t i = 0; i < std::size(keys); ++i) {
+            auto& entry = keys[i];
+            int prev = 0;
+            if (NVSDK_NGX_SUCCEED(params->Get(entry.name, &prev))) {
+                entry.hadPrev = true;
+                entry.prevVal = prev;
+                if (i == 0 && preserveExplicitBase && prev > 0) {
+                    continue;
+                }
+            }
+            params->Set(entry.name, presetOverride);
+            entry.wrote = true;
+        }
+    }
+
+    void Restore(NVSDK_NGX_Parameter* params) const {
+        if (!params) return;
+        for (const auto& entry : keys) {
+            if (entry.wrote) {
+                params->Set(entry.name, entry.hadPrev ? entry.prevVal : 0);
+            }
+        }
+    }
+};
+
 std::atomic<NgxInterceptor*> s_featureHost{nullptr};
 std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
 
@@ -44,6 +163,133 @@ constexpr float kJitterMatchTolerance = 1e-4f;
 constexpr size_t kMaxListedJitterOffsets = 16;
 }
 
+NgxParameterImpl::NgxParameterImpl() {
+    auto& registry = NgxParamRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.instances[static_cast<const NVSDK_NGX_Parameter*>(this)] = this;
+}
+
+NgxParameterImpl::~NgxParameterImpl() {
+    auto& registry = NgxParamRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.instances.erase(static_cast<const NVSDK_NGX_Parameter*>(this));
+}
+
+void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
+    if (!source || source == this) return;
+
+    {
+        auto& registry = NgxParamRegistry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        auto it = registry.instances.find(source);
+        if (it != registry.instances.end() && it->second) {
+            m_params = it->second->m_params;
+            return;
+        }
+    }
+
+    m_params.clear();
+    for (const auto& key : kKnownNgxKeys) {
+        switch (key.type) {
+            case NgxParamType::Float: {
+                float fVal = 0.0f;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &fVal))) {
+                    Set(key.name, fVal);
+                    break;
+                }
+                double dVal = 0.0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &dVal))) {
+                    Set(key.name, dVal);
+                }
+                break;
+            }
+            case NgxParamType::Double: {
+                double dVal = 0.0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &dVal))) {
+                    Set(key.name, dVal);
+                    break;
+                }
+                float fVal = 0.0f;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &fVal))) {
+                    Set(key.name, fVal);
+                }
+                break;
+            }
+            case NgxParamType::Int: {
+                int iVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &iVal))) {
+                    Set(key.name, iVal);
+                    break;
+                }
+                unsigned int uVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &uVal))) {
+                    Set(key.name, uVal);
+                }
+                break;
+            }
+            case NgxParamType::Uint: {
+                unsigned long long ullVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &ullVal))) {
+                    if (ullVal > (std::numeric_limits<unsigned int>::max)()) {
+                        Set(key.name, ullVal);
+                    } else {
+                        Set(key.name, static_cast<unsigned int>(ullVal));
+                    }
+                    break;
+                }
+                unsigned int uVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &uVal))) {
+                    Set(key.name, uVal);
+                }
+                break;
+            }
+            case NgxParamType::Ull: {
+                unsigned long long ullVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &ullVal))) {
+                    Set(key.name, ullVal);
+                }
+                break;
+            }
+            case NgxParamType::D3D12Resource: {
+                ID3D12Resource* res12 = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res12))) {
+                    Set(key.name, res12);
+                    break;
+                }
+                ID3D11Resource* res11 = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res11))) {
+                    Set(key.name, res11);
+                    break;
+                }
+                void* pVal = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
+                    Set(key.name, pVal);
+                }
+                break;
+            }
+            case NgxParamType::D3D11Resource: {
+                ID3D11Resource* res11 = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res11))) {
+                    Set(key.name, res11);
+                    break;
+                }
+                void* pVal = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
+                    Set(key.name, pVal);
+                }
+                break;
+            }
+            case NgxParamType::VoidPtr: {
+                void* pVal = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
+                    Set(key.name, pVal);
+                }
+                break;
+            }
+        }
+    }
+}
+
 NgxInterceptor* NgxInterceptor::FeatureHost() {
     return s_featureHost.load();
 }
@@ -67,15 +313,9 @@ NgxInterceptor::~NgxInterceptor() {
 bool NgxInterceptor::MatchesNgxName(LPCWSTR lpLibFileName) {
     if (!lpLibFileName) return false;
     std::wstring s(lpLibFileName);
-    for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
-
-    if (s.find(L"dlss") != std::wstring::npos ||
-        s.find(L"update") != std::wstring::npos) {
-        return false;
-    }
-
     auto pos = s.find_last_of(L"\\/");
     std::wstring filename = (pos == std::wstring::npos) ? s : s.substr(pos + 1);
+    for (auto& c : filename) c = static_cast<wchar_t>(towlower(static_cast<wint_t>(c)));
 
     return filename == L"nvngx.dll" || filename == L"_nvngx.dll" ||
            filename == L"nvngx" || filename == L"_nvngx";
@@ -84,15 +324,9 @@ bool NgxInterceptor::MatchesNgxName(LPCWSTR lpLibFileName) {
 bool NgxInterceptor::MatchesNgxName(LPCSTR lpLibFileName) {
     if (!lpLibFileName) return false;
     std::string s(lpLibFileName);
-    for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-
-    if (s.find("dlss") != std::string::npos ||
-        s.find("update") != std::string::npos) {
-        return false;
-    }
-
     auto pos = s.find_last_of("\\/");
     std::string filename = (pos == std::string::npos) ? s : s.substr(pos + 1);
+    for (auto& c : filename) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
     return filename == "nvngx.dll" || filename == "_nvngx.dll" ||
            filename == "nvngx" || filename == "_nvngx";
@@ -157,14 +391,17 @@ bool NgxInterceptor::AttachDirectInternal(
         !m_detourEvaluateFeature.Install(reinterpret_cast<void*>(pfnEvaluate), reinterpret_cast<void*>(&NgxInterceptor::Intercept_EvaluateFeature))) {
         LogError("NgxInterceptor: Failed to install EvaluateFeature detour.");
     }
-    if (pfnAlloc) {
-        m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters));
+    if (pfnAlloc &&
+        !m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters))) {
+        LogError("NgxInterceptor: Failed to install AllocateParameters detour.");
     }
-    if (pfnDestroy) {
-        m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters));
+    if (pfnDestroy &&
+        !m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters))) {
+        LogError("NgxInterceptor: Failed to install DestroyParameters detour.");
     }
-    if (pfnGetCaps) {
-        m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters));
+    if (pfnGetCaps &&
+        !m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters))) {
+        LogError("NgxInterceptor: Failed to install GetCapabilityParameters detour.");
     }
 
     m_isAttached = true;
@@ -235,9 +472,9 @@ void NgxInterceptor::GetTargetUpscalingDimensions(uint32_t& outWidth, uint32_t& 
 }
 
 bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
-    if (!hNgxModule) return false;
-
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (!hNgxModule || (reinterpret_cast<uintptr_t>(hNgxModule) & static_cast<uintptr_t>(3)) != 0) {
+        return false;
+    }
 
     char modPath[MAX_PATH] = {0};
     GetModuleFileNameA(hNgxModule, modPath, MAX_PATH);
@@ -259,7 +496,12 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
     if (!pfnAlloc || !pfnDestroy || !pfnGetCaps) {
         HMODULE hNvngx = GetModuleHandleW(L"nvngx.dll");
         if (!hNvngx) {
-            hNvngx = LoadLibraryW(L"nvngx.dll");
+            decltype(&LoadLibraryW) origLoadW = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                origLoadW = Original<decltype(&LoadLibraryW)>(m_detourLoadLibraryW);
+            }
+            hNvngx = origLoadW ? origLoadW(L"nvngx.dll") : LoadLibraryW(L"nvngx.dll");
         }
         if (hNvngx) {
             if (!pfnAlloc) {
@@ -276,6 +518,8 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
             }
         }
     }
+
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
     if (m_isAttached) {
         if (pfnAlloc && !m_detourAllocateParameters.IsInstalled()) {
@@ -360,23 +604,32 @@ bool NgxInterceptor::InstallModuleLoadHooks() {
     void* pfnLoadLibraryA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryA"));
     void* pfnLoadLibraryExA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryExA"));
 
+    if (!pfnLoadLibraryW || !pfnLoadLibraryExW || !pfnLoadLibraryA || !pfnLoadLibraryExA) {
+        LogError("NgxInterceptor: Failed to resolve kernel32 LoadLibrary entry points.");
+        return false;
+    }
+
     NgxInterceptor* noHost = nullptr;
     if (!s_loadHookHost.compare_exchange_strong(noHost, this)) {
         LogError("NgxInterceptor: Another interceptor already owns the module load detours.");
         return false;
     }
 
-    if (pfnLoadLibraryW) {
-        m_detourLoadLibraryW.Install(pfnLoadLibraryW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryW));
-    }
-    if (pfnLoadLibraryExW) {
-        m_detourLoadLibraryExW.Install(pfnLoadLibraryExW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExW));
-    }
-    if (pfnLoadLibraryA) {
-        m_detourLoadLibraryA.Install(pfnLoadLibraryA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryA));
-    }
-    if (pfnLoadLibraryExA) {
+    bool ok =
+        m_detourLoadLibraryW.Install(pfnLoadLibraryW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryW)) &&
+        m_detourLoadLibraryExW.Install(pfnLoadLibraryExW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExW)) &&
+        m_detourLoadLibraryA.Install(pfnLoadLibraryA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryA)) &&
         m_detourLoadLibraryExA.Install(pfnLoadLibraryExA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExA));
+
+    if (!ok) {
+        LogError("NgxInterceptor: Failed to install one or more module load detours.");
+        if (m_detourLoadLibraryExA.IsInstalled()) m_detourLoadLibraryExA.Uninstall();
+        if (m_detourLoadLibraryA.IsInstalled()) m_detourLoadLibraryA.Uninstall();
+        if (m_detourLoadLibraryExW.IsInstalled()) m_detourLoadLibraryExW.Uninstall();
+        if (m_detourLoadLibraryW.IsInstalled()) m_detourLoadLibraryW.Uninstall();
+        NgxInterceptor* expectedLoadHost = this;
+        s_loadHookHost.compare_exchange_strong(expectedLoadHost, nullptr);
+        return false;
     }
 
     m_moduleHooksInstalled = true;
@@ -637,7 +890,8 @@ NgxInterceptor::JitterSummary NgxInterceptor::GetDiagJitterSummary(uint32_t cont
 }
 
 void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex,
-                                       const NVSDK_NGX_Parameter* params, bool reset, bool isDualPass) {
+                                       const NVSDK_NGX_Parameter* params, bool reset, bool isDualPass,
+                                       const ResolvedCameras* resolvedCameras) {
     uint32_t remaining = m_diagRemaining.load();
     while (remaining > 0 && !m_diagRemaining.compare_exchange_weak(remaining, remaining - 1)) {}
     if (remaining == 0) return;
@@ -683,7 +937,11 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
        << " Render=" << renderW << "x" << renderH
        << " Thread=" << GetCurrentThreadId();
     if (bridge) {
-        ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
+        if (resolvedCameras) {
+            ss << " " << DescribeResolvedCameras(*resolvedCameras);
+        } else {
+            ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
+        }
     }
     LogInfo(ss.str());
 
@@ -778,14 +1036,24 @@ VirtualNgxHandle* NgxInterceptor::GetVirtualHandle(const NVSDK_NGX_Handle* handl
     return nullptr;
 }
 
-void NgxInterceptor::RegisterVirtualHandle(std::unique_ptr<VirtualNgxHandle> handle) {
+InFlightLease<VirtualNgxHandle> NgxInterceptor::AcquireVirtualHandle(const NVSDK_NGX_Handle* handle) const {
+    if (!handle) return {};
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    auto it = m_virtualHandles.find(const_cast<NVSDK_NGX_Handle*>(handle));
+    if (it != m_virtualHandles.end() && it->second) {
+        return InFlightLease<VirtualNgxHandle>(it->second);
+    }
+    return {};
+}
+
+void NgxInterceptor::RegisterVirtualHandle(std::shared_ptr<VirtualNgxHandle> handle) {
     if (!handle) return;
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     NVSDK_NGX_Handle* rawKey = static_cast<NVSDK_NGX_Handle*>(handle.get());
     m_virtualHandles[rawKey] = std::move(handle);
 }
 
-std::unique_ptr<VirtualNgxHandle> NgxInterceptor::UnregisterVirtualHandle(NVSDK_NGX_Handle* handle) {
+std::shared_ptr<VirtualNgxHandle> NgxInterceptor::UnregisterVirtualHandle(NVSDK_NGX_Handle* handle) {
     if (!handle) return nullptr;
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_virtualHandles.find(handle);
@@ -836,6 +1104,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
     if (!origCreate) {
         LogError("NgxInterceptor: Original CreateFeature is null");
         return NVSDK_NGX_Result_Fail;
+    }
+
+    if (InFeatureID != NVSDK_NGX_Feature_SuperSampling) {
+        return origCreate(InCmdList, InFeatureID, InParameters, OutHandle);
     }
 
     if (!InParameters) {
@@ -891,22 +1163,15 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         }
     }
 
-    int presetOverride = interceptor.GetDlssPresetOverride();
-    if (presetOverride > 0 && InParameters) {
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, presetOverride);
-    }
+    SavedPresetOverrides createPresetOverrides;
+    createPresetOverrides.Apply(InParameters, interceptor.GetDlssPresetOverride(), false);
 
     auto clonedParams = std::make_shared<NgxParameterImpl>();
     clonedParams->CopyFrom(InParameters);
 
     NVSDK_NGX_Handle* hLeft = nullptr;
     NVSDK_NGX_Result resLeft = origCreate(InCmdList, InFeatureID, InParameters, &hLeft);
+    createPresetOverrides.Restore(InParameters);
     if (NVSDK_NGX_FAILED(resLeft) || !hLeft) {
         std::stringstream ss;
         ss << "NgxInterceptor: Failed to create left NGX feature: " << resLeft
@@ -950,7 +1215,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         return resRight;
     }
 
-    auto virtualHandle = std::make_unique<VirtualNgxHandle>();
+    auto virtualHandle = std::make_shared<VirtualNgxHandle>();
     virtualHandle->Id = interceptor.m_nextVirtualId.fetch_add(1);
     virtualHandle->magic = VIRTUAL_NGX_HANDLE_MAGIC;
     virtualHandle->hLeft = hLeft;
@@ -1009,12 +1274,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHa
         return NVSDK_NGX_Result_Fail;
     }
 
-    if (interceptor.IsVirtualHandle(InHandle)) {
-        auto virtualHandle = interceptor.UnregisterVirtualHandle(InHandle);
-        if (!virtualHandle) {
-            LogError("NgxInterceptor: Virtual handle not found in registry.");
-            return NVSDK_NGX_Result_FAIL_FeatureNotFound;
-        }
+    if (auto virtualHandle = interceptor.UnregisterVirtualHandle(InHandle)) {
+        virtualHandle->callGate.WaitForZero();
 
         NVSDK_NGX_Result resLeft = NVSDK_NGX_Result_Success;
         NVSDK_NGX_Result resRight = NVSDK_NGX_Result_Success;
@@ -1057,6 +1318,13 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         return NVSDK_NGX_Result_Fail;
     }
 
+    auto handleLease = interceptor.AcquireVirtualHandle(InFeatureHandle);
+    auto* vHandle = handleLease.get();
+    if (!vHandle || vHandle->magic != VIRTUAL_NGX_HANDLE_MAGIC) {
+        handleLease.Reset();
+        return origEval(InCmdList, InFeatureHandle, InParameters, InCallback);
+    }
+
     VRBridge* bridge = interceptor.GetVRBridge();
 
     int currentMode = bridge ? static_cast<int>(bridge->GetRenderingMode()) : -1;
@@ -1071,24 +1339,18 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     const NVSDK_NGX_Handle* target = nullptr;
     uint32_t contextIndex = 0;
     bool alternatesEyeContexts = false;
+    const uint32_t activeEye = bridge ? bridge->GetActiveEye() : 0;
 
-    auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
-    if (vHandle && vHandle->magic == VIRTUAL_NGX_HANDLE_MAGIC) {
-        if (bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible())) {
-            target = vHandle->hLeft;
-            contextIndex = 0;
-        } else {
-            uint32_t eyeIndex = bridge ? bridge->GetActiveEye() : 0;
-            target = (eyeIndex == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
-            contextIndex = (eyeIndex == 1 && vHandle->hRight) ? 1 : 0;
-            alternatesEyeContexts = (vHandle->hRight != nullptr);
-        }
-
-        if (!target) target = InFeatureHandle;
-    } else {
-        target = InFeatureHandle;
+    if (bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible())) {
+        target = vHandle->hLeft;
         contextIndex = 0;
+    } else {
+        target = (activeEye == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
+        contextIndex = (activeEye == 1 && vHandle->hRight) ? 1 : 0;
+        alternatesEyeContexts = (vHandle->hRight != nullptr);
     }
+
+    if (!target) target = InFeatureHandle;
 
     bool needReset = interceptor.ConsumeDiscontinuity(contextIndex);
     if (needReset) interceptor.ForgetNearEstimate();
@@ -1104,34 +1366,23 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Set(NVSDK_NGX_Parameter_Reset, 1);
     }
 
-    int prevPreset = 0;
-    bool hadPrevPreset = false;
-    int presetOverride = interceptor.GetDlssPresetOverride();
-    if (presetOverride > 0 && mutableParams) {
-        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &prevPreset)) && prevPreset > 0) {
-            hadPrevPreset = true;
-        } else {
-            mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, presetOverride);
-        }
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, presetOverride);
-    }
+    SavedPresetOverrides evalPresetOverrides;
+    evalPresetOverrides.Apply(mutableParams, interceptor.GetDlssPresetOverride(), true);
 
     float prevSharpness = 0.0f;
     bool hadPrevSharpness = false;
+    bool wroteSharpness = false;
     float sharpnessOverride = interceptor.GetSharpnessOverride();
     if (sharpnessOverride >= 0.0f && mutableParams) {
-        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_Sharpness, &prevSharpness)) && prevSharpness > 0.0f) {
+        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_Sharpness, &prevSharpness))) {
             hadPrevSharpness = true;
-            if (interceptor.IsForceSharpnessOverride()) {
+            if (prevSharpness <= 0.0f || interceptor.IsForceSharpnessOverride()) {
                 mutableParams->Set(NVSDK_NGX_Parameter_Sharpness, sharpnessOverride);
+                wroteSharpness = true;
             }
         } else {
             mutableParams->Set(NVSDK_NGX_Parameter_Sharpness, sharpnessOverride);
+            wroteSharpness = true;
         }
     }
 
@@ -1165,10 +1416,16 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         wroteScale = true;
     }
 
+    const bool needMvPass = interceptor.m_mvFixEnabled.load() && alternatesEyeContexts && InCmdList && mutableParams;
+    std::optional<ResolvedCameras> resolvedCameras;
+    if (bridge && (needMvPass || interceptor.m_diagRemaining.load() > 0)) {
+        resolvedCameras = bridge->GetCameraRecords().Resolve(activeEye);
+    }
+
     ID3D12Resource* prevMv = nullptr;
     bool swappedMv = false;
     const char* correctionState = "off";
-    if (interceptor.m_mvFixEnabled.load() && alternatesEyeContexts && InCmdList && mutableParams) {
+    if (needMvPass) {
         ID3D12Resource* depth = nullptr;
         ID3D12Resource* mv = nullptr;
         mutableParams->Get(NVSDK_NGX_Parameter_Depth, &depth);
@@ -1176,9 +1433,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         if (depth && mv) {
             const float effScaleX = prevScaleX * scaleMulX;
             const float effScaleY = prevScaleY * scaleMulY;
-            const uint32_t correctionEye = bridge ? bridge->GetActiveEye() : 0;
             mvreproj::CorrectionPlan plan;
-            if (bridge) plan = mvreproj::PlanCorrection(bridge->GetCameraRecords().Resolve(correctionEye));
+            if (resolvedCameras) plan = mvreproj::PlanCorrection(*resolvedCameras);
             MvCorrectionRequest correctionRequest;
             const MvCorrectionRequest* correction = nullptr;
             correctionState = mvreproj::CorrectionDecisionName(plan.decision);
@@ -1208,58 +1464,55 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             }
             if (interceptor.m_diagRemaining.load() > 0) {
                 LogInfo("NgxInterceptor: [Diag] MvCorrection Eval #" + std::to_string(interceptor.m_evalCount.load()) +
-                        " Eye=" + std::to_string(correctionEye) + ": " + (correction ? "correcting" : correctionState));
+                        " Eye=" + std::to_string(activeEye) + ": " + (correction ? "correcting" : correctionState));
             }
 
             MvSelfCheckRequest checkRequest;
             const MvSelfCheckRequest* check = nullptr;
             if (interceptor.m_diagRemaining.load() > 0) {
                 const uint64_t evalIndex = interceptor.m_evalCount.load();
-                const uint32_t checkEye = bridge ? bridge->GetActiveEye() : 0;
                 std::string skipReason;
-                if (bridge && BuildMvSelfCheckRequest(bridge->GetCameraRecords().Resolve(checkEye), checkEye, evalIndex,
-                                                      prevScaleX * scaleMulX, prevScaleY * scaleMulY,
-                                                      correction ? &plan : nullptr, checkRequest, skipReason)) {
+                if (resolvedCameras &&
+                    BuildMvSelfCheckRequest(*resolvedCameras, activeEye, evalIndex, effScaleX, effScaleY,
+                                            correction ? &plan : nullptr, checkRequest, skipReason)) {
                     checkRequest.current.infiniteDepth = infiniteDepth;
                     if (forcedNear > 0.0f) checkRequest.current.nearClip = checkRequest.previous.nearClip = forcedNear;
                     check = &checkRequest;
                     if (!interceptor.m_diagProjectionLogged.exchange(true)) {
-                        const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(checkEye);
                         unsigned int renderW = 0, renderH = 0;
                         mutableParams->Get(NVSDK_NGX_Parameter_Width, &renderW);
                         mutableParams->Get(NVSDK_NGX_Parameter_Height, &renderH);
                         MvProjectionDiag diag;
                         diag.source = nearOverride > 0.0f ? "override" : (autoNear > 0.0f ? "auto" : "camera-record");
-                        diag.used = {forcedNear > 0.0f ? forcedNear : resolved.current->nearClip,
-                                     resolved.current->farClip, resolved.current->fovY};
+                        diag.used = {forcedNear > 0.0f ? forcedNear : resolvedCameras->current->nearClip,
+                                     resolvedCameras->current->farClip, resolvedCameras->current->fovY};
                         diag.autoEstimate = autoNear;
                         diag.hasRecordNear = true;
-                        diag.recordNear = resolved.current->nearClip;
-                        diag.projOffsetX = resolved.current->projOffsetX;
-                        diag.projOffsetY = resolved.current->projOffsetY;
+                        diag.recordNear = resolvedCameras->current->nearClip;
+                        diag.projOffsetX = resolvedCameras->current->projOffsetX;
+                        diag.projOffsetY = resolvedCameras->current->projOffsetY;
                         diag.aspect = renderH ? static_cast<float>(renderW) / static_cast<float>(renderH) : 1.0f;
                         diag.infinite = infiniteDepth;
                         diag.staticGate = true;
                         diag.depthSource = "vrDlssDepthModel";
-                        LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", checkEye, evalIndex, diag));
+                        LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", activeEye, evalIndex, diag));
                     }
                 } else {
                     if (!bridge) skipReason = "no VR bridge";
-                    LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", checkEye, evalIndex, skipReason));
+                    LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", activeEye, evalIndex, skipReason));
                 }
             }
             MvSelfCheckRequest nearRequest;
             float recordNear = 0.0f;
-            if (bridge) {
-                const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(correctionEye);
-                if (resolved.current) recordNear = resolved.current->nearClip;
-                if (nearOverride <= 0.0f && resolved.current && resolved.previousFrame &&
+            if (resolvedCameras) {
+                if (resolvedCameras->current) recordNear = resolvedCameras->current->nearClip;
+                if (nearOverride <= 0.0f && resolvedCameras->current && resolvedCameras->previousFrame &&
                     std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f &&
                     interceptor.m_nearCrossEyeEvals.fetch_add(1) % NgxInterceptor::kNearEstimateInterval ==
                         NgxInterceptor::kNearEstimateInterval - 1) {
                     std::string skipReason;
                     const uint64_t nearEvalIndex = interceptor.m_evalCount.load();
-                    if (BuildMvSelfCheckRequest(resolved, correctionEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
+                    if (BuildMvSelfCheckRequest(*resolvedCameras, activeEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
                                                 nearRequest, skipReason)) {
                         nearRequest.current.infiniteDepth = infiniteDepth;
                         if (forcedNear > 0.0f) nearRequest.current.nearClip = nearRequest.previous.nearClip = forcedNear;
@@ -1299,7 +1552,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     }
 
     uint64_t currentEval = interceptor.m_evalCount.fetch_add(1);
-    interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass);
+    interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass,
+                                  resolvedCameras ? &*resolvedCameras : nullptr);
     if ((currentEval == 0 || (currentEval % 300 == 0)) && InParameters) {
         unsigned int inW = 0, inH = 0, outW = 0, outH = 0;
         InParameters->Get(NVSDK_NGX_Parameter_Width, &inW);
@@ -1358,6 +1612,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX);
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY);
     }
+
+    if (wroteSharpness) {
+        mutableParams->Set(NVSDK_NGX_Parameter_Sharpness, hadPrevSharpness ? prevSharpness : 0.0f);
+    }
+
+    evalPresetOverrides.Restore(mutableParams);
 
     return res;
 }
@@ -1419,10 +1679,12 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
     auto orig = interceptor ? Original<decltype(&LoadLibraryW)>(interceptor->m_detourLoadLibraryW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryW(lpLibFileName);
 
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+    if (interceptor && hMod && !IsDataOrImageResourceLoad(0, hMod)) {
+        if (MatchesNgxName(lpLibFileName)) {
+            interceptor->AttachModule(hMod);
+        } else {
+            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+        }
     }
     return hMod;
 }
@@ -1432,10 +1694,12 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
     auto orig = interceptor ? Original<decltype(&LoadLibraryExW)>(interceptor->m_detourLoadLibraryExW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+    if (interceptor && hMod && !IsDataOrImageResourceLoad(dwFlags, hMod)) {
+        if (MatchesNgxName(lpLibFileName)) {
+            interceptor->AttachModule(hMod);
+        } else {
+            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+        }
     }
     return hMod;
 }
@@ -1445,10 +1709,12 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
     auto orig = interceptor ? Original<decltype(&LoadLibraryA)>(interceptor->m_detourLoadLibraryA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryA(lpLibFileName);
 
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+    if (interceptor && hMod && !IsDataOrImageResourceLoad(0, hMod)) {
+        if (MatchesNgxName(lpLibFileName)) {
+            interceptor->AttachModule(hMod);
+        } else {
+            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+        }
     }
     return hMod;
 }
@@ -1458,10 +1724,12 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HA
     auto orig = interceptor ? Original<decltype(&LoadLibraryExA)>(interceptor->m_detourLoadLibraryExA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+    if (interceptor && hMod && !IsDataOrImageResourceLoad(dwFlags, hMod)) {
+        if (MatchesNgxName(lpLibFileName)) {
+            interceptor->AttachModule(hMod);
+        } else {
+            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
+        }
     }
     return hMod;
 }

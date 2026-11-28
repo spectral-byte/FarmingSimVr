@@ -13,6 +13,7 @@
 
 namespace fs25vr {
 
+class FidelityFxInterceptor;
 class NgxInterceptor;
 
 enum class VRRenderingMode : uint32_t {
@@ -25,7 +26,8 @@ class VRBridge {
 public:
     VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
              std::shared_ptr<NgxInterceptor> ngxInterceptor,
-             std::string version = std::string(kInjectorVersion));
+             std::string version = std::string(kInjectorVersion),
+             std::shared_ptr<FidelityFxInterceptor> ffxInterceptor = nullptr);
 
     bool Inject(lua_State* L);
     bool IsInjected(lua_State* L);
@@ -37,6 +39,15 @@ public:
     void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
     std::shared_ptr<NgxInterceptor> GetNgxInterceptor() const { return m_ngxInterceptor; }
+    std::shared_ptr<FidelityFxInterceptor> GetFidelityFxInterceptor() const { return m_ffxInterceptor; }
+    void SetFidelityFxInterceptor(std::shared_ptr<FidelityFxInterceptor> ffxInterceptor) {
+        m_ffxInterceptor = std::move(ffxInterceptor);
+    }
+
+    bool SetMvFixEnabled(bool enabled);
+    bool IsMvFixEnabled() const;
+    bool IsMvFixDisabledForSession() const;
+    const char* DescribeMvFixState() const;
 
     HeadPose GetHeadPose();
     HeadPose GetHeadPoseForEye(uint32_t eyeIndex);
@@ -264,8 +275,11 @@ private:
 
     static int RunOccasional(lua_State* L);
 
+    FidelityFxInterceptor* ResolveFidelityFxInterceptor() const;
+
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
+    std::shared_ptr<FidelityFxInterceptor> m_ffxInterceptor;
     VirtualGamepad m_virtualGamepad{m_openXrManager};
     CameraRecordStore m_cameraRecords;
     std::string m_version;

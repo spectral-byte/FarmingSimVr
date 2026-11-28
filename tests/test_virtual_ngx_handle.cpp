@@ -374,6 +374,10 @@ TEST_F(VirtualNgxHandleTest, MatchesNgxNameFiltering) {
     EXPECT_TRUE(NgxInterceptor::MatchesNgxName(L"C:\\Windows\\System32\\DriverStore\\FileRepository\\nv_dispi.inf\\_nvngx.dll"));
     EXPECT_TRUE(NgxInterceptor::MatchesNgxName("C:/Windows/System32/nvngx.dll"));
     EXPECT_TRUE(NgxInterceptor::MatchesNgxName("C:/DriverStore/_nvngx.dll"));
+    EXPECT_TRUE(NgxInterceptor::MatchesNgxName(L"C:\\Games\\dlss_mods\\nvngx.dll"));
+    EXPECT_TRUE(NgxInterceptor::MatchesNgxName(L"D:\\update\\cache\\_nvngx.dll"));
+    EXPECT_TRUE(NgxInterceptor::MatchesNgxName("C:/Users/dlss/nvngx.dll"));
+    EXPECT_TRUE(NgxInterceptor::MatchesNgxName("/opt/update/_nvngx.dll"));
 
     EXPECT_TRUE(NgxInterceptor::MatchesNgxName(L"NVNGX.DLL"));
     EXPECT_TRUE(NgxInterceptor::MatchesNgxName(L"_NVNGX.DLL"));
@@ -473,6 +477,230 @@ TEST_F(VirtualNgxHandleTest, ParameterDetoursFallbackWhenOriginalsUnavailable) {
     EXPECT_EQ(destroyRes, NVSDK_NGX_Result_Success);
 
     MockReleaseFeature(virtualHandle);
+}
+
+class CoercingForeignNgxParameter final : public NVSDK_NGX_Parameter {
+public:
+    void Set(const char*, unsigned long long) override {}
+    void Set(const char*, float) override {}
+    void Set(const char*, double) override {}
+    void Set(const char*, unsigned int) override {}
+    void Set(const char*, int) override {}
+    void Set(const char*, ID3D11Resource*) override {}
+    void Set(const char*, ID3D12Resource*) override {}
+    void Set(const char*, void*) override {}
+    void Reset() override {}
+
+    void PutUll(const char* name, unsigned long long val) { m_ull[name] = val; }
+    void PutFloat(const char* name, float val) { m_float[name] = val; }
+    void PutUint(const char* name, unsigned int val) { m_uint[name] = val; }
+    void PutInt(const char* name, int val) { m_int[name] = val; }
+    void PutD3D12(const char* name, ID3D12Resource* val) { m_d3d12[name] = val; }
+
+    NVSDK_NGX_Result Get(const char* InName, unsigned long long* OutValue) const override {
+        if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
+        if (auto it = m_ull.find(InName); it != m_ull.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        if (auto it = m_uint.find(InName); it != m_uint.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        if (auto it = m_int.find(InName); it != m_int.end()) {
+            *OutValue = static_cast<unsigned long long>(it->second);
+            return NVSDK_NGX_Result_Success;
+        }
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char* InName, float* OutValue) const override {
+        if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
+        if (auto it = m_float.find(InName); it != m_float.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char*, double*) const override {
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char* InName, unsigned int* OutValue) const override {
+        if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
+        if (auto it = m_uint.find(InName); it != m_uint.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        if (auto it = m_int.find(InName); it != m_int.end()) {
+            *OutValue = static_cast<unsigned int>(it->second);
+            return NVSDK_NGX_Result_Success;
+        }
+        if (auto it = m_ull.find(InName); it != m_ull.end()) {
+            *OutValue = static_cast<unsigned int>(it->second);
+            return NVSDK_NGX_Result_Success;
+        }
+        if (auto it = m_float.find(InName); it != m_float.end()) {
+            *OutValue = static_cast<unsigned int>(it->second);
+            return NVSDK_NGX_Result_Success;
+        }
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char* InName, int* OutValue) const override {
+        if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
+        if (auto it = m_int.find(InName); it != m_int.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char*, ID3D11Resource**) const override {
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char* InName, ID3D12Resource** OutValue) const override {
+        if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
+        if (auto it = m_d3d12.find(InName); it != m_d3d12.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+    NVSDK_NGX_Result Get(const char*, void**) const override {
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+
+private:
+    std::unordered_map<std::string, unsigned long long> m_ull;
+    std::unordered_map<std::string, float> m_float;
+    std::unordered_map<std::string, unsigned int> m_uint;
+    std::unordered_map<std::string, int> m_int;
+    std::unordered_map<std::string, ID3D12Resource*> m_d3d12;
+};
+
+class StrictUintForeignNgxParameter final : public NVSDK_NGX_Parameter {
+public:
+    void Set(const char*, unsigned long long) override {}
+    void Set(const char*, float) override {}
+    void Set(const char*, double) override {}
+    void Set(const char*, unsigned int) override {}
+    void Set(const char*, int) override {}
+    void Set(const char*, ID3D11Resource*) override {}
+    void Set(const char*, ID3D12Resource*) override {}
+    void Set(const char*, void*) override {}
+    void Reset() override {}
+
+    void PutUint(const char* name, unsigned int val) { m_uint[name] = val; }
+
+    NVSDK_NGX_Result Get(const char*, unsigned long long*) const override {
+        return NVSDK_NGX_Result_FAIL_InvalidParameter;
+    }
+    NVSDK_NGX_Result Get(const char*, float*) const override { return NVSDK_NGX_Result_FAIL_FeatureNotFound; }
+    NVSDK_NGX_Result Get(const char*, double*) const override { return NVSDK_NGX_Result_FAIL_FeatureNotFound; }
+    NVSDK_NGX_Result Get(const char* InName, unsigned int* OutValue) const override {
+        if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
+        if (auto it = m_uint.find(InName); it != m_uint.end()) {
+            *OutValue = it->second;
+            return NVSDK_NGX_Result_Success;
+        }
+        return NVSDK_NGX_Result_FAIL_FeatureNotFound;
+    }
+    NVSDK_NGX_Result Get(const char*, int*) const override { return NVSDK_NGX_Result_FAIL_FeatureNotFound; }
+    NVSDK_NGX_Result Get(const char*, ID3D11Resource**) const override { return NVSDK_NGX_Result_FAIL_FeatureNotFound; }
+    NVSDK_NGX_Result Get(const char*, ID3D12Resource**) const override { return NVSDK_NGX_Result_FAIL_FeatureNotFound; }
+    NVSDK_NGX_Result Get(const char*, void**) const override { return NVSDK_NGX_Result_FAIL_FeatureNotFound; }
+
+private:
+    std::unordered_map<std::string, unsigned int> m_uint;
+};
+
+TEST_F(VirtualNgxHandleTest, CopyFromForeignParameterPreservesFloats64BitIntsAndSubrectsWithoutUintCoercion) {
+    CoercingForeignNgxParameter foreign;
+    auto* fakeColor = reinterpret_cast<ID3D12Resource*>(static_cast<uintptr_t>(0xCAFE1234));
+    foreign.PutUint(NVSDK_NGX_Parameter_Width, 1920u);
+    foreign.PutUint(NVSDK_NGX_Parameter_Height, 1080u);
+    foreign.PutFloat(NVSDK_NGX_Parameter_Sharpness, 0.75f);
+    foreign.PutFloat(NVSDK_NGX_Parameter_Jitter_Offset_X, -0.25f);
+    foreign.PutFloat(NVSDK_NGX_Parameter_MV_Scale_X, 1.5f);
+    foreign.PutFloat(NVSDK_NGX_Parameter_PreExposure, 2.5f);
+    foreign.PutUll(NVSDK_NGX_Parameter_CreationNodeMask, 0x100000042ULL);
+    foreign.PutInt(NVSDK_NGX_Parameter_Reset, 1);
+    foreign.PutInt(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, 11);
+    foreign.PutUint(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, 64u);
+    foreign.PutUint(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, 32u);
+    foreign.PutUint(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, 128u);
+    foreign.PutUint(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, 96u);
+    foreign.PutD3D12(NVSDK_NGX_Parameter_Color, fakeColor);
+
+    NgxParameterImpl copied;
+    copied.CopyFrom(&foreign);
+
+    float sharpness = 0.0f;
+    float jitterX = 0.0f;
+    float mvScaleX = 0.0f;
+    float preExposure = 0.0f;
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_Sharpness, &sharpness), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitterX), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvScaleX), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_PreExposure, &preExposure), NVSDK_NGX_Result_Success);
+    EXPECT_FLOAT_EQ(sharpness, 0.75f);
+    EXPECT_FLOAT_EQ(jitterX, -0.25f);
+    EXPECT_FLOAT_EQ(mvScaleX, 1.5f);
+    EXPECT_FLOAT_EQ(preExposure, 2.5f);
+
+    unsigned long long nodeMask = 0;
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_CreationNodeMask, &nodeMask), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(nodeMask, 0x100000042ULL);
+
+    unsigned int depthBaseX = 0, depthBaseY = 0, outBaseX = 0, outBaseY = 0;
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, &depthBaseX), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, &depthBaseY), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, &outBaseX), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, &outBaseY), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(depthBaseX, 64u);
+    EXPECT_EQ(depthBaseY, 32u);
+    EXPECT_EQ(outBaseX, 128u);
+    EXPECT_EQ(outBaseY, 96u);
+
+    ID3D12Resource* color = nullptr;
+    EXPECT_EQ(copied.Get(NVSDK_NGX_Parameter_Color, &color), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(color, fakeColor);
+
+    StrictUintForeignNgxParameter strictUint;
+    strictUint.PutUint(NVSDK_NGX_Parameter_Width, 2560u);
+    strictUint.PutUint(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, 48u);
+    NgxParameterImpl copiedStrict;
+    copiedStrict.CopyFrom(&strictUint);
+    unsigned int strictWidth = 0, strictSubrectX = 0;
+    EXPECT_EQ(copiedStrict.Get(NVSDK_NGX_Parameter_Width, &strictWidth), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(copiedStrict.Get(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, &strictSubrectX),
+              NVSDK_NGX_Result_Success);
+    EXPECT_EQ(strictWidth, 2560u);
+    EXPECT_EQ(strictSubrectX, 48u);
+}
+
+TEST_F(VirtualNgxHandleTest, CopyFromTrackedInstancePreservesCustomKeys) {
+    NgxParameterImpl source;
+    source.Set("CustomULL", 9876543210ULL);
+    source.Set("CustomFloat", 0.375f);
+    source.Set(NVSDK_NGX_Parameter_Width, 3840u);
+
+    NgxParameterImpl clone;
+    clone.CopyFrom(&source);
+
+    unsigned long long ullVal = 0;
+    float fVal = 0.0f;
+    unsigned int width = 0;
+    EXPECT_EQ(clone.Get("CustomULL", &ullVal), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(clone.Get("CustomFloat", &fVal), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(clone.Get(NVSDK_NGX_Parameter_Width, &width), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(ullVal, 9876543210ULL);
+    EXPECT_FLOAT_EQ(fVal, 0.375f);
+    EXPECT_EQ(width, 3840u);
 }
 
 }
