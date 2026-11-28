@@ -32,6 +32,8 @@ static std::vector<float> s_evaluatedMvScaleX;
 static std::vector<float> s_evaluatedMvScaleY;
 static std::vector<NVSDK_NGX_Parameter*> s_createdParams;
 static std::vector<ID3D12Resource*> s_evaluatedMotionVectors;
+static std::vector<int> s_evaluatedPresets;
+static std::vector<float> s_evaluatedSharpness;
 
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreateFeature(
     ID3D12GraphicsCommandList*,
@@ -107,6 +109,20 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluateFeature(
         s_evaluatedMvScaleY.push_back(1.0f);
     }
 
+    int presetVal = 0;
+    if (InParameters && NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &presetVal))) {
+        s_evaluatedPresets.push_back(presetVal);
+    } else {
+        s_evaluatedPresets.push_back(0);
+    }
+
+    float sharpnessVal = 0.0f;
+    if (InParameters && NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_Sharpness, &sharpnessVal))) {
+        s_evaluatedSharpness.push_back(sharpnessVal);
+    } else {
+        s_evaluatedSharpness.push_back(0.0f);
+    }
+
     return NVSDK_NGX_Result_Success;
 }
 
@@ -129,6 +145,8 @@ protected:
         s_evaluatedMvScaleY.clear();
         s_createdParams.clear();
         s_evaluatedMotionVectors.clear();
+        s_evaluatedPresets.clear();
+        s_evaluatedSharpness.clear();
 
         m_ngx.DetachAll();
         m_ngx.SetDxgiProxy(nullptr);
@@ -990,13 +1008,10 @@ TEST_F(DlssEvaluationTest, DlssPresetAndSharpnessOverridesAppliedDuringEvaluateF
 
     ASSERT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
 
-    ASSERT_EQ(s_evaluatedParams.size(), 1u);
-    int evaluatedPreset = 0;
-    float evaluatedSharpness = 0.0f;
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &evaluatedPreset), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_Sharpness, &evaluatedSharpness), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(evaluatedPreset, static_cast<int>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
-    EXPECT_FLOAT_EQ(evaluatedSharpness, 0.35f);
+    ASSERT_EQ(s_evaluatedPresets.size(), 1u);
+    ASSERT_EQ(s_evaluatedSharpness.size(), 1u);
+    EXPECT_EQ(s_evaluatedPresets[0], static_cast<int>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
+    EXPECT_FLOAT_EQ(s_evaluatedSharpness[0], 0.35f);
 
     MockReleaseFeature(virtualHandle);
 }
@@ -1022,13 +1037,10 @@ TEST_F(DlssEvaluationTest, PreservesExplicitCallerSharpnessAndPreset) {
 
     ASSERT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
 
-    ASSERT_EQ(s_evaluatedParams.size(), 1u);
-    int evaluatedPreset = 0;
-    float evaluatedSharpness = 0.0f;
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &evaluatedPreset), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_Sharpness, &evaluatedSharpness), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(evaluatedPreset, 3);
-    EXPECT_FLOAT_EQ(evaluatedSharpness, 0.75f);
+    ASSERT_EQ(s_evaluatedPresets.size(), 1u);
+    ASSERT_EQ(s_evaluatedSharpness.size(), 1u);
+    EXPECT_EQ(s_evaluatedPresets[0], 3);
+    EXPECT_FLOAT_EQ(s_evaluatedSharpness[0], 0.75f);
 
     MockReleaseFeature(virtualHandle);
 }

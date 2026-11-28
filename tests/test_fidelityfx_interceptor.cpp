@@ -6,12 +6,17 @@
 #include "ngx/mv_pass.h"
 #include "ngx/ngx_interceptor.h"
 #include "core/logger.h"
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace fs25vr {
@@ -39,6 +44,9 @@ std::vector<void*> s_dispatchMotionVectors;       // the motion vector resource 
 std::vector<uint32_t> s_dispatchMotionVectorStates;
 int s_failCreateNumber = 0; // 1-based create call that fails, 0 for none
 int s_createCalls = 0;
+std::atomic<bool> s_dispatchInFlight{false};
+std::atomic<bool> s_destroyedDuringInFlightDispatch{false};
+std::function<void()> s_onDispatch;
 
 __declspec(noinline) ffxReturnCode_t MockCreate(ffxContext* context, ffxCreateContextDescHeader* desc,
                                                 const ffxAllocationCallbacks*) {
@@ -56,6 +64,9 @@ __declspec(noinline) ffxReturnCode_t MockCreate(ffxContext* context, ffxCreateCo
 }
 
 __declspec(noinline) ffxReturnCode_t MockDestroy(ffxContext* context, const ffxAllocationCallbacks*) {
+    if (s_dispatchInFlight.load()) {
+        s_destroyedDuringInFlightDispatch.store(true);
+    }
     s_destroyed.push_back(*context);
     delete static_cast<FakeContext*>(*context);
     *context = nullptr;
@@ -73,6 +84,10 @@ __declspec(noinline) ffxReturnCode_t MockQuery(ffxContext* context, ffxQueryDesc
 }
 
 __declspec(noinline) ffxReturnCode_t MockDispatch(ffxContext* context, const ffxDispatchDescHeader* desc) {
+    s_dispatchInFlight.store(true);
+    if (s_onDispatch) {
+        s_onDispatch();
+    }
     s_dispatched.push_back(*context);
     s_dispatchDescs.push_back(desc);
     bool reset = false;
@@ -83,6 +98,7 @@ __declspec(noinline) ffxReturnCode_t MockDispatch(ffxContext* context, const ffx
         s_dispatchMotionVectorStates.push_back(upscale->motionVectors.state);
     }
     s_dispatchReset.push_back(reset);
+    s_dispatchInFlight.store(false);
     return FFX_API_RETURN_OK;
 }
 
@@ -126,11 +142,16 @@ protected:
         s_dispatchDescs.clear();
         s_failCreateNumber = 0;
         s_createCalls = 0;
+        s_dispatchInFlight.store(false);
+        s_destroyedDuringInFlightDispatch.store(false);
+        s_onDispatch = nullptr;
         m_ffx.DetachAll();
         ResetBridge();
     }
 
     void TearDown() override {
+        s_onDispatch = nullptr;
+        s_dispatchInFlight.store(false);
         m_ffx.DetachAll();
         ResetBridge();
     }
@@ -522,6 +543,38 @@ TEST(FfxMvConventionsTest, UnusableCameraFieldsLeaveTheProjectionToTheCameraReco
     EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, desc).hasProjection);
 }
 
+TEST(FfxMvConventionsTest, NonFiniteViewSpaceToMetersAndFovInputsAreRejected) {
+    auto base = MakeUpscaleDispatchDesc();
+    base.cameraNear = 0.1f;
+    base.cameraFar = 1000.0f;
+    base.cameraFovAngleVertical = 1.0f;
+
+    auto infFactor = base;
+    infFactor.viewSpaceToMetersFactor = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, infFactor).hasProjection);
+
+    auto nanFactor = base;
+    nanFactor.viewSpaceToMetersFactor = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, nanFactor).hasProjection);
+
+    auto negFactor = base;
+    negFactor.viewSpaceToMetersFactor = -1.0f;
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, negFactor).hasProjection);
+
+    auto infDepthFactor = base;
+    infDepthFactor.cameraFar = std::numeric_limits<float>::max();
+    infDepthFactor.viewSpaceToMetersFactor = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, infDepthFactor).hasProjection);
+
+    auto nanFov = base;
+    nanFov.cameraFovAngleVertical = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, nanFov).hasProjection);
+
+    auto infFov = base;
+    infFov.cameraFovAngleVertical = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, infFov).hasProjection);
+}
+
 TEST(FfxMvConventionsTest, InfiniteDepthTakesTheNearPlaneWhicheverFieldCarriesIt) {
     constexpr uint32_t kInfiniteFlags = kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
     auto desc = MakeUpscaleDispatchDesc();
@@ -614,7 +667,7 @@ protected:
         FidelityFxInterceptorTest::SetUp();
         s_dispatchMotionVectors.clear();
         s_dispatchMotionVectorStates.clear();
-        m_ngxShared->SetMvFixEnabled(false);
+        m_ffx.SetMvFixEnabled(false);
         AttachAll();
         m_ffx.SetMotionVectorPassFactory([this](ID3D12GraphicsCommandList*) {
             ++m_factoryCalls;
@@ -626,7 +679,7 @@ protected:
         m_ffx.ArmDiagnostics(0);
     }
     void TearDown() override {
-        m_ngxShared->SetMvFixEnabled(false);
+        m_ffx.SetMvFixEnabled(false);
         FidelityFxInterceptorTest::TearDown();
     }
 
@@ -657,7 +710,7 @@ protected:
 
 TEST_F(FfxMvCorrectionTest, FsrReceivesTheInjectorsTextureAndTheGamesDescriptionIsRestored) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
 
@@ -675,7 +728,7 @@ TEST_F(FfxMvCorrectionTest, FsrReceivesTheInjectorsTextureAndTheGamesDescription
 
 TEST_F(FfxMvCorrectionTest, TheCorrectionUsesTheDispatchsScaleAndCameraFieldsNotTheRecords) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     desc.cameraFovAngleVertical = 0.8f; // the record says 1.0 rad
     Dispatch(m_context, desc);
@@ -688,16 +741,15 @@ TEST_F(FfxMvCorrectionTest, TheCorrectionUsesTheDispatchsScaleAndCameraFieldsNot
     EXPECT_NEAR(r.current.tanHalfFovY, std::tan(0.4f), 1e-6f);
     EXPECT_FLOAT_EQ(r.current.nearClip, 0.2f);
     EXPECT_FLOAT_EQ(r.current.farClip, 3000.0f);
-    // The previous cameras keep the records' projection; the rendered-previous camera is the right eye
-    // 0.064 m away, the same eye's previous camera is where the eye was.
-    EXPECT_NEAR(r.previousFrame.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_NEAR(r.previousFrame.tanHalfFovY, std::tan(0.4f), 1e-6f);
+    EXPECT_NEAR(r.sameEye.tanHalfFovY, std::tan(0.4f), 1e-6f);
     EXPECT_NEAR(r.toPreviousFrame.c[0], -0.064f, 1e-5f);
     EXPECT_NEAR(r.toSameEye.c[0], 0.0f, 1e-5f);
 }
 
 TEST_F(FfxMvCorrectionTest, WithoutDispatchCameraFieldsTheRecordsProjectionIsUsed) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     desc.cameraNear = desc.cameraFar = desc.cameraFovAngleVertical = 0.0f;
     Dispatch(m_context, desc);
@@ -707,20 +759,20 @@ TEST_F(FfxMvCorrectionTest, WithoutDispatchCameraFieldsTheRecordsProjectionIsUse
     EXPECT_FLOAT_EQ(m_pass->corrections[0].current.nearClip, 0.15f);
 }
 
-TEST_F(FfxMvCorrectionTest, SwitchableAtRuntimeWithTheDlssSwitch) {
+TEST_F(FfxMvCorrectionTest, SwitchableAtRuntimeIndependentlyOfNgx) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(false);
+    m_ffx.SetMvFixEnabled(false);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_EQ(s_dispatchMotionVectors.size(), 1u);
     EXPECT_EQ(s_dispatchMotionVectors[0], m_engineMv);
     EXPECT_EQ(m_factoryCalls, 0);
 
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     Dispatch(m_context, desc);
     EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
 
-    m_ngxShared->SetMvFixEnabled(false);
+    m_ffx.SetMvFixEnabled(false);
     Dispatch(m_context, desc);
     EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
     EXPECT_EQ(m_pass->recordCount, 1);
@@ -728,7 +780,7 @@ TEST_F(FfxMvCorrectionTest, SwitchableAtRuntimeWithTheDlssSwitch) {
 
 TEST_F(FfxMvCorrectionTest, MenusAndTwoDimensionalModeKeepTheEnginesMotionVectors) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     m_bridge.SetMenuVisible(true);
     Dispatch(m_context, desc);
@@ -743,7 +795,7 @@ TEST_F(FfxMvCorrectionTest, MenusAndTwoDimensionalModeKeepTheEnginesMotionVector
 
 TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingCorrectsWithTheObjectMotionEyeStride) {
     SetUpSdpWithRecords(VRRenderingMode::AFR);
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
@@ -754,7 +806,7 @@ TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingCorrectsWithTheObjectMotionEy
 
 TEST_F(FfxMvCorrectionTest, TheFidelityFxCorrectionIsLeftUngated) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_EQ(m_pass->corrections.size(), 1u);
@@ -763,7 +815,7 @@ TEST_F(FfxMvCorrectionTest, TheFidelityFxCorrectionIsLeftUngated) {
 
 TEST_F(FfxMvCorrectionTest, SequentialDualPassCorrectsWithoutTheEyeStride) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_EQ(m_pass->corrections.size(), 1u);
@@ -772,7 +824,7 @@ TEST_F(FfxMvCorrectionTest, SequentialDualPassCorrectsWithoutTheEyeStride) {
 
 TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingSelfChecksTheCorrectedVectors) {
     SetUpSdpWithRecords(VRRenderingMode::AFR);
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     m_ffx.ArmDiagnostics(4);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
@@ -782,7 +834,7 @@ TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingSelfChecksTheCorrectedVectors
 
 TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingWithoutRecordsKeepsTheEnginesVectorsThroughACopy) {
     m_bridge.SetRenderingMode(VRRenderingMode::AFR);
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
@@ -792,7 +844,7 @@ TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingWithoutRecordsKeepsTheEngines
 TEST_F(FfxMvCorrectionTest, MissingCameraRecordsPassTheEnginesVectorsThroughACopyWithoutACorrection) {
     m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
     m_bridge.GetCameraRecords().Clear();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
@@ -803,7 +855,7 @@ TEST_F(FfxMvCorrectionTest, MissingCameraRecordsPassTheEnginesVectorsThroughACop
 
 TEST_F(FfxMvCorrectionTest, AZeroMotionVectorScalePassesTheEnginesVectorsThrough) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     desc.motionVectorScale = {0.0f, 0.0f};
     Dispatch(m_context, desc);
@@ -817,7 +869,7 @@ TEST_F(FfxMvCorrectionTest, ConventionsThePassCannotHonourKeepTheEnginesVectorsA
     ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
     m_ffx.ArmDiagnostics(0);
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(context, desc);
     EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
@@ -830,7 +882,7 @@ TEST_F(FfxMvCorrectionTest, InfiniteDepthContextsAreCorrectedAndTheRequestSaysSo
     ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
     m_ffx.ArmDiagnostics(0);
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     desc.motionVectorScale = {-3004.0f, 1690.0f};
     desc.cameraNear = 0.2f;
@@ -850,7 +902,7 @@ TEST_F(FfxMvCorrectionTest, InfiniteDepthContextsAreCorrectedAndTheRequestSaysSo
 
 TEST_F(FfxMvCorrectionTest, FiniteDepthContextsDoNotRequestInfiniteDepth) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
@@ -925,7 +977,7 @@ TEST_F(FfxMvProjectionDiagTest, TheDispatchAndRecordProjectionsAreLoggedOncePerA
     ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
     m_ffx.ArmDiagnostics(0);
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     desc.cameraNear = 0.2f;
     desc.cameraFar = std::numeric_limits<float>::max();
@@ -947,7 +999,7 @@ TEST_F(FfxMvProjectionDiagTest, TheDispatchAndRecordProjectionsAreLoggedOncePerA
 
 TEST_F(FfxMvCorrectionTest, DispatchWithoutCommandListOrInputsPassesThroughWithoutDisabling) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto noList = MakeDesc();
     noList.commandList = nullptr;
     Dispatch(m_context, noList);
@@ -961,7 +1013,7 @@ TEST_F(FfxMvCorrectionTest, DispatchWithoutCommandListOrInputsPassesThroughWitho
 
 TEST_F(FfxMvCorrectionTest, FailureDisablesThePassForTheSessionAndFsrKeepsTheEnginesVectors) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
@@ -982,7 +1034,7 @@ TEST_F(FfxMvCorrectionTest, FailureDisablesThePassForTheSessionAndFsrKeepsTheEng
 TEST_F(FfxMvCorrectionTest, MissingPassFromTheFactoryDisablesThePass) {
     SetUpSdpWithRecords();
     m_ffx.SetMotionVectorPassFactory([](ID3D12GraphicsCommandList*) { return std::unique_ptr<IMotionVectorPass>(); });
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
@@ -991,7 +1043,7 @@ TEST_F(FfxMvCorrectionTest, MissingPassFromTheFactoryDisablesThePass) {
 
 TEST_F(FfxMvCorrectionTest, ACorrectionComposesWithADiscontinuityResetAndBothAreRestored) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     m_ffx.TriggerDiscontinuityFlush();
@@ -1004,7 +1056,7 @@ TEST_F(FfxMvCorrectionTest, ACorrectionComposesWithADiscontinuityResetAndBothAre
 
 TEST_F(FfxMvCorrectionTest, ArmedDiagnosticsAskForASelfCheckOfTheCorrectedVectors) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     m_ffx.ArmDiagnostics(4);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
@@ -1015,23 +1067,139 @@ TEST_F(FfxMvCorrectionTest, ArmedDiagnosticsAskForASelfCheckOfTheCorrectedVector
     EXPECT_EQ(r.eye, 0u);
     EXPECT_FLOAT_EQ(r.mvScaleX, 2.0f);
     EXPECT_NEAR(r.current.tanHalfFovY, std::tan(0.4f), 1e-6f);
+    EXPECT_NEAR(r.previous.tanHalfFovY, std::tan(0.4f), 1e-6f);
     EXPECT_FLOAT_EQ(r.current.farClip, 3000.0f);
     EXPECT_NEAR(r.toPrevious.c[0], 0.0f, 1e-5f);
 }
 
 TEST_F(FfxMvCorrectionTest, NoSelfCheckWhileDiagnosticsAreNotArmed) {
     SetUpSdpWithRecords();
-    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
     EXPECT_TRUE(m_pass->selfChecks.empty());
 }
 
+TEST_F(FfxMvCorrectionTest, ChainedUpscaleDispatchDescriptorInPNextIsIntercepted) {
+    SetUpSdpWithRecords();
+    m_ffx.SetMvFixEnabled(true);
+    m_bridge.SetSubPassIndex(1);
+    m_ffx.TriggerDiscontinuityFlush();
+
+    auto desc = MakeDesc();
+    ffxApiHeader wrapper{kFrameGenerationDispatchType, &desc.header};
+    ASSERT_EQ(MockDispatch(&m_context, &wrapper), FFX_API_RETURN_OK);
+
+    ASSERT_EQ(s_dispatched.size(), 1u);
+    EXPECT_EQ(s_dispatched[0], s_createdContexts[1]);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_TRUE(desc.reset == false);
+    EXPECT_EQ(desc.motionVectors.resource, m_engineMv);
+}
+
+TEST_F(FfxMvCorrectionTest, SelfCheckUsesConsistentDispatchFovEvenWithoutCorrection) {
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(FfxCamera(0, 10.0)));
+    m_bridge.SetSubPassIndex(0);
+
+    m_ffx.SetMvFixEnabled(true);
+    m_ffx.ArmDiagnostics(4);
+    auto desc = MakeDesc();
+    desc.cameraFovAngleVertical = 0.8f;
+    Dispatch(m_context, desc);
+
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    EXPECT_NEAR(m_pass->selfChecks[0].current.tanHalfFovY, std::tan(0.4f), 1e-6f);
+    EXPECT_NEAR(m_pass->selfChecks[0].previous.tanHalfFovY, std::tan(0.4f), 1e-6f);
+}
+
+TEST_F(FfxMvCorrectionTest, FsrMvFixStateIsDecoupledFromNgxFailureAndWorksWithoutNgx) {
+    VRBridge ffxOnlyBridge(nullptr, nullptr);
+    m_ffx.SetVRBridge(&ffxOnlyBridge);
+    ffxOnlyBridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(ffxOnlyBridge.GetCameraRecords().Report(FfxCamera(0, 10.0)));
+    ffxOnlyBridge.GetCameraRecords().AdvanceFrame();
+    ASSERT_TRUE(ffxOnlyBridge.GetCameraRecords().Report(FfxCamera(1, 10.064)));
+    ffxOnlyBridge.GetCameraRecords().AdvanceFrame();
+    ASSERT_TRUE(ffxOnlyBridge.GetCameraRecords().Report(FfxCamera(0, 10.0)));
+    ffxOnlyBridge.SetSubPassIndex(0);
+
+    m_ffx.SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
+
+    m_ffx.SetVRBridge(&m_bridge);
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMotionVectorPassFactory([](ID3D12GraphicsCommandList*) {
+        return std::unique_ptr<IMotionVectorPass>();
+    });
+    m_ngxShared->SetMvFixEnabled(true);
+    NgxParameterImpl ngxParams;
+    ngxParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    ngxParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    ngxParams.Set(NVSDK_NGX_Parameter_Depth, m_engineDepth);
+    ngxParams.Set(NVSDK_NGX_Parameter_MotionVectors, m_engineMv);
+    m_ngxShared->SetVRBridge(&m_bridge);
+
+    static volatile int s_dummyNgxCalls = 0;
+    struct DummyNgx {
+        __declspec(noinline) static NVSDK_NGX_Result Create(ID3D12GraphicsCommandList*, NVSDK_NGX_Feature,
+                                                           NVSDK_NGX_Parameter*, NVSDK_NGX_Handle** out) {
+            static unsigned int nextId = 1;
+            s_dummyNgxCalls = s_dummyNgxCalls + 1;
+            auto* h = new NVSDK_NGX_Handle();
+            h->Id = nextId++;
+            *out = h;
+            return NVSDK_NGX_Result_Success;
+        }
+        __declspec(noinline) static NVSDK_NGX_Result Release(NVSDK_NGX_Handle* h) {
+            s_dummyNgxCalls = s_dummyNgxCalls + 2;
+            delete h;
+            return NVSDK_NGX_Result_Success;
+        }
+        __declspec(noinline) static NVSDK_NGX_Result Eval(ID3D12GraphicsCommandList*, const NVSDK_NGX_Handle*,
+                                                         const NVSDK_NGX_Parameter*, PFN_NVSDK_NGX_ProgressCallback) {
+            s_dummyNgxCalls = s_dummyNgxCalls + 4;
+            return NVSDK_NGX_Result_Success;
+        }
+    };
+    ASSERT_TRUE(m_ngxShared->AttachDirect(&DummyNgx::Create, &DummyNgx::Release, &DummyNgx::Eval));
+    auto pfnCreate = &DummyNgx::Create;
+    auto pfnRelease = &DummyNgx::Release;
+    auto pfnEval = &DummyNgx::Eval;
+    NVSDK_NGX_Handle* ngxHandle = nullptr;
+    ASSERT_EQ(pfnCreate(nullptr, NVSDK_NGX_Feature_SuperSampling, &ngxParams, &ngxHandle),
+              NVSDK_NGX_Result_Success);
+    pfnEval(m_cmdList, ngxHandle, &ngxParams, nullptr);
+    ASSERT_TRUE(m_ngxShared->IsMvFixDisabledForSession());
+    ASSERT_FALSE(m_ngxShared->IsMvFixEnabled());
+
+    EXPECT_TRUE(m_ffx.IsMvFixEnabled());
+    EXPECT_FALSE(m_ffx.IsMvFixDisabledForSession());
+    Dispatch(m_context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
+
+    pfnRelease(ngxHandle);
+    m_ngxShared->DetachAll();
+}
+
 TEST_F(FidelityFxInterceptorTest, MatchesTheFidelityFxLoaderByFileName) {
     EXPECT_TRUE(FidelityFxInterceptor::MatchesLoaderName(L"amd_fidelityfx_loader_dx12.dll"));
     EXPECT_TRUE(FidelityFxInterceptor::MatchesLoaderName(L"C:\\Games\\FS25\\x64\\AMD_FidelityFX_Loader_DX12.DLL"));
     EXPECT_TRUE(FidelityFxInterceptor::MatchesLoaderName("x64/amd_fidelityfx_loader_dx12.dll"));
+    EXPECT_TRUE(FidelityFxInterceptor::MatchesLoaderName("\xE4/amd_fidelityfx_loader_dx12.dll"));
+    EXPECT_TRUE(FidelityFxInterceptor::MatchesLoaderName("\xFF\\AMD_FidelityFX_Loader_DX12.DLL"));
+    EXPECT_FALSE(FidelityFxInterceptor::MatchesLoaderName("\xE4/other_loader.dll"));
     EXPECT_FALSE(FidelityFxInterceptor::MatchesLoaderName(L"amd_fidelityfx_upscaler_dx12.dll"));
     EXPECT_FALSE(FidelityFxInterceptor::MatchesLoaderName(L"amd_fidelityfx_dx12.dll"));
     EXPECT_FALSE(FidelityFxInterceptor::MatchesLoaderName("nvngx.dll"));
@@ -1041,6 +1209,49 @@ TEST_F(FidelityFxInterceptorTest, MatchesTheFidelityFxLoaderByFileName) {
 TEST_F(FidelityFxInterceptorTest, AttachDirectRejectsMissingEntryPoints) {
     EXPECT_FALSE(m_ffx.AttachDirect(nullptr, &MockDestroy));
     EXPECT_FALSE(m_ffx.IsAttached());
+}
+
+TEST_F(FidelityFxInterceptorTest, ConcurrentDestroyWaitsForInFlightDispatch) {
+    AttachAll();
+    ffxContext context = CreateUpscaler();
+    ASSERT_NE(context, nullptr);
+
+    std::promise<void> dispatchEntered;
+    std::promise<void> allowDispatchExit;
+    auto dispatchEnteredFuture = dispatchEntered.get_future();
+    auto allowDispatchExitFuture = allowDispatchExit.get_future().share();
+    s_onDispatch = [&]() {
+        dispatchEntered.set_value();
+        allowDispatchExitFuture.wait();
+    };
+
+    ffxContext dispatchContext = context;
+    auto desc = MakeUpscaleDispatchDesc();
+    std::thread dispatchThread([&]() {
+        MockDispatch(&dispatchContext, &desc.header);
+    });
+
+    dispatchEnteredFuture.wait();
+
+    ffxContext destroyContext = context;
+    std::atomic<bool> destroyFinished{false};
+    std::thread destroyThread([&]() {
+        EXPECT_EQ(MockDestroy(&destroyContext, nullptr), FFX_API_RETURN_OK);
+        destroyFinished.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(s_destroyedDuringInFlightDispatch.load());
+    EXPECT_FALSE(destroyFinished.load());
+
+    allowDispatchExit.set_value();
+    dispatchThread.join();
+    destroyThread.join();
+
+    EXPECT_FALSE(s_destroyedDuringInFlightDispatch.load());
+    EXPECT_EQ(s_destroyed.size(), 2u);
+    EXPECT_EQ(destroyContext, nullptr);
+    EXPECT_EQ(m_ffx.GetActiveVirtualContextCount(), 0u);
 }
 
 }

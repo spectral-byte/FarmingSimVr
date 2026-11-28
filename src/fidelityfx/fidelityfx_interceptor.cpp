@@ -2,13 +2,14 @@
 #include "core/logger.h"
 #include "core/dll_lifecycle.h"
 #include "luau/vr_bridge.h"
-#include "ngx/ngx_interceptor.h"
 #include "ffx_mv_conventions.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
+#include <type_traits>
 
 namespace fs25vr {
 
@@ -52,7 +53,14 @@ Desc* FindInChain(ffxApiHeader* head, ffxStructType_t type) {
 
 template <typename Char>
 bool IsLoaderFileName(std::basic_string<Char> s) {
-    for (auto& c : s) c = static_cast<Char>(towlower(static_cast<wint_t>(c)));
+    using UnsignedChar = std::make_unsigned_t<Char>;
+    for (auto& c : s) {
+        if constexpr (sizeof(Char) == 1) {
+            c = static_cast<Char>(std::tolower(static_cast<UnsignedChar>(c)));
+        } else {
+            c = static_cast<Char>(std::towlower(static_cast<wint_t>(static_cast<UnsignedChar>(c))));
+        }
+    }
     auto pos = s.find_last_of(std::basic_string<Char>{static_cast<Char>('\\'), static_cast<Char>('/')});
     std::basic_string<Char> filename = (pos == std::basic_string<Char>::npos) ? s : s.substr(pos + 1);
     static constexpr char kName[] = "amd_fidelityfx_loader_dx12";
@@ -91,6 +99,24 @@ std::string FidelityFxInterceptor::GetMvFixDisableReason() const {
     return m_mvFixDisableReason;
 }
 
+bool FidelityFxInterceptor::SetMvFixEnabled(bool enabled) {
+    if (enabled && m_mvFixDisabled.load()) {
+        LogWarn("FidelityFxInterceptor: vrDlssMvFix on ignored; the pass is disabled for this session (" +
+                GetMvFixDisableReason() + ")");
+        return false;
+    }
+    bool previous = m_mvFixEnabled.exchange(enabled);
+    if (previous != enabled) {
+        LogInfo(std::string("FidelityFxInterceptor: Motion vector pass (vrDlssMvFix) ") + (enabled ? "on" : "off"));
+    }
+    return enabled;
+}
+
+const char* FidelityFxInterceptor::DescribeMvFixState() const {
+    if (m_mvFixDisabled.load()) return "failed";
+    return m_mvFixEnabled.load() ? "on" : "off";
+}
+
 void FidelityFxInterceptor::DisableMvFix(const std::string& reason) {
     {
         std::lock_guard<std::mutex> lock(m_mvFixMutex);
@@ -98,6 +124,7 @@ void FidelityFxInterceptor::DisableMvFix(const std::string& reason) {
         m_mvFixDisableReason = reason;
     }
     m_mvFixDisabled.store(true);
+    m_mvFixEnabled.store(false);
     LogError("FidelityFxInterceptor: Motion vector pass disabled for this session: " + reason +
              ". FSR3 continues on the engine's motion vectors.");
 }
@@ -127,8 +154,7 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
                                               uint64_t dispatchIndex, ffxApiResource& savedMv, const char*& state) {
     VRBridge* bridge = GetVRBridge();
     state = "off";
-    std::shared_ptr<NgxInterceptor> ngx = bridge ? bridge->GetNgxInterceptor() : nullptr;
-    if (!ngx || !ngx->IsMvFixEnabled() || m_mvFixDisabled.load()) return false;
+    if (!bridge || !m_mvFixEnabled.load() || m_mvFixDisabled.load()) return false;
 
     if (!desc.commandList || !desc.depth.resource || !desc.motionVectors.resource) {
         state = "missing-inputs";
@@ -146,10 +172,13 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     MvCorrectionRequest correctionRequest;
     const MvCorrectionRequest* correction = nullptr;
     if (plan.decision == mvreproj::CorrectionDecision::Correct) {
-        if (std::fabs(conventions.mvScaleX) > 1e-6f && std::fabs(conventions.mvScaleY) > 1e-6f) {
+        if (std::isfinite(conventions.mvScaleX) && std::isfinite(conventions.mvScaleY) &&
+            std::fabs(conventions.mvScaleX) > 1e-6f && std::fabs(conventions.mvScaleY) > 1e-6f) {
             plan.current.infiniteDepth = conventions.depthInfinite;
             if (conventions.hasProjection) {
                 plan.current.tanHalfFovY = conventions.tanHalfFovY;
+                plan.previousFrame.tanHalfFovY = conventions.tanHalfFovY;
+                plan.sameEye.tanHalfFovY = conventions.tanHalfFovY;
                 plan.current.nearClip = conventions.nearClip;
                 plan.current.farClip = conventions.farClip;
             }
@@ -175,7 +204,14 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
         std::string skipReason;
         if (BuildMvSelfCheckRequest(resolved, eye, dispatchIndex, conventions.mvScaleX, conventions.mvScaleY,
                                     correction ? &plan : nullptr, checkRequest, skipReason)) {
-            if (correction) checkRequest.current = plan.current;
+            if (correction) {
+                checkRequest.current = plan.current;
+            } else if (conventions.hasProjection) {
+                checkRequest.current.tanHalfFovY = conventions.tanHalfFovY;
+                checkRequest.previous.tanHalfFovY = conventions.tanHalfFovY;
+                checkRequest.current.nearClip = conventions.nearClip;
+                checkRequest.current.farClip = conventions.farClip;
+            }
             checkRequest.current.infiniteDepth = conventions.depthInfinite;
             check = &checkRequest;
         } else {
@@ -288,7 +324,9 @@ bool FidelityFxInterceptor::AttachDirect(PFN_ffxCreateContext pfnCreate, PFN_ffx
 }
 
 bool FidelityFxInterceptor::AttachModule(HMODULE hLoaderModule) {
-    if (!hLoaderModule) return false;
+    if (!hLoaderModule || (reinterpret_cast<uintptr_t>(hLoaderModule) & static_cast<uintptr_t>(3)) != 0) {
+        return false;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (m_isAttached) return true;
 
@@ -349,6 +387,7 @@ void FidelityFxInterceptor::DetachAll() {
         m_mvFixDisableReason.clear();
         m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
     }
+    m_mvFixEnabled.store(kDefaultMvFixEnabled);
     m_mvFixDisabled.store(false);
 }
 
@@ -381,6 +420,16 @@ VirtualFfxContext* FidelityFxInterceptor::GetVirtualContext(ffxContext context) 
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_virtualContexts.find(context);
     return it != m_virtualContexts.end() ? it->second.get() : nullptr;
+}
+
+InFlightLease<VirtualFfxContext> FidelityFxInterceptor::AcquireVirtualContext(ffxContext context) const {
+    if (!context) return {};
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    auto it = m_virtualContexts.find(context);
+    if (it != m_virtualContexts.end() && it->second) {
+        return InFlightLease<VirtualFfxContext>(it->second);
+    }
+    return {};
 }
 
 bool FidelityFxInterceptor::IsVirtualContext(ffxContext context) const {
@@ -560,7 +609,7 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_CreateContext(ffxContext* conte
         return resRight != FFX_API_RETURN_OK ? resRight : FFX_API_RETURN_ERROR;
     }
 
-    auto virtualContext = std::make_unique<VirtualFfxContext>();
+    auto virtualContext = std::make_shared<VirtualFfxContext>();
     virtualContext->id = host->m_nextVirtualId.fetch_add(1);
     virtualContext->left = left;
     virtualContext->right = right;
@@ -602,7 +651,7 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_DestroyContext(ffxContext* cont
         return origDestroy(context, memCb);
     }
 
-    std::unique_ptr<VirtualFfxContext> virtualContext;
+    std::shared_ptr<VirtualFfxContext> virtualContext;
     {
         std::lock_guard<std::recursive_mutex> lock(host->m_mutex);
         auto it = host->m_virtualContexts.find(*context);
@@ -614,6 +663,8 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_DestroyContext(ffxContext* cont
     if (!virtualContext) {
         return origDestroy(context, memCb);
     }
+
+    virtualContext->callGate.WaitForZero();
 
     ffxReturnCode_t resLeft = FFX_API_RETURN_OK;
     ffxReturnCode_t resRight = FFX_API_RETURN_OK;
@@ -629,8 +680,12 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Configure(ffxContext* context, 
     auto orig = host ? Original<PFN_ffxConfigure>(host->m_detourConfigure) : nullptr;
     if (!orig) return FFX_API_RETURN_ERROR;
 
-    VirtualFfxContext* virtualContext = (context && *context) ? host->GetVirtualContext(*context) : nullptr;
-    if (!virtualContext) return orig(context, desc);
+    auto contextLease = (context && *context) ? host->AcquireVirtualContext(*context) : InFlightLease<VirtualFfxContext>{};
+    VirtualFfxContext* virtualContext = contextLease.get();
+    if (!virtualContext) {
+        contextLease.Reset();
+        return orig(context, desc);
+    }
 
     ffxContext left = virtualContext->left;
     ffxContext right = virtualContext->right;
@@ -644,8 +699,12 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Query(ffxContext* context, ffxQ
     auto orig = host ? Original<PFN_ffxQuery>(host->m_detourQuery) : nullptr;
     if (!orig) return FFX_API_RETURN_ERROR;
 
-    VirtualFfxContext* virtualContext = (context && *context) ? host->GetVirtualContext(*context) : nullptr;
-    if (!virtualContext) return orig(context, desc);
+    auto contextLease = (context && *context) ? host->AcquireVirtualContext(*context) : InFlightLease<VirtualFfxContext>{};
+    VirtualFfxContext* virtualContext = contextLease.get();
+    if (!virtualContext) {
+        contextLease.Reset();
+        return orig(context, desc);
+    }
 
     ffxContext left = virtualContext->left;
     return orig(&left, desc);
@@ -660,10 +719,16 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
     }
     if (!context || !*context || !desc) return orig(context, desc);
 
-    VirtualFfxContext* virtualContext = host->GetVirtualContext(*context);
-    if (!virtualContext) return orig(context, desc);
+    auto contextLease = host->AcquireVirtualContext(*context);
+    VirtualFfxContext* virtualContext = contextLease.get();
+    if (!virtualContext) {
+        contextLease.Reset();
+        return orig(context, desc);
+    }
 
-    if (desc->type != FFX_API_DISPATCH_DESC_TYPE_UPSCALE) {
+    auto* upscale = FindInChain<ffxDispatchDescUpscale>(
+        const_cast<ffxDispatchDescHeader*>(desc), FFX_API_DISPATCH_DESC_TYPE_UPSCALE);
+    if (!upscale) {
         ffxContext left = virtualContext->left;
         return orig(&left, desc);
     }
@@ -687,7 +752,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
             contextIndex = 1;
         }
     }
-    auto* upscale = const_cast<ffxDispatchDescUpscale*>(reinterpret_cast<const ffxDispatchDescUpscale*>(desc));
     bool needReset = host->ConsumeDiscontinuity(contextIndex);
     bool wroteReset = false;
     if (needReset && !upscale->reset) {

@@ -15,6 +15,8 @@
 
 namespace fs25vr {
 
+struct ResolvedCameras;
+
 class NgxInterceptor {
 public:
     NgxInterceptor();
@@ -71,9 +73,10 @@ public:
     size_t GetActiveVirtualHandleCount() const;
     bool IsVirtualHandle(const NVSDK_NGX_Handle* handle) const;
     VirtualNgxHandle* GetVirtualHandle(const NVSDK_NGX_Handle* handle) const;
+    InFlightLease<VirtualNgxHandle> AcquireVirtualHandle(const NVSDK_NGX_Handle* handle) const;
 
-    void RegisterVirtualHandle(std::unique_ptr<VirtualNgxHandle> handle);
-    std::unique_ptr<VirtualNgxHandle> UnregisterVirtualHandle(NVSDK_NGX_Handle* handle);
+    void RegisterVirtualHandle(std::shared_ptr<VirtualNgxHandle> handle);
+    std::shared_ptr<VirtualNgxHandle> UnregisterVirtualHandle(NVSDK_NGX_Handle* handle);
 
     void RegisterTrackedParameter(std::unique_ptr<NgxParameterImpl> param);
     bool UnregisterTrackedParameter(NVSDK_NGX_Parameter* param);
@@ -249,7 +252,7 @@ private:
         bool reset = false;
     };
     void RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex, const NVSDK_NGX_Parameter* params,
-                           bool reset, bool isDualPass);
+                           bool reset, bool isDualPass, const ResolvedCameras* resolvedCameras = nullptr);
     void LogDiagSummary();
     static JitterSummary Summarize(const std::vector<DiagSample>& samples);
 
@@ -261,7 +264,7 @@ private:
     uint32_t m_diagContextRun = 0;
     uint32_t m_diagLongestContextRun = 0;
 
-    std::unordered_map<NVSDK_NGX_Handle*, std::unique_ptr<VirtualNgxHandle>> m_virtualHandles;
+    std::unordered_map<NVSDK_NGX_Handle*, std::shared_ptr<VirtualNgxHandle>> m_virtualHandles;
     std::unordered_map<NVSDK_NGX_Parameter*, std::unique_ptr<NgxParameterImpl>> m_trackedParameters;
 
     FunctionDetour m_detourCreateFeature;

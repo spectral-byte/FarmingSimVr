@@ -3,8 +3,14 @@
 #include "ngx/virtual_ngx_handle.h"
 #include "ngx/ngx_interceptor.h"
 #include "luau/vr_bridge.h"
-#include <vector>
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <functional>
+#include <future>
 #include <memory>
+#include <thread>
+#include <vector>
 
 namespace fs25vr {
 namespace {
@@ -18,6 +24,9 @@ static std::vector<float> s_evalMvScaleX;
 static std::vector<float> s_evalMvScaleY;
 static std::vector<int> s_evalPresets;
 static std::vector<float> s_evalSharpness;
+static std::atomic<bool> s_evalInFlight{false};
+static std::atomic<bool> s_releasedDuringInFlightEval{false};
+static std::function<void()> s_onEvaluate;
 
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreate(
     ID3D12GraphicsCommandList*,
@@ -35,6 +44,9 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreate(
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockRelease(
     NVSDK_NGX_Handle* InHandle
 ) {
+    if (s_evalInFlight.load()) {
+        s_releasedDuringInFlightEval.store(true);
+    }
     s_releaseCount++;
     delete InHandle;
     return NVSDK_NGX_Result_Success;
@@ -46,6 +58,10 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluate(
     const NVSDK_NGX_Parameter* InParameters,
     PFN_NVSDK_NGX_ProgressCallback
 ) {
+    s_evalInFlight.store(true);
+    if (s_onEvaluate) {
+        s_onEvaluate();
+    }
     s_evaluateCount++;
     s_evalHandles.push_back(InFeatureHandle);
 
@@ -83,6 +99,7 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluate(
         s_evalSharpness.push_back(0.0f);
     }
 
+    s_evalInFlight.store(false);
     return NVSDK_NGX_Result_Success;
 }
 
@@ -103,6 +120,9 @@ protected:
         s_evalMvScaleY.clear();
         s_evalPresets.clear();
         s_evalSharpness.clear();
+        s_evalInFlight.store(false);
+        s_releasedDuringInFlightEval.store(false);
+        s_onEvaluate = nullptr;
 
         m_ngx.DetachAll();
         m_ngx.SetVRBridge(nullptr);
@@ -114,6 +134,8 @@ protected:
     }
 
     void TearDown() override {
+        s_onEvaluate = nullptr;
+        s_evalInFlight.store(false);
         m_ngx.DetachAll();
         m_ngx.SetVRBridge(nullptr);
         m_bridge.SetRenderingMode(VRRenderingMode::AFR);
@@ -373,6 +395,202 @@ TEST_F(NgxInterceptorTest, DetachLiveHooksUnwindsWhicheverInterceptorOwnsThem) {
 
     EXPECT_FALSE(m_ngx.AreModuleHooksInstalled());
     EXPECT_FALSE(m_ngx.IsAttached());
+}
+
+namespace {
+FunctionDetour g_blockerLoadLibExW;
+
+HMODULE WINAPI PassthroughLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
+    auto orig = reinterpret_cast<decltype(&LoadLibraryExW)>(g_blockerLoadLibExW.GetOriginal());
+    return orig ? orig(lpLibFileName, hFile, dwFlags) : nullptr;
+}
+}
+
+TEST_F(NgxInterceptorTest, NonSuperSamplingFeaturesPassThroughUntouched) {
+    auto& interceptor = m_ngx;
+    ASSERT_TRUE(interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate));
+    interceptor.SetVRBridge(&m_bridge);
+    interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K);
+    interceptor.SetSharpnessOverride(0.42f, true);
+
+    NgxParameterImpl createParams;
+    createParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    createParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+
+    NVSDK_NGX_Handle* nonSrHandle = nullptr;
+    ASSERT_EQ(MockCreate(nullptr, NVSDK_NGX_Feature_SlowMotion, &createParams, &nonSrHandle), NVSDK_NGX_Result_Success);
+    ASSERT_NE(nonSrHandle, nullptr);
+    EXPECT_EQ(s_createCount, 1);
+    EXPECT_FALSE(interceptor.IsVirtualHandle(nonSrHandle));
+    EXPECT_EQ(interceptor.GetActiveVirtualHandleCount(), 0u);
+    EXPECT_FALSE(createParams.HasParam(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset));
+
+    m_bridge.SignalDiscontinuity();
+    ASSERT_TRUE(m_bridge.HasPendingDiscontinuity(0));
+
+    NgxParameterImpl evalParams;
+    evalParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    evalParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    ASSERT_EQ(MockEvaluate(nullptr, nonSrHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
+    ASSERT_EQ(s_evalHandles.size(), 1u);
+    EXPECT_EQ(s_evalHandles[0], nonSrHandle);
+    EXPECT_EQ(s_evalPresets[0], 0);
+    EXPECT_FLOAT_EQ(s_evalSharpness[0], 0.0f);
+    EXPECT_EQ(s_evalReset[0], 0);
+    EXPECT_TRUE(m_bridge.HasPendingDiscontinuity(0));
+
+    ASSERT_EQ(MockRelease(nonSrHandle), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(s_releaseCount, 1);
+}
+
+TEST_F(NgxInterceptorTest, OverriddenSharpnessAndPresetAreRestoredAfterEvaluation) {
+    auto& interceptor = m_ngx;
+    ASSERT_TRUE(interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate));
+    interceptor.SetVRBridge(&m_bridge);
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    NgxParameterImpl createParams;
+    createParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    createParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreate(nullptr, NVSDK_NGX_Feature_SuperSampling, &createParams, &virtualHandle), NVSDK_NGX_Result_Success);
+    int createPreset = 0;
+    createParams.Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &createPreset);
+    EXPECT_EQ(createPreset, 0);
+
+    interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K);
+    interceptor.SetSharpnessOverride(0.42f, true);
+
+    NgxParameterImpl evalParams;
+    evalParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    evalParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+
+    ASSERT_EQ(MockEvaluate(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(s_evalPresets[0], NVSDK_NGX_DLSS_Hint_Render_Preset_K);
+    EXPECT_FLOAT_EQ(s_evalSharpness[0], 0.42f);
+
+    int restoredPreset = -1;
+    int restoredQualityPreset = -1;
+    float restoredSharpness = -1.0f;
+    evalParams.Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &restoredPreset);
+    evalParams.Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, &restoredQualityPreset);
+    evalParams.Get(NVSDK_NGX_Parameter_Sharpness, &restoredSharpness);
+    EXPECT_EQ(restoredPreset, 0);
+    EXPECT_EQ(restoredQualityPreset, 0);
+    EXPECT_FLOAT_EQ(restoredSharpness, 0.0f);
+
+    interceptor.SetDlssPresetOverride(0);
+    interceptor.SetSharpnessOverride(-1.0f, false);
+    ASSERT_EQ(MockEvaluate(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(s_evalPresets[1], 0);
+    EXPECT_FLOAT_EQ(s_evalSharpness[1], 0.0f);
+
+    NgxParameterImpl callerParams;
+    callerParams.Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, 3);
+    callerParams.Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, 4);
+    callerParams.Set(NVSDK_NGX_Parameter_Sharpness, 0.75f);
+    interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K);
+    interceptor.SetSharpnessOverride(0.42f, true);
+
+    ASSERT_EQ(MockEvaluate(nullptr, virtualHandle, &callerParams, nullptr), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(s_evalPresets[2], 3);
+    EXPECT_FLOAT_EQ(s_evalSharpness[2], 0.42f);
+
+    int callerPreset = 0;
+    int callerQualityPreset = 0;
+    float callerSharpness = 0.0f;
+    EXPECT_EQ(callerParams.Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &callerPreset), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(callerParams.Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, &callerQualityPreset), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(callerParams.Get(NVSDK_NGX_Parameter_Sharpness, &callerSharpness), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(callerPreset, 3);
+    EXPECT_EQ(callerQualityPreset, 4);
+    EXPECT_FLOAT_EQ(callerSharpness, 0.75f);
+
+    MockRelease(virtualHandle);
+}
+
+TEST_F(NgxInterceptorTest, DatafileAndImageResourceLoadsAreIgnoredByModuleHooks) {
+    ASSERT_TRUE(m_ngx.InstallModuleLoadHooks());
+    const std::wstring nvngxPath = std::filesystem::path(FAKE_NVNGX_PATH).make_preferred().wstring();
+
+    HMODULE hDatafile = LoadLibraryExW(nvngxPath.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE);
+    ASSERT_NE(hDatafile, nullptr);
+    EXPECT_FALSE(m_ngx.IsAttached());
+    FreeLibrary(hDatafile);
+
+    HMODULE hImageRes = LoadLibraryExW(nvngxPath.c_str(), nullptr, LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    ASSERT_NE(hImageRes, nullptr);
+    EXPECT_FALSE(m_ngx.IsAttached());
+    FreeLibrary(hImageRes);
+
+    HMODULE hReal = LoadLibraryW(nvngxPath.c_str());
+    ASSERT_NE(hReal, nullptr);
+    EXPECT_TRUE(m_ngx.IsAttached());
+    m_ngx.DetachAll();
+    FreeLibrary(hReal);
+}
+
+TEST_F(NgxInterceptorTest, InstallModuleLoadHooksFailsAndRollsBackWhenDetourFails) {
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    ASSERT_NE(kernel32, nullptr);
+    void* pfnLoadLibExW = reinterpret_cast<void*>(GetProcAddress(kernel32, "LoadLibraryExW"));
+    ASSERT_NE(pfnLoadLibExW, nullptr);
+
+    ASSERT_TRUE(g_blockerLoadLibExW.Install(pfnLoadLibExW, reinterpret_cast<void*>(&PassthroughLoadLibraryExW)));
+    EXPECT_FALSE(m_ngx.InstallModuleLoadHooks());
+    EXPECT_FALSE(m_ngx.AreModuleHooksInstalled());
+
+    ASSERT_TRUE(g_blockerLoadLibExW.Uninstall());
+    EXPECT_TRUE(m_ngx.InstallModuleLoadHooks());
+    EXPECT_TRUE(m_ngx.AreModuleHooksInstalled());
+    m_ngx.DetachAll();
+}
+
+TEST_F(NgxInterceptorTest, ConcurrentReleaseWaitsForInFlightEvaluation) {
+    ASSERT_TRUE(m_ngx.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate));
+    m_ngx.SetVRBridge(&m_bridge);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreate(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle),
+              NVSDK_NGX_Result_Success);
+    ASSERT_NE(virtualHandle, nullptr);
+
+    std::promise<void> evalEntered;
+    std::promise<void> allowEvalExit;
+    auto evalEnteredFuture = evalEntered.get_future();
+    auto allowEvalExitFuture = allowEvalExit.get_future().share();
+    s_onEvaluate = [&]() {
+        evalEntered.set_value();
+        allowEvalExitFuture.wait();
+    };
+
+    std::thread evalThread([&]() {
+        MockEvaluate(nullptr, virtualHandle, &params, nullptr);
+    });
+
+    evalEnteredFuture.wait();
+
+    std::atomic<bool> releaseFinished{false};
+    std::thread releaseThread([&]() {
+        EXPECT_EQ(MockRelease(virtualHandle), NVSDK_NGX_Result_Success);
+        releaseFinished.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(s_releasedDuringInFlightEval.load());
+    EXPECT_FALSE(releaseFinished.load());
+
+    allowEvalExit.set_value();
+    evalThread.join();
+    releaseThread.join();
+
+    EXPECT_FALSE(s_releasedDuringInFlightEval.load());
+    EXPECT_EQ(s_releaseCount, 2);
+    EXPECT_EQ(m_ngx.GetActiveVirtualHandleCount(), 0u);
 }
 
 }
