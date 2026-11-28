@@ -1,4 +1,5 @@
 #include "logger.h"
+#include "core/dll_lifecycle.h"
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
@@ -80,6 +81,7 @@ LogLevel Logger::GetMinLevel() const {
 }
 
 Logger::~Logger() {
+    if (IsProcessTerminating()) return;
     Flush();
     if (m_fileStream.is_open()) {
         m_fileStream.close();
@@ -87,6 +89,7 @@ Logger::~Logger() {
 }
 
 void Logger::SetLogFile(const std::filesystem::path& filepath) {
+    if (IsProcessTerminating()) return;
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {
         m_fileStream.close();
@@ -109,6 +112,7 @@ void Logger::SetLogFile(const std::filesystem::path& filepath) {
 }
 
 void Logger::Close() {
+    if (IsProcessTerminating()) return;
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {
         m_fileStream.close();
@@ -126,7 +130,7 @@ const char* Logger::LogLevelToString(LogLevel level) {
 }
 
 void Logger::Log(LogLevel level, const std::string& message) {
-    if (level < m_minLevel) {
+    if (IsProcessTerminating() || level < m_minLevel) {
         return;
     }
     auto now = std::chrono::system_clock::now();
@@ -175,6 +179,7 @@ char* PutDigits(char* out, unsigned value, int digits) {
 }
 
 bool Logger::TryLogWithoutWaiting(LogLevel level, const char* message, std::size_t length) {
+    if (IsProcessTerminating()) return false;
     std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
     if (!lock.owns_lock() || !m_fileStream.is_open()) {
         return false;
@@ -214,6 +219,7 @@ bool Logger::TryLogWithoutWaiting(LogLevel level, const char* message, std::size
 }
 
 void Logger::Flush() {
+    if (IsProcessTerminating()) return;
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {
         m_fileStream.flush();
