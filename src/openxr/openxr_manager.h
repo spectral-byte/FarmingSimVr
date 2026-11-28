@@ -287,6 +287,7 @@ private:
     HeadPose m_renderPoses[2]{};
     bool m_hasRenderPose[2]{false, false};
     void ClearRenderPoses();
+    void ResetCopiedSwapchainsAndCloseFrame();
 
     EyeProjection m_eyeProjections[2];
     float SwapchainAspect(uint32_t eyeIndex) const;

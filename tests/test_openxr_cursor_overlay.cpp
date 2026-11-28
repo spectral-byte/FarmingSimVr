@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_cursor_overlay.h"
 #include "core/raii_utils.h"
+#include <dxgi1_4.h>
 #include <cmath>
 #include <unordered_set>
 
@@ -20,6 +21,15 @@ public:
     uint32_t acquireImageCalls = 0;
     uint32_t waitImageCalls = 0;
     uint32_t releaseImageCalls = 0;
+
+    XrResult createSwapchainResult = XR_SUCCESS;
+    XrResult enumerateImagesResult = XR_SUCCESS;
+    XrResult acquireImageResult = XR_SUCCESS;
+    XrResult waitImageResult = XR_SUCCESS;
+    XrResult releaseImageResult = XR_SUCCESS;
+    uint32_t acquireIndex = 0;
+    XrSwapchainCreateInfo lastCreateInfo{};
+    std::vector<ID3D12Resource*> swapchainTextures{ nullptr, nullptr };
 
     XrResult EnumerateInstanceExtensionProperties(const char*, uint32_t, uint32_t*, XrExtensionProperties*) override { return XR_SUCCESS; }
     XrResult CreateInstance(const XrInstanceCreateInfo*, XrInstance*) override { return XR_SUCCESS; }
@@ -58,8 +68,13 @@ public:
         XrSession,
         const XrSwapchainCreateInfo* createInfo,
         XrSwapchain* swapchain) override {
-        (void)createInfo;
         createSwapchainCalls++;
+        if (createInfo) {
+            lastCreateInfo = *createInfo;
+        }
+        if (createSwapchainResult != XR_SUCCESS) {
+            return createSwapchainResult;
+        }
         if (swapchain) {
             *swapchain = reinterpret_cast<XrSwapchain>(static_cast<uintptr_t>(0xC0015000 + createSwapchainCalls));
         }
@@ -76,31 +91,39 @@ public:
         uint32_t imageCapacityInput,
         uint32_t* imageCountOutput,
         XrSwapchainImageBaseHeader* images) override {
-        if (imageCountOutput) *imageCountOutput = 2;
+        if (enumerateImagesResult != XR_SUCCESS) {
+            return enumerateImagesResult;
+        }
+        uint32_t total = static_cast<uint32_t>(swapchainTextures.size());
+        if (imageCountOutput) *imageCountOutput = total;
         if (imageCapacityInput == 0) return XR_SUCCESS;
-        uint32_t count = std::min(imageCapacityInput, 2u);
+        uint32_t count = std::min(imageCapacityInput, total);
+        auto* d3d12Images = reinterpret_cast<XrSwapchainImageD3D12KHR*>(images);
         for (uint32_t i = 0; i < count; ++i) {
-            auto d3d12Img = reinterpret_cast<XrSwapchainImageD3D12KHR*>(&images[i]);
-            d3d12Img->type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
-            d3d12Img->texture = nullptr;
+            d3d12Images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
+            d3d12Images[i].next = nullptr;
+            d3d12Images[i].texture = swapchainTextures[i];
         }
         return XR_SUCCESS;
     }
 
     XrResult AcquireSwapchainImage(XrSwapchain, const XrSwapchainImageAcquireInfo*, uint32_t* index) override {
         acquireImageCalls++;
-        if (index) *index = 0;
+        if (acquireImageResult != XR_SUCCESS) {
+            return acquireImageResult;
+        }
+        if (index) *index = acquireIndex;
         return XR_SUCCESS;
     }
 
     XrResult WaitSwapchainImage(XrSwapchain, const XrSwapchainImageWaitInfo*) override {
         waitImageCalls++;
-        return XR_SUCCESS;
+        return waitImageResult;
     }
 
     XrResult ReleaseSwapchainImage(XrSwapchain, const XrSwapchainImageReleaseInfo*) override {
         releaseImageCalls++;
-        return XR_SUCCESS;
+        return releaseImageResult;
     }
 
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
@@ -113,18 +136,32 @@ public:
 }
 
 TEST(ScopedEventHandleTest, ManagesHandleLifecycleAndClosesAutomatically) {
-    HANDLE rawHandle = nullptr;
+    std::string eventName = "fs25vr_test_scoped_event_" + std::to_string(GetCurrentProcessId()) +
+                            "_" + std::to_string(GetCurrentThreadId());
     {
-        ScopedEventHandle eventHandle = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
-        EXPECT_TRUE(eventHandle.IsValid());
-        EXPECT_NE(eventHandle.Get(), nullptr);
-        rawHandle = eventHandle.Get();
+        ScopedEventHandle eventHandle = ScopedEventHandle::Create(nullptr, FALSE, FALSE, eventName.c_str());
+        ASSERT_TRUE(eventHandle.IsValid());
+        ASSERT_NE(eventHandle.Get(), nullptr);
 
-        DWORD waitRes = WaitForSingleObject(rawHandle, 0);
-        EXPECT_EQ(waitRes, WAIT_TIMEOUT);
+        EXPECT_EQ(WaitForSingleObject(eventHandle.Get(), 0), WAIT_TIMEOUT);
+
+        HANDLE reopened = OpenEventA(SYNCHRONIZE, FALSE, eventName.c_str());
+        ASSERT_NE(reopened, nullptr);
+        EXPECT_EQ(WaitForSingleObject(reopened, 0), WAIT_TIMEOUT);
+        CloseHandle(reopened);
+
+        HANDLE duplicate = nullptr;
+        ASSERT_TRUE(DuplicateHandle(GetCurrentProcess(), eventHandle.Get(), GetCurrentProcess(),
+                                    &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS));
+        EXPECT_EQ(WaitForSingleObject(duplicate, 0), WAIT_TIMEOUT);
+        SetEvent(duplicate);
+        EXPECT_EQ(WaitForSingleObject(eventHandle.Get(), 0), WAIT_OBJECT_0);
+        CloseHandle(duplicate);
     }
-    DWORD waitAfter = WaitForSingleObject(rawHandle, 0);
-    EXPECT_EQ(waitAfter, WAIT_FAILED);
+    SetLastError(ERROR_SUCCESS);
+    HANDLE afterClose = OpenEventA(SYNCHRONIZE, FALSE, eventName.c_str());
+    EXPECT_EQ(afterClose, nullptr);
+    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_FILE_NOT_FOUND));
 }
 
 TEST(ScopedEventHandleTest, SupportsMoveSemanticsWithoutDuplicateClose) {
@@ -312,6 +349,104 @@ TEST(OpenXrCursorOverlayTest, PrepareCompositionLayerReturnsFalseWhenHiddenOrNoS
     EXPECT_FALSE(overlay.PrepareCompositionLayer(menuQuad, hiddenState, mockLocalSpace, outCursorQuad,
                                                  nullptr, nullptr, mockDispatch));
     EXPECT_FALSE(overlay.HasLastSubmittedCursorQuadLayer());
+}
+
+TEST(OpenXrCursorOverlayTest, CreateSwapchainRequestsStaticImageBit) {
+    auto mockDispatch = std::make_shared<MockCursorDispatch>();
+    XrSession mockSession = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xBEEF));
+
+    OpenXrCursorOverlay overlay;
+    ASSERT_TRUE(overlay.CreateSwapchain(mockSession, mockDispatch, 64, 64));
+    EXPECT_NE(mockDispatch->lastCreateInfo.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT, 0u);
+}
+
+TEST(OpenXrCursorOverlayTest, UploadTextureReleasesImageOnWaitFailureAndAllowsRetry) {
+    auto mockDispatch = std::make_shared<MockCursorDispatch>();
+    XrSession mockSession = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xBEEF));
+    OpenXrCursorOverlay overlay;
+    ASSERT_TRUE(overlay.CreateSwapchain(mockSession, mockDispatch, 64, 64));
+
+    auto* dummyDevice = reinterpret_cast<ID3D12Device*>(static_cast<uintptr_t>(0x1000));
+    auto* dummyQueue = reinterpret_cast<ID3D12CommandQueue*>(static_cast<uintptr_t>(0x2000));
+
+    mockDispatch->waitImageResult = XR_ERROR_RUNTIME_FAILURE;
+    EXPECT_FALSE(overlay.UploadTexture(dummyDevice, dummyQueue, mockDispatch));
+    EXPECT_EQ(mockDispatch->acquireImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->waitImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->releaseImageCalls, 1u);
+
+    mockDispatch->waitImageResult = XR_SUCCESS;
+    mockDispatch->acquireIndex = 99;
+    EXPECT_FALSE(overlay.UploadTexture(dummyDevice, dummyQueue, mockDispatch));
+    EXPECT_EQ(mockDispatch->acquireImageCalls, 2u);
+    EXPECT_EQ(mockDispatch->releaseImageCalls, 2u);
+
+    mockDispatch->acquireIndex = 0;
+    EXPECT_FALSE(overlay.UploadTexture(dummyDevice, dummyQueue, mockDispatch));
+    EXPECT_EQ(mockDispatch->acquireImageCalls, 3u);
+    EXPECT_EQ(mockDispatch->releaseImageCalls, 3u);
+}
+
+TEST(OpenXrCursorOverlayTest, UploadTextureSucceedsOnceOnWarpDeviceAndLeavesUnuploadedOnD3D12Failure) {
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> warp;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
+        FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+        GTEST_SKIP() << "no WARP D3D12 device";
+    }
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+    D3D12_COMMAND_QUEUE_DESC queueDesc{};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ASSERT_TRUE(SUCCEEDED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue))));
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = 64;
+    desc.Height = 64;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+    ASSERT_TRUE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                          D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                          IID_PPV_ARGS(&texture))));
+
+    auto mockDispatch = std::make_shared<MockCursorDispatch>();
+    mockDispatch->swapchainTextures = { texture.Get(), texture.Get() };
+    XrSession mockSession = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xBEEF));
+
+    {
+        OpenXrCursorOverlay overlay;
+        mockDispatch->releaseImageResult = XR_ERROR_RUNTIME_FAILURE;
+        ASSERT_TRUE(overlay.CreateSwapchain(mockSession, mockDispatch, 64, 64));
+        EXPECT_FALSE(overlay.UploadTexture(device.Get(), queue.Get(), mockDispatch));
+        EXPECT_EQ(mockDispatch->acquireImageCalls, 1u);
+
+        mockDispatch->releaseImageResult = XR_SUCCESS;
+        EXPECT_TRUE(overlay.UploadTexture(device.Get(), queue.Get(), mockDispatch));
+        EXPECT_EQ(mockDispatch->acquireImageCalls, 2u);
+
+        EXPECT_TRUE(overlay.UploadTexture(device.Get(), queue.Get(), mockDispatch));
+        EXPECT_EQ(mockDispatch->acquireImageCalls, 2u);
+    }
+
+    Microsoft::WRL::ComPtr<ID3D12Device5> device5;
+    if (SUCCEEDED(device.As(&device5))) {
+        device5->RemoveDevice();
+        OpenXrCursorOverlay failedOverlay;
+        ASSERT_TRUE(failedOverlay.CreateSwapchain(mockSession, mockDispatch, 64, 64));
+        EXPECT_FALSE(failedOverlay.UploadTexture(device.Get(), queue.Get(), mockDispatch));
+        EXPECT_EQ(mockDispatch->acquireImageCalls, 3u);
+        EXPECT_EQ(mockDispatch->releaseImageCalls, 3u);
+        EXPECT_FALSE(failedOverlay.UploadTexture(device.Get(), queue.Get(), mockDispatch));
+        EXPECT_EQ(mockDispatch->acquireImageCalls, 4u);
+    }
 }
 
 }
