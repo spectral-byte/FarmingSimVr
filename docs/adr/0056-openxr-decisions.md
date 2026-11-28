@@ -7,12 +7,15 @@ This record holds the non-obvious decisions behind the OpenXR session and its li
 
 ### `src/openxr/d3d12_eye_copy.cpp`
 
-- **`D3D12EyeCopy::EnsureTimestamps`, `LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU e...`**: The trace still has its CPU timings; only the GPU eye copy lines are missing.
+- **`D3D12EyeCopy::SetDeviceAndQueue`**: Releases any prior device/queue resources via `Release()` whenever `device` or `queue` changes, so old allocators, fences, and mapped readback buffers are torn down before switching devices.
+- **`D3D12EyeCopy::WaitForFenceValue`**: Checks `GetCompletedValue() == UINT64_MAX` (device removed), `SetEventOnCompletion` failure, and a finite `kFenceWaitTimeoutMs` wait so `Copy`, `ClearToBlack`, and `Release` never reuse an in-flight allocator or hang indefinitely.
+- **`D3D12EyeCopy::EnsureTimestamps`, `LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU e...`**: The trace still has its CPU timings; only the GPU eye copy lines are missing. Keeps `m_timestampReadback` persistently mapped (`m_timestampReadbackMapped`) until `Release()` rather than mapping and unmapping per copy.
 - **`D3D12EyeCopy::ReportTimestamps`, `if (m_copiesSinceCalibration++ % 64 == 0) {`**: The GPU and CPU clocks drift apart slowly; recalibrating every few dozen copies keeps the lag exact.
+- **`D3D12EyeCopy::Release`**: Resets `m_timestampsFailed`, `m_gpuTimestampFrequency`, `m_gpuCalibrationTicks`, `m_gpuCalibrationCpuNs`, `m_copiesSinceCalibration`, and unmaps `m_timestampReadback` so a new session or device recalibrates cleanly.
 - **`D3D12EyeCopy::Copy`, `if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, ...`**: A new list is created open. Close it so every use starts from a closed list that can be reset.
 - **`D3D12EyeCopy::Copy`, `if (!(curCommandList && curAllocator && destTexture)) {`**: A copy with no destination texture records nothing: the slot's list stays closed, nothing is executed and its fence value is not advanced.
 - **`D3D12EyeCopy::Copy`, `ReportTimestamps(ringSlot);`**: The slot's earlier copy has run, so its timestamps are written.
-- **`D3D12EyeCopy::Copy`, `curAllocator->Reset();`**: The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset.
+- **`D3D12EyeCopy::Copy`, `curAllocator->Reset();`**: The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset. Advance `m_currentFenceValue` and `m_copyFenceValues[ringSlot]` only when `m_queue->Signal` succeeds.
 - **`D3D12EyeCopy::Copy`, `barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;`**: OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be returned to RENDER_TARGET before release.
 - **`D3D12EyeCopy::ClearToBlack`, `barrier`**: The game hands the back buffer to Present in the PRESENT state (as Copy assumes); it goes back to that state after the clear.
 

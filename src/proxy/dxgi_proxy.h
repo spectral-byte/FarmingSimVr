@@ -105,7 +105,7 @@ private:
     void EnsureVrInitialized();
     void AttachFirstOutput(IDXGIFactory* factory);
 
-    static void PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height);
+    static void PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height, DXGI_FORMAT newFormat);
     void AttachCreatedFactory(HRESULT hr, void** ppFactory);
 
     static DxgiProxy* ForHook(FunctionDetour DxgiProxy::*detour);
