@@ -1434,6 +1434,22 @@ TEST_F(VrBridgeTest, SetDlssMvFixSurfacesActiveUpscalerFailureIndependently) {
     };
     ASSERT_TRUE(ngx->AttachDirect(&DummyNgx::Create, &DummyNgx::Release, &DummyNgx::Eval));
     ngx->SetVRBridge(&bridge);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    auto makeCam = [](uint32_t eye, double x) {
+        fs25vr::CameraRecord r;
+        r.eye = eye;
+        r.position[0] = x;
+        r.fovY = 1.0f;
+        r.nearClip = 0.15f;
+        r.farClip = 2000.0f;
+        return r;
+    };
+    ASSERT_TRUE(bridge.GetCameraRecords().Report(makeCam(0, 9.9)));
+    bridge.GetCameraRecords().AdvanceFrame();
+    ASSERT_TRUE(bridge.GetCameraRecords().Report(makeCam(1, 10.064)));
+    bridge.GetCameraRecords().AdvanceFrame();
+    ASSERT_TRUE(bridge.GetCameraRecords().Report(makeCam(0, 10.0)));
+    bridge.SetSubPassIndex(0);
     fs25vr::NgxParameterImpl params;
     params.Set(fs25vr::NVSDK_NGX_Parameter_Width, 1920u);
     params.Set(fs25vr::NVSDK_NGX_Parameter_Height, 1080u);

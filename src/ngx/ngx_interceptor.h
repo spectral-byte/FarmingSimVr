@@ -2,6 +2,7 @@
 
 #include "ngx_defs.h"
 #include "mv_pass.h"
+#include "upscaler_mv_helper.h"
 #include "near_estimator.h"
 #include "virtual_ngx_handle.h"
 #include "core/detour.h"
@@ -154,23 +155,22 @@ public:
     }
 
     bool SetMvFixEnabled(bool enabled);
-    bool IsMvFixEnabled() const { return m_mvFixEnabled.load(); }
-    bool IsMvFixDisabledForSession() const { return m_mvFixDisabled.load(); }
+    bool IsMvFixEnabled() const { return m_mvRunner.IsEnabled(); }
+    bool IsMvFixDisabledForSession() const { return m_mvRunner.IsDisabledForSession(); }
     std::string GetMvFixDisableReason() const;
     void SetDepthModelInfinite(bool infinite);
     bool IsDepthModelInfinite() const { return m_depthModelInfinite.load(); }
     void SetNearClipOverride(float meters);
     float GetNearClipOverride() const { return m_nearClipOverride.load(); }
     float GetAutoNearEstimate() const { return m_nearEstimator.Estimate(); }
-    // Every Nth cross-eye evaluation records a near plane estimate (a sparse self-check read back later).
     static constexpr uint32_t kNearEstimateInterval = 4;
     void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
     const char* DescribeMvFixState() const;
 
-    static constexpr uint32_t kDefaultDiagEvaluations = 128;
-    static constexpr uint32_t kMaxDiagEvaluations = 4096;
+    static constexpr uint32_t kDefaultDiagEvaluations = UpscalerDiagnostics::kDefaultWindow;
+    static constexpr uint32_t kMaxDiagEvaluations = UpscalerDiagnostics::kMaxWindow;
     void ArmDiagnostics(uint32_t evaluations = kDefaultDiagEvaluations);
-    uint32_t GetDiagEvaluationsRemaining() const { return m_diagRemaining.load(); }
+    uint32_t GetDiagEvaluationsRemaining() const { return m_diag.Remaining(); }
 
     struct JitterSummary {
         uint32_t evaluations = 0;
@@ -217,28 +217,16 @@ private:
     std::atomic<float> m_sdpMvScaleMultiplierY{1.0f};
     std::atomic<uint64_t> m_evalCount{0};
 
-    ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
-                                 const MvSelfCheckRequest* request = nullptr,
-                                 std::vector<MvSelfCheckReport>* reports = nullptr,
-                                 const MvCorrectionRequest* correction = nullptr);
-    void DisableMvFix(const std::string& reason);
-
     std::atomic<bool> m_depthModelInfinite{true};
     std::atomic<float> m_nearClipOverride{0.0f};
     NearEstimator m_nearEstimator;
-    std::atomic<uint32_t> m_nearCrossEyeEvals{0}; // cross-eye evaluations seen, to pick every Nth
+    std::atomic<uint32_t> m_nearCrossEyeEvals{0};
     std::atomic<float> m_nearLastLogged{0.0f};
     std::atomic<int64_t> m_nearLastLogMs{INT64_MIN};
     void ForgetNearEstimate();
     void OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear, uint32_t eye,
                         double gatedFraction);
-    std::atomic<bool> m_diagProjectionLogged{false};
-    std::atomic<bool> m_mvFixEnabled{kDefaultMvFixEnabled};
-    std::atomic<bool> m_mvFixDisabled{false};
-    mutable std::mutex m_mvFixMutex;
-    std::string m_mvFixDisableReason;
-    MotionVectorPassFactory m_mvPassFactory;
-    std::unique_ptr<IMotionVectorPass> m_mvPass;
+    UpscalerMvPassRunner m_mvRunner{"NgxInterceptor", "DLSS"};
 
     std::atomic<int> m_lastRenderingMode{-1};
     std::atomic<bool> m_internalDiscontinuityPendingLeft{false};
@@ -246,23 +234,10 @@ private:
 
     std::atomic<uint32_t> m_nextVirtualId{1000};
 
-    struct DiagSample {
-        float jitterX = 0.0f;
-        float jitterY = 0.0f;
-        bool reset = false;
-    };
     void RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex, const NVSDK_NGX_Parameter* params,
                            bool reset, bool isDualPass, const ResolvedCameras* resolvedCameras = nullptr);
-    void LogDiagSummary();
-    static JitterSummary Summarize(const std::vector<DiagSample>& samples);
 
-    std::atomic<uint32_t> m_diagRemaining{0};
-    std::atomic<bool> m_diagRawRangeLogged{false};
-    mutable std::mutex m_diagMutex;
-    std::vector<DiagSample> m_diagSamples[2];
-    int m_diagLastContext = -1;
-    uint32_t m_diagContextRun = 0;
-    uint32_t m_diagLongestContextRun = 0;
+    UpscalerDiagnostics m_diag{"NgxInterceptor", "evaluations", "Evals"};
 
     std::unordered_map<NVSDK_NGX_Handle*, std::shared_ptr<VirtualNgxHandle>> m_virtualHandles;
     std::unordered_map<NVSDK_NGX_Parameter*, std::unique_ptr<NgxParameterImpl>> m_trackedParameters;
