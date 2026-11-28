@@ -2,6 +2,9 @@
 #include "core/camera_records.h"
 #include "ngx/mv_pass.h"
 #include "ngx/mv_reprojection.h"
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 #include <cmath>
 #include <vector>
 
@@ -1165,4 +1168,359 @@ TEST(RobustNearTest, TheMvProjectionLineNamesTheStaticGateOnlyWhenItIsOn) {
     d.staticGate = true;
     const std::string line = FormatMvProjectionLine("NgxInterceptor", "Eval", 0, 1, d);
     EXPECT_NE(line.find("staticGate=on(2 px or 20%"), std::string::npos) << line;
+}
+
+namespace {
+
+using Microsoft::WRL::ComPtr;
+
+class SpyGraphicsCommandList final : public ID3D12GraphicsCommandList {
+public:
+    explicit SpyGraphicsCommandList(ID3D12GraphicsCommandList* inner) : m_inner(inner) {}
+
+    uint32_t dispatchCount = 0;
+    std::vector<ID3D12Resource*> copyDestinations;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        return m_inner->QueryInterface(riid, ppvObject);
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refCount; }
+    ULONG STDMETHODCALLTYPE Release() override { return --m_refCount; }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT* pDataSize, void* pData) override {
+        return m_inner->GetPrivateData(guid, pDataSize, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT DataSize, const void* pData) override {
+        return m_inner->SetPrivateData(guid, DataSize, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown* pData) override {
+        return m_inner->SetPrivateDataInterface(guid, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetName(LPCWSTR Name) override { return m_inner->SetName(Name); }
+    HRESULT STDMETHODCALLTYPE GetDevice(REFIID riid, void** ppvDevice) override {
+        return m_inner->GetDevice(riid, ppvDevice);
+    }
+    D3D12_COMMAND_LIST_TYPE STDMETHODCALLTYPE GetType() override { return m_inner->GetType(); }
+    HRESULT STDMETHODCALLTYPE Close() override { return m_inner->Close(); }
+    HRESULT STDMETHODCALLTYPE Reset(ID3D12CommandAllocator* pAllocator, ID3D12PipelineState* pInitialState) override {
+        return m_inner->Reset(pAllocator, pInitialState);
+    }
+    void STDMETHODCALLTYPE ClearState(ID3D12PipelineState* pPipelineState) override { m_inner->ClearState(pPipelineState); }
+    void STDMETHODCALLTYPE DrawInstanced(UINT a, UINT b, UINT c, UINT d) override { m_inner->DrawInstanced(a, b, c, d); }
+    void STDMETHODCALLTYPE DrawIndexedInstanced(UINT a, UINT b, UINT c, INT d, UINT e) override {
+        m_inner->DrawIndexedInstanced(a, b, c, d, e);
+    }
+    void STDMETHODCALLTYPE Dispatch(UINT x, UINT y, UINT z) override {
+        ++dispatchCount;
+        m_inner->Dispatch(x, y, z);
+    }
+    void STDMETHODCALLTYPE CopyBufferRegion(ID3D12Resource* dst, UINT64 dstOff, ID3D12Resource* src, UINT64 srcOff, UINT64 n) override {
+        m_inner->CopyBufferRegion(dst, dstOff, src, srcOff, n);
+    }
+    void STDMETHODCALLTYPE CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION* dst, UINT x, UINT y, UINT z,
+                                             const D3D12_TEXTURE_COPY_LOCATION* src, const D3D12_BOX* box) override {
+        m_inner->CopyTextureRegion(dst, x, y, z, src, box);
+    }
+    void STDMETHODCALLTYPE CopyResource(ID3D12Resource* pDstResource, ID3D12Resource* pSrcResource) override {
+        copyDestinations.push_back(pDstResource);
+        m_inner->CopyResource(pDstResource, pSrcResource);
+    }
+    void STDMETHODCALLTYPE CopyTiles(ID3D12Resource* a, const D3D12_TILED_RESOURCE_COORDINATE* b,
+                                     const D3D12_TILE_REGION_SIZE* c, ID3D12Resource* d, UINT64 e,
+                                     D3D12_TILE_COPY_FLAGS f) override {
+        m_inner->CopyTiles(a, b, c, d, e, f);
+    }
+    void STDMETHODCALLTYPE ResolveSubresource(ID3D12Resource* a, UINT b, ID3D12Resource* c, UINT d, DXGI_FORMAT e) override {
+        m_inner->ResolveSubresource(a, b, c, d, e);
+    }
+    void STDMETHODCALLTYPE IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY t) override { m_inner->IASetPrimitiveTopology(t); }
+    void STDMETHODCALLTYPE RSSetViewports(UINT n, const D3D12_VIEWPORT* v) override { m_inner->RSSetViewports(n, v); }
+    void STDMETHODCALLTYPE RSSetScissorRects(UINT n, const D3D12_RECT* r) override { m_inner->RSSetScissorRects(n, r); }
+    void STDMETHODCALLTYPE OMSetBlendFactor(const FLOAT f[4]) override { m_inner->OMSetBlendFactor(f); }
+    void STDMETHODCALLTYPE OMSetStencilRef(UINT ref) override { m_inner->OMSetStencilRef(ref); }
+    void STDMETHODCALLTYPE SetPipelineState(ID3D12PipelineState* pso) override { m_inner->SetPipelineState(pso); }
+    void STDMETHODCALLTYPE ResourceBarrier(UINT n, const D3D12_RESOURCE_BARRIER* b) override { m_inner->ResourceBarrier(n, b); }
+    void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList* b) override { m_inner->ExecuteBundle(b); }
+    void STDMETHODCALLTYPE SetDescriptorHeaps(UINT n, ID3D12DescriptorHeap* const* h) override { m_inner->SetDescriptorHeaps(n, h); }
+    void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12RootSignature* rs) override { m_inner->SetComputeRootSignature(rs); }
+    void STDMETHODCALLTYPE SetGraphicsRootSignature(ID3D12RootSignature* rs) override { m_inner->SetGraphicsRootSignature(rs); }
+    void STDMETHODCALLTYPE SetComputeRootDescriptorTable(UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) override {
+        m_inner->SetComputeRootDescriptorTable(i, h);
+    }
+    void STDMETHODCALLTYPE SetGraphicsRootDescriptorTable(UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) override {
+        m_inner->SetGraphicsRootDescriptorTable(i, h);
+    }
+    void STDMETHODCALLTYPE SetComputeRoot32BitConstant(UINT i, UINT v, UINT o) override {
+        m_inner->SetComputeRoot32BitConstant(i, v, o);
+    }
+    void STDMETHODCALLTYPE SetGraphicsRoot32BitConstant(UINT i, UINT v, UINT o) override {
+        m_inner->SetGraphicsRoot32BitConstant(i, v, o);
+    }
+    void STDMETHODCALLTYPE SetComputeRoot32BitConstants(UINT i, UINT n, const void* d, UINT o) override {
+        m_inner->SetComputeRoot32BitConstants(i, n, d, o);
+    }
+    void STDMETHODCALLTYPE SetGraphicsRoot32BitConstants(UINT i, UINT n, const void* d, UINT o) override {
+        m_inner->SetGraphicsRoot32BitConstants(i, n, d, o);
+    }
+    void STDMETHODCALLTYPE SetComputeRootConstantBufferView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override {
+        m_inner->SetComputeRootConstantBufferView(i, a);
+    }
+    void STDMETHODCALLTYPE SetGraphicsRootConstantBufferView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override {
+        m_inner->SetGraphicsRootConstantBufferView(i, a);
+    }
+    void STDMETHODCALLTYPE SetComputeRootShaderResourceView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override {
+        m_inner->SetComputeRootShaderResourceView(i, a);
+    }
+    void STDMETHODCALLTYPE SetGraphicsRootShaderResourceView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override {
+        m_inner->SetGraphicsRootShaderResourceView(i, a);
+    }
+    void STDMETHODCALLTYPE SetComputeRootUnorderedAccessView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override {
+        m_inner->SetComputeRootUnorderedAccessView(i, a);
+    }
+    void STDMETHODCALLTYPE SetGraphicsRootUnorderedAccessView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override {
+        m_inner->SetGraphicsRootUnorderedAccessView(i, a);
+    }
+    void STDMETHODCALLTYPE IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW* v) override { m_inner->IASetIndexBuffer(v); }
+    void STDMETHODCALLTYPE IASetVertexBuffers(UINT s, UINT n, const D3D12_VERTEX_BUFFER_VIEW* v) override {
+        m_inner->IASetVertexBuffers(s, n, v);
+    }
+    void STDMETHODCALLTYPE SOSetTargets(UINT s, UINT n, const D3D12_STREAM_OUTPUT_BUFFER_VIEW* v) override {
+        m_inner->SOSetTargets(s, n, v);
+    }
+    void STDMETHODCALLTYPE OMSetRenderTargets(UINT n, const D3D12_CPU_DESCRIPTOR_HANDLE* rt, BOOL single,
+                                              const D3D12_CPU_DESCRIPTOR_HANDLE* ds) override {
+        m_inner->OMSetRenderTargets(n, rt, single, ds);
+    }
+    void STDMETHODCALLTYPE ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE h, D3D12_CLEAR_FLAGS f, FLOAT d, UINT8 s,
+                                                 UINT n, const D3D12_RECT* r) override {
+        m_inner->ClearDepthStencilView(h, f, d, s, n, r);
+    }
+    void STDMETHODCALLTYPE ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE h, const FLOAT c[4], UINT n,
+                                                 const D3D12_RECT* r) override {
+        m_inner->ClearRenderTargetView(h, c, n, r);
+    }
+    void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE g, D3D12_CPU_DESCRIPTOR_HANDLE c,
+                                                        ID3D12Resource* r, const UINT v[4], UINT n,
+                                                        const D3D12_RECT* rects) override {
+        m_inner->ClearUnorderedAccessViewUint(g, c, r, v, n, rects);
+    }
+    void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE g, D3D12_CPU_DESCRIPTOR_HANDLE c,
+                                                         ID3D12Resource* r, const FLOAT v[4], UINT n,
+                                                         const D3D12_RECT* rects) override {
+        m_inner->ClearUnorderedAccessViewFloat(g, c, r, v, n, rects);
+    }
+    void STDMETHODCALLTYPE DiscardResource(ID3D12Resource* r, const D3D12_DISCARD_REGION* reg) override {
+        m_inner->DiscardResource(r, reg);
+    }
+    void STDMETHODCALLTYPE BeginQuery(ID3D12QueryHeap* h, D3D12_QUERY_TYPE t, UINT i) override {
+        m_inner->BeginQuery(h, t, i);
+    }
+    void STDMETHODCALLTYPE EndQuery(ID3D12QueryHeap* h, D3D12_QUERY_TYPE t, UINT i) override {
+        m_inner->EndQuery(h, t, i);
+    }
+    void STDMETHODCALLTYPE ResolveQueryData(ID3D12QueryHeap* h, D3D12_QUERY_TYPE t, UINT s, UINT n, ID3D12Resource* dst,
+                                            UINT64 off) override {
+        m_inner->ResolveQueryData(h, t, s, n, dst, off);
+    }
+    void STDMETHODCALLTYPE SetPredication(ID3D12Resource* b, UINT64 off, D3D12_PREDICATION_OP op) override {
+        m_inner->SetPredication(b, off, op);
+    }
+    void STDMETHODCALLTYPE SetMarker(UINT m, const void* d, UINT s) override { m_inner->SetMarker(m, d, s); }
+    void STDMETHODCALLTYPE BeginEvent(UINT m, const void* d, UINT s) override { m_inner->BeginEvent(m, d, s); }
+    void STDMETHODCALLTYPE EndEvent() override { m_inner->EndEvent(); }
+    void STDMETHODCALLTYPE ExecuteIndirect(ID3D12CommandSignature* cs, UINT m, ID3D12Resource* a, UINT64 ao,
+                                           ID3D12Resource* c, UINT64 co) override {
+        m_inner->ExecuteIndirect(cs, m, a, ao, c, co);
+    }
+
+private:
+    ID3D12GraphicsCommandList* m_inner;
+    ULONG m_refCount = 1;
+};
+
+struct WarpMvPassContext {
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandQueue> queue;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> cmdList;
+
+    bool Init() {
+        ComPtr<IDXGIFactory4> factory;
+        ComPtr<IDXGIAdapter> warp;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+            FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
+            FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+            return false;
+        }
+        D3D12_COMMAND_QUEUE_DESC qd{};
+        qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue)))) return false;
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)))) return false;
+        if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr,
+                                             IID_PPV_ARGS(&cmdList)))) {
+            return false;
+        }
+        return true;
+    }
+
+    ComPtr<ID3D12Resource> CreateTex2D(UINT width, UINT height, DXGI_FORMAT format, UINT16 arraySize = 1) {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = arraySize;
+        desc.MipLevels = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        ComPtr<ID3D12Resource> res;
+        device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                        nullptr, IID_PPV_ARGS(&res));
+        return res;
+    }
+
+    void ExecuteAndWait() {
+        ASSERT_TRUE(SUCCEEDED(cmdList->Close()));
+        ID3D12CommandList* lists[] = {cmdList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        ComPtr<ID3D12Fence> fence;
+        ASSERT_TRUE(SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+        HANDLE evt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        ASSERT_NE(evt, nullptr);
+        ASSERT_TRUE(SUCCEEDED(queue->Signal(fence.Get(), 1)));
+        ASSERT_TRUE(SUCCEEDED(fence->SetEventOnCompletion(1, evt)));
+        EXPECT_EQ(WaitForSingleObject(evt, 10000), WAIT_OBJECT_0);
+        CloseHandle(evt);
+        ASSERT_TRUE(SUCCEEDED(allocator->Reset()));
+        ASSERT_TRUE(SUCCEEDED(cmdList->Reset(allocator.Get(), nullptr)));
+    }
+};
+
+MvSelfCheckRequest MakeSelfCheckRequest(uint64_t evalIndex) {
+    MvSelfCheckRequest req;
+    req.eye = 0;
+    req.evalIndex = evalIndex;
+    req.mvScaleX = 1.0f;
+    req.mvScaleY = 1.0f;
+    req.current = TestProjection();
+    req.previous = TestProjection();
+    req.toPrevious = Identity();
+    return req;
+}
+
+}
+
+TEST(D3D12MotionVectorPassTest, RejectsMismatchedDimensionsAndTextureArrays) {
+    WarpMvPassContext gpu;
+    ASSERT_TRUE(gpu.Init());
+
+    auto pass = CreateD3D12MotionVectorPass();
+    auto mv = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R16G16_FLOAT);
+    auto depthSame = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R32_FLOAT);
+    auto depthMismatch = gpu.CreateTex2D(32, 64, DXGI_FORMAT_R32_FLOAT);
+    auto mvArray = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R16G16_FLOAT, 2);
+    auto depthArray = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R32_FLOAT, 2);
+    ASSERT_TRUE(mv && depthSame && depthMismatch && mvArray && depthArray);
+
+    MvPassInputs mismatchInputs;
+    mismatchInputs.cmdList = gpu.cmdList.Get();
+    mismatchInputs.depth = depthMismatch.Get();
+    mismatchInputs.motionVectors = mv.Get();
+    MvPassResult mismatchRes = pass->Record(mismatchInputs);
+    EXPECT_FALSE(mismatchRes.ok);
+    EXPECT_FALSE(mismatchRes.failureReason.empty());
+
+    MvPassInputs mvArrayInputs;
+    mvArrayInputs.cmdList = gpu.cmdList.Get();
+    mvArrayInputs.depth = depthSame.Get();
+    mvArrayInputs.motionVectors = mvArray.Get();
+    MvPassResult mvArrayRes = pass->Record(mvArrayInputs);
+    EXPECT_FALSE(mvArrayRes.ok);
+    EXPECT_FALSE(mvArrayRes.failureReason.empty());
+
+    MvPassInputs depthArrayInputs;
+    depthArrayInputs.cmdList = gpu.cmdList.Get();
+    depthArrayInputs.depth = depthArray.Get();
+    depthArrayInputs.motionVectors = mv.Get();
+    MvPassResult depthArrayRes = pass->Record(depthArrayInputs);
+    EXPECT_FALSE(depthArrayRes.ok);
+    EXPECT_FALSE(depthArrayRes.failureReason.empty());
+}
+
+TEST(D3D12MotionVectorPassTest, SkipsComputeDispatchWhenNeitherCorrectionNorSelfCheckIsRequested) {
+    WarpMvPassContext gpu;
+    ASSERT_TRUE(gpu.Init());
+
+    auto pass = CreateD3D12MotionVectorPass();
+    auto mv = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R16G16_FLOAT);
+    auto depth = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R32_FLOAT);
+    ASSERT_TRUE(mv && depth);
+
+    SpyGraphicsCommandList spy(gpu.cmdList.Get());
+    MvPassInputs inputs;
+    inputs.cmdList = &spy;
+    inputs.depth = depth.Get();
+    inputs.motionVectors = mv.Get();
+    MvPassResult res = pass->Record(inputs);
+    EXPECT_TRUE(res.ok) << res.failureReason;
+    EXPECT_EQ(res.output, mv.Get());
+    EXPECT_EQ(spy.dispatchCount, 0u);
+    EXPECT_TRUE(spy.copyDestinations.empty());
+}
+
+TEST(D3D12MotionVectorPassTest, RecordSelfCheckGuardsActiveReadbackSlotsAgainstOverwrite) {
+    WarpMvPassContext gpu;
+    ASSERT_TRUE(gpu.Init());
+
+    auto pass = CreateD3D12MotionVectorPass();
+    auto mv = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R16G16_FLOAT);
+    auto depth = gpu.CreateTex2D(64, 64, DXGI_FORMAT_R32_FLOAT);
+    ASSERT_TRUE(mv && depth);
+
+    SpyGraphicsCommandList spy(gpu.cmdList.Get());
+    for (uint64_t i = 0; i < 8; ++i) {
+        MvSelfCheckRequest req = MakeSelfCheckRequest(i);
+        MvPassInputs inputs;
+        inputs.cmdList = &spy;
+        inputs.depth = depth.Get();
+        inputs.motionVectors = mv.Get();
+        inputs.selfCheck = &req;
+        MvPassResult res = pass->Record(inputs);
+        ASSERT_TRUE(res.ok) << res.failureReason;
+    }
+    ASSERT_EQ(spy.copyDestinations.size(), 8u);
+
+    MvSelfCheckRequest ninthReq = MakeSelfCheckRequest(99);
+    MvPassInputs ninthInputs;
+    ninthInputs.cmdList = &spy;
+    ninthInputs.depth = depth.Get();
+    ninthInputs.motionVectors = mv.Get();
+    ninthInputs.selfCheck = &ninthReq;
+    MvPassResult ninthRes = pass->Record(ninthInputs);
+    EXPECT_TRUE(ninthRes.ok) << ninthRes.failureReason;
+    EXPECT_EQ(spy.copyDestinations.size(), 8u);
+
+    gpu.ExecuteAndWait();
+
+    std::vector<MvSelfCheckReport> collected;
+    for (int poll = 0; poll < 10; ++poll) {
+        auto batch = pass->PollSelfCheck();
+        collected.insert(collected.end(), batch.begin(), batch.end());
+    }
+    ASSERT_EQ(collected.size(), 8u);
+    for (size_t i = 0; i < collected.size(); ++i) {
+        EXPECT_EQ(collected[i].evalIndex, i);
+    }
+
+    MvSelfCheckRequest afterDrainReq = MakeSelfCheckRequest(100);
+    MvPassInputs afterDrainInputs;
+    afterDrainInputs.cmdList = &spy;
+    afterDrainInputs.depth = depth.Get();
+    afterDrainInputs.motionVectors = mv.Get();
+    afterDrainInputs.selfCheck = &afterDrainReq;
+    MvPassResult afterDrainRes = pass->Record(afterDrainInputs);
+    ASSERT_TRUE(afterDrainRes.ok) << afterDrainRes.failureReason;
+    EXPECT_EQ(spy.copyDestinations.size(), 9u);
 }

@@ -5,16 +5,142 @@
 #include "proxy/dxgi_proxy.h"
 #include "openxr/openxr_manager.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
-#include <cwctype>
-#include <cmath>
 #include <algorithm>
-#include <sstream>
-#include <iomanip>
 #include <chrono>
+#include <cmath>
+#include <cwctype>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 namespace fs25vr {
 
 namespace {
+struct TrackedNgxParamRegistry {
+    std::mutex mutex;
+    std::unordered_map<const NVSDK_NGX_Parameter*, const NgxParameterImpl*> instances;
+};
+
+TrackedNgxParamRegistry& NgxParamRegistry() {
+    static auto* registry = new TrackedNgxParamRegistry();
+    return *registry;
+}
+
+enum class KnownNgxKeyType {
+    Float,
+    Int,
+    Uint,
+    D3D12Resource
+};
+
+struct KnownNgxKey {
+    const char* name;
+    KnownNgxKeyType type;
+};
+
+constexpr KnownNgxKey kKnownNgxKeys[] = {
+    {NVSDK_NGX_Parameter_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_OutWidth, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_OutHeight, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_PerfQualityValue, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_RTXValue, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_Reset, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_CreationNodeMask, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_VisibilityNodeMask, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_Color, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Output, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Depth, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_MotionVectors, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Jitter_Offset_X, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_Jitter_Offset_Y, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Scale_X, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Scale_Y, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Offset_X, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Offset_Y, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_Sharpness, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_InWidth, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_InHeight, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_ExposureTexture, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_PreExposure, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Exposure_Texture, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_DLSS_Pre_Exposure, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Exposure, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_TonemapperType, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_Resource_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_Resource_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, KnownNgxKeyType::Uint}
+};
+
+bool IsDataOrImageResourceLoad(DWORD dwFlags, HMODULE hMod) {
+    constexpr DWORD kDataFlags =
+        LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+    if ((dwFlags & kDataFlags) != 0) return true;
+    return (reinterpret_cast<uintptr_t>(hMod) & static_cast<uintptr_t>(3)) != 0;
+}
+
+struct SavedPresetKey {
+    const char* name = nullptr;
+    bool wrote = false;
+    bool hadPrev = false;
+    int prevVal = 0;
+};
+
+struct SavedPresetOverrides {
+    SavedPresetKey keys[7] = {
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance},
+        {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality}
+    };
+
+    void Apply(NVSDK_NGX_Parameter* params, int presetOverride, bool preserveExplicitBase) {
+        if (presetOverride <= 0 || !params) return;
+        for (size_t i = 0; i < std::size(keys); ++i) {
+            auto& entry = keys[i];
+            int prev = 0;
+            if (NVSDK_NGX_SUCCEED(params->Get(entry.name, &prev))) {
+                entry.hadPrev = true;
+                entry.prevVal = prev;
+                if (i == 0 && preserveExplicitBase && prev > 0) {
+                    continue;
+                }
+            }
+            params->Set(entry.name, presetOverride);
+            entry.wrote = true;
+        }
+    }
+
+    void Restore(NVSDK_NGX_Parameter* params) const {
+        if (!params) return;
+        for (const auto& entry : keys) {
+            if (entry.wrote) {
+                params->Set(entry.name, entry.hadPrev ? entry.prevVal : 0);
+            }
+        }
+    }
+};
+
 std::atomic<NgxInterceptor*> s_featureHost{nullptr};
 std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
 
@@ -38,10 +164,95 @@ std::string DescribeDlssCreateFlags(int flags) {
     }
     return names.empty() ? "none" : names;
 }
+}
 
-constexpr float kJitterMatchTolerance = 1e-4f;
-// Distinct offsets listed per context in the summary; the count covers all of them.
-constexpr size_t kMaxListedJitterOffsets = 16;
+NgxParameterImpl::NgxParameterImpl() {
+    auto& registry = NgxParamRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.instances[static_cast<const NVSDK_NGX_Parameter*>(this)] = this;
+}
+
+NgxParameterImpl::~NgxParameterImpl() {
+    auto& registry = NgxParamRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.instances.erase(static_cast<const NVSDK_NGX_Parameter*>(this));
+}
+
+void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
+    if (!source || source == this) return;
+
+    {
+        auto& registry = NgxParamRegistry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        auto it = registry.instances.find(source);
+        if (it != registry.instances.end() && it->second) {
+            m_params = it->second->m_params;
+            return;
+        }
+    }
+
+    m_params.clear();
+    for (const auto& key : kKnownNgxKeys) {
+        switch (key.type) {
+            case KnownNgxKeyType::Float: {
+                float fVal = 0.0f;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &fVal))) {
+                    Set(key.name, fVal);
+                    break;
+                }
+                double dVal = 0.0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &dVal))) {
+                    Set(key.name, dVal);
+                }
+                break;
+            }
+            case KnownNgxKeyType::Int: {
+                int iVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &iVal))) {
+                    Set(key.name, iVal);
+                    break;
+                }
+                unsigned int uVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &uVal))) {
+                    Set(key.name, uVal);
+                }
+                break;
+            }
+            case KnownNgxKeyType::Uint: {
+                unsigned long long ullVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &ullVal))) {
+                    if (ullVal > (std::numeric_limits<unsigned int>::max)()) {
+                        Set(key.name, ullVal);
+                    } else {
+                        Set(key.name, static_cast<unsigned int>(ullVal));
+                    }
+                    break;
+                }
+                unsigned int uVal = 0;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &uVal))) {
+                    Set(key.name, uVal);
+                }
+                break;
+            }
+            case KnownNgxKeyType::D3D12Resource: {
+                ID3D12Resource* res12 = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res12))) {
+                    Set(key.name, res12);
+                    break;
+                }
+                ID3D11Resource* res11 = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res11))) {
+                    Set(key.name, res11);
+                    break;
+                }
+                void* pVal = nullptr;
+                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
+                    Set(key.name, pVal);
+                }
+                break;
+            }
+        }
+    }
 }
 
 NgxInterceptor* NgxInterceptor::FeatureHost() {
@@ -52,13 +263,11 @@ NgxInterceptor* NgxInterceptor::LoadHookHost() {
     return s_loadHookHost.load();
 }
 
-NgxInterceptor::NgxInterceptor() {
-    m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
-}
+NgxInterceptor::NgxInterceptor() = default;
 
 NgxInterceptor::~NgxInterceptor() {
     if (IsProcessTerminating()) {
-        (void)m_mvPass.release();
+        m_mvRunner.ReleaseForProcessTermination();
         return;
     }
     DetachAll();
@@ -67,15 +276,9 @@ NgxInterceptor::~NgxInterceptor() {
 bool NgxInterceptor::MatchesNgxName(LPCWSTR lpLibFileName) {
     if (!lpLibFileName) return false;
     std::wstring s(lpLibFileName);
-    for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
-
-    if (s.find(L"dlss") != std::wstring::npos ||
-        s.find(L"update") != std::wstring::npos) {
-        return false;
-    }
-
     auto pos = s.find_last_of(L"\\/");
     std::wstring filename = (pos == std::wstring::npos) ? s : s.substr(pos + 1);
+    for (auto& c : filename) c = static_cast<wchar_t>(towlower(static_cast<wint_t>(c)));
 
     return filename == L"nvngx.dll" || filename == L"_nvngx.dll" ||
            filename == L"nvngx" || filename == L"_nvngx";
@@ -84,15 +287,9 @@ bool NgxInterceptor::MatchesNgxName(LPCWSTR lpLibFileName) {
 bool NgxInterceptor::MatchesNgxName(LPCSTR lpLibFileName) {
     if (!lpLibFileName) return false;
     std::string s(lpLibFileName);
-    for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-
-    if (s.find("dlss") != std::string::npos ||
-        s.find("update") != std::string::npos) {
-        return false;
-    }
-
     auto pos = s.find_last_of("\\/");
     std::string filename = (pos == std::string::npos) ? s : s.substr(pos + 1);
+    for (auto& c : filename) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
     return filename == "nvngx.dll" || filename == "_nvngx.dll" ||
            filename == "nvngx" || filename == "_nvngx";
@@ -157,14 +354,17 @@ bool NgxInterceptor::AttachDirectInternal(
         !m_detourEvaluateFeature.Install(reinterpret_cast<void*>(pfnEvaluate), reinterpret_cast<void*>(&NgxInterceptor::Intercept_EvaluateFeature))) {
         LogError("NgxInterceptor: Failed to install EvaluateFeature detour.");
     }
-    if (pfnAlloc) {
-        m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters));
+    if (pfnAlloc &&
+        !m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters))) {
+        LogError("NgxInterceptor: Failed to install AllocateParameters detour.");
     }
-    if (pfnDestroy) {
-        m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters));
+    if (pfnDestroy &&
+        !m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters))) {
+        LogError("NgxInterceptor: Failed to install DestroyParameters detour.");
     }
-    if (pfnGetCaps) {
-        m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters));
+    if (pfnGetCaps &&
+        !m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters))) {
+        LogError("NgxInterceptor: Failed to install GetCapabilityParameters detour.");
     }
 
     m_isAttached = true;
@@ -235,9 +435,9 @@ void NgxInterceptor::GetTargetUpscalingDimensions(uint32_t& outWidth, uint32_t& 
 }
 
 bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
-    if (!hNgxModule) return false;
-
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (!hNgxModule || (reinterpret_cast<uintptr_t>(hNgxModule) & static_cast<uintptr_t>(3)) != 0) {
+        return false;
+    }
 
     char modPath[MAX_PATH] = {0};
     GetModuleFileNameA(hNgxModule, modPath, MAX_PATH);
@@ -259,7 +459,12 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
     if (!pfnAlloc || !pfnDestroy || !pfnGetCaps) {
         HMODULE hNvngx = GetModuleHandleW(L"nvngx.dll");
         if (!hNvngx) {
-            hNvngx = LoadLibraryW(L"nvngx.dll");
+            decltype(&LoadLibraryW) origLoadW = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                origLoadW = Original<decltype(&LoadLibraryW)>(m_detourLoadLibraryW);
+            }
+            hNvngx = origLoadW ? origLoadW(L"nvngx.dll") : LoadLibraryW(L"nvngx.dll");
         }
         if (hNvngx) {
             if (!pfnAlloc) {
@@ -276,6 +481,8 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
             }
         }
     }
+
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
     if (m_isAttached) {
         if (pfnAlloc && !m_detourAllocateParameters.IsInstalled()) {
@@ -360,23 +567,32 @@ bool NgxInterceptor::InstallModuleLoadHooks() {
     void* pfnLoadLibraryA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryA"));
     void* pfnLoadLibraryExA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryExA"));
 
+    if (!pfnLoadLibraryW || !pfnLoadLibraryExW || !pfnLoadLibraryA || !pfnLoadLibraryExA) {
+        LogError("NgxInterceptor: Failed to resolve kernel32 LoadLibrary entry points.");
+        return false;
+    }
+
     NgxInterceptor* noHost = nullptr;
     if (!s_loadHookHost.compare_exchange_strong(noHost, this)) {
         LogError("NgxInterceptor: Another interceptor already owns the module load detours.");
         return false;
     }
 
-    if (pfnLoadLibraryW) {
-        m_detourLoadLibraryW.Install(pfnLoadLibraryW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryW));
-    }
-    if (pfnLoadLibraryExW) {
-        m_detourLoadLibraryExW.Install(pfnLoadLibraryExW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExW));
-    }
-    if (pfnLoadLibraryA) {
-        m_detourLoadLibraryA.Install(pfnLoadLibraryA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryA));
-    }
-    if (pfnLoadLibraryExA) {
+    bool ok =
+        m_detourLoadLibraryW.Install(pfnLoadLibraryW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryW)) &&
+        m_detourLoadLibraryExW.Install(pfnLoadLibraryExW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExW)) &&
+        m_detourLoadLibraryA.Install(pfnLoadLibraryA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryA)) &&
         m_detourLoadLibraryExA.Install(pfnLoadLibraryExA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExA));
+
+    if (!ok) {
+        LogError("NgxInterceptor: Failed to install one or more module load detours.");
+        if (m_detourLoadLibraryExA.IsInstalled()) m_detourLoadLibraryExA.Uninstall();
+        if (m_detourLoadLibraryA.IsInstalled()) m_detourLoadLibraryA.Uninstall();
+        if (m_detourLoadLibraryExW.IsInstalled()) m_detourLoadLibraryExW.Uninstall();
+        if (m_detourLoadLibraryW.IsInstalled()) m_detourLoadLibraryW.Uninstall();
+        NgxInterceptor* expectedLoadHost = this;
+        s_loadHookHost.compare_exchange_strong(expectedLoadHost, nullptr);
+        return false;
     }
 
     m_moduleHooksInstalled = true;
@@ -430,25 +646,18 @@ void NgxInterceptor::DetachAll() {
     m_vrBridge = nullptr;
     m_dxgiProxy = nullptr;
     m_openXrManager = nullptr;
-    m_dlssPresetOverride = kDefaultDlssPresetOverride;
-    m_sharpnessOverride = kDefaultSharpnessOverride;
-    m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
-    m_mvScaleMultiplierX = kDefaultAfrMvScale;
-    m_mvScaleMultiplierY = kDefaultAfrMvScale;
-    m_sdpMvScaleMultiplierX = 1.0f;
-    m_sdpMvScaleMultiplierY = 1.0f;
+    m_dlssPresetOverride.store(kDefaultDlssPresetOverride);
+    m_sharpnessOverride.store(kDefaultSharpnessOverride);
+    m_forceSharpnessOverride.store(kDefaultForceSharpnessOverride);
+    m_mvScaleMultiplierX.store(kDefaultAfrMvScale);
+    m_mvScaleMultiplierY.store(kDefaultAfrMvScale);
+    m_sdpMvScaleMultiplierX.store(1.0f);
+    m_sdpMvScaleMultiplierY.store(1.0f);
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
-    m_diagRemaining.store(0);
-    {
-        std::lock_guard<std::mutex> mvLock(m_mvFixMutex);
-        m_mvPass.reset();
-        m_mvFixDisableReason.clear();
-        m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
-    }
-    m_mvFixEnabled.store(kDefaultMvFixEnabled);
-    m_mvFixDisabled.store(false);
+    m_diag.Disarm();
+    m_mvRunner.Reset();
     m_depthModelInfinite.store(true);
     m_nearClipOverride.store(0.0f);
     ForgetNearEstimate();
@@ -491,78 +700,25 @@ void NgxInterceptor::SetNearClipOverride(float meters) {
 
 void NgxInterceptor::SetDepthModelInfinite(bool infinite) {
     if (m_depthModelInfinite.exchange(infinite) != infinite) {
+        ForgetNearEstimate();
         LogInfo(std::string("NgxInterceptor: Depth model (vrDlssDepthModel) ") + (infinite ? "infinite" : "finite"));
     }
 }
 
 bool NgxInterceptor::SetMvFixEnabled(bool enabled) {
-    if (enabled && m_mvFixDisabled.load()) {
-        LogWarn("NgxInterceptor: vrDlssMvFix on ignored; the pass is disabled for this session (" + GetMvFixDisableReason() + ")");
-        return false;
-    }
-    bool previous = m_mvFixEnabled.exchange(enabled);
-    if (previous != enabled) {
-        LogInfo(std::string("NgxInterceptor: Motion vector pass (vrDlssMvFix) ") + (enabled ? "on" : "off"));
-    }
-    return enabled;
+    return m_mvRunner.SetEnabled(enabled);
 }
 
 std::string NgxInterceptor::GetMvFixDisableReason() const {
-    std::lock_guard<std::mutex> lock(m_mvFixMutex);
-    return m_mvFixDisableReason;
+    return m_mvRunner.GetDisableReason();
 }
 
 void NgxInterceptor::SetMotionVectorPassFactory(MotionVectorPassFactory factory) {
-    std::lock_guard<std::mutex> lock(m_mvFixMutex);
-    m_mvPass.reset();
-    m_mvPassFactory = std::move(factory);
+    m_mvRunner.SetFactory(std::move(factory));
 }
 
 const char* NgxInterceptor::DescribeMvFixState() const {
-    if (m_mvFixDisabled.load()) return "failed";
-    return m_mvFixEnabled.load() ? "on" : "off";
-}
-
-void NgxInterceptor::DisableMvFix(const std::string& reason) {
-    {
-        std::lock_guard<std::mutex> lock(m_mvFixMutex);
-        if (m_mvFixDisabled.load()) return;
-        m_mvFixDisableReason = reason;
-    }
-    m_mvFixDisabled.store(true);
-    m_mvFixEnabled.store(false);
-    LogError("NgxInterceptor: Motion vector pass disabled for this session: " + reason +
-             ". DLSS continues on the engine's motion vectors.");
-}
-
-ID3D12Resource* NgxInterceptor::RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
-                                             const MvSelfCheckRequest* request,
-                                             std::vector<MvSelfCheckReport>* reports,
-                                             const MvCorrectionRequest* correction) {
-    std::unique_lock<std::mutex> lock(m_mvFixMutex);
-    if (m_mvFixDisabled.load()) return nullptr;
-    if (!m_mvPass) {
-        if (m_mvPassFactory) m_mvPass = m_mvPassFactory(cmdList);
-        if (!m_mvPass) {
-            lock.unlock();
-            DisableMvFix("the motion vector pass could not be created");
-            return nullptr;
-        }
-    }
-    MvPassInputs inputs;
-    inputs.cmdList = cmdList;
-    inputs.depth = depth;
-    inputs.motionVectors = mv;
-    inputs.selfCheck = request;
-    inputs.correction = correction;
-    MvPassResult result = m_mvPass->Record(inputs);
-    if (!result.ok || !result.output) {
-        lock.unlock();
-        DisableMvFix(result.failureReason.empty() ? std::string("the pass reported a failure") : result.failureReason);
-        return nullptr;
-    }
-    if (reports) *reports = m_mvPass->PollSelfCheck();
-    return result.output;
+    return m_mvRunner.DescribeState();
 }
 
 void NgxInterceptor::DetachLiveHooks() {
@@ -592,55 +748,19 @@ uint32_t NgxInterceptor::GetActiveDualPassEyeIndex() const {
 }
 
 void NgxInterceptor::ArmDiagnostics(uint32_t evaluations) {
-    evaluations = (std::min)(evaluations, kMaxDiagEvaluations);
-    {
-        std::lock_guard<std::mutex> lock(m_diagMutex);
-        m_diagSamples[0].clear();
-        m_diagSamples[1].clear();
-        m_diagLastContext = -1;
-        m_diagContextRun = 0;
-        m_diagLongestContextRun = 0;
-    }
-    m_diagRawRangeLogged.store(false);
-    m_diagProjectionLogged.store(false);
-    m_diagRemaining.store(evaluations);
-    LogInfo("NgxInterceptor: [Diag] Armed for " + std::to_string(evaluations) + " evaluations.");
-}
-
-NgxInterceptor::JitterSummary NgxInterceptor::Summarize(const std::vector<DiagSample>& samples) {
-    JitterSummary summary;
-    std::vector<std::pair<float, float>> distinct;
-    for (const auto& s : samples) {
-        if (summary.evaluations == 0) {
-            summary.minX = summary.maxX = s.jitterX;
-            summary.minY = summary.maxY = s.jitterY;
-        }
-        summary.evaluations++;
-        if (s.reset) summary.resets++;
-        summary.minX = (std::min)(summary.minX, s.jitterX);
-        summary.maxX = (std::max)(summary.maxX, s.jitterX);
-        summary.minY = (std::min)(summary.minY, s.jitterY);
-        summary.maxY = (std::max)(summary.maxY, s.jitterY);
-        bool seen = std::any_of(distinct.begin(), distinct.end(), [&](const auto& d) {
-            return std::fabs(d.first - s.jitterX) < kJitterMatchTolerance &&
-                   std::fabs(d.second - s.jitterY) < kJitterMatchTolerance;
-        });
-        if (!seen) distinct.emplace_back(s.jitterX, s.jitterY);
-    }
-    summary.distinctOffsets = static_cast<uint32_t>(distinct.size());
-    return summary;
+    m_diag.Arm(evaluations);
 }
 
 NgxInterceptor::JitterSummary NgxInterceptor::GetDiagJitterSummary(uint32_t contextIndex) const {
-    std::lock_guard<std::mutex> lock(m_diagMutex);
-    return Summarize(m_diagSamples[contextIndex == 1 ? 1 : 0]);
+    const UpscalerJitterSummary s = m_diag.GetJitterSummary(contextIndex);
+    return {s.count, s.resets, s.distinctOffsets, s.minX, s.maxX, s.minY, s.maxY};
 }
 
 void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex,
-                                       const NVSDK_NGX_Parameter* params, bool reset, bool isDualPass) {
-    uint32_t remaining = m_diagRemaining.load();
-    while (remaining > 0 && !m_diagRemaining.compare_exchange_weak(remaining, remaining - 1)) {}
-    if (remaining == 0) return;
+                                       const NVSDK_NGX_Parameter* params, bool reset, bool isDualPass,
+                                       const ResolvedCameras* resolvedCameras) {
+    const UpscalerDiagnostics::SlotClaim claim = m_diag.TryConsumeSlot();
+    if (!claim.claimed) return;
 
     float jitX = 0.0f, jitY = 0.0f, mvX = 1.0f, mvY = 1.0f;
     unsigned int renderW = 0, renderH = 0;
@@ -662,13 +782,7 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
 
     VRBridge* bridge = GetVRBridge();
     uint32_t ctx = (contextIndex == 1) ? 1 : 0;
-    {
-        std::lock_guard<std::mutex> lock(m_diagMutex);
-        m_diagSamples[ctx].push_back({jitX, jitY, reset});
-        m_diagContextRun = (m_diagLastContext == static_cast<int>(ctx)) ? m_diagContextRun + 1 : 1;
-        m_diagLongestContextRun = (std::max)(m_diagLongestContextRun, m_diagContextRun);
-        m_diagLastContext = static_cast<int>(ctx);
-    }
+    m_diag.RecordSample(ctx, jitX, jitY, reset);
 
     std::stringstream ss;
     ss << std::fixed << std::setprecision(4)
@@ -683,43 +797,17 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
        << " Render=" << renderW << "x" << renderH
        << " Thread=" << GetCurrentThreadId();
     if (bridge) {
-        ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
+        if (resolvedCameras) {
+            ss << " " << DescribeResolvedCameras(*resolvedCameras);
+        } else {
+            ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
+        }
     }
     LogInfo(ss.str());
 
-    if (remaining == 1) {
-        LogDiagSummary();
+    if (claim.isLast) {
+        m_diag.LogSummary();
     }
-}
-
-void NgxInterceptor::LogDiagSummary() {
-    std::lock_guard<std::mutex> lock(m_diagMutex);
-    for (uint32_t ctx = 0; ctx < 2; ++ctx) {
-        const auto& samples = m_diagSamples[ctx];
-        JitterSummary summary = Summarize(samples);
-
-        std::stringstream ss;
-        ss << std::fixed << std::setprecision(4)
-           << "NgxInterceptor: [Diag] Summary Ctx=" << ctx << " Evals=" << summary.evaluations
-           << " Resets=" << summary.resets << " DistinctJitter=" << summary.distinctOffsets
-           << " JitterX=[" << summary.minX << ", " << summary.maxX << "]"
-           << " JitterY=[" << summary.minY << ", " << summary.maxY << "] Offsets:";
-        std::vector<std::pair<float, float>> listed;
-        for (const auto& s : samples) {
-            if (listed.size() >= kMaxListedJitterOffsets) break;
-            bool seen = std::any_of(listed.begin(), listed.end(), [&](const auto& d) {
-                return std::fabs(d.first - s.jitterX) < kJitterMatchTolerance &&
-                       std::fabs(d.second - s.jitterY) < kJitterMatchTolerance;
-            });
-            if (!seen) {
-                listed.emplace_back(s.jitterX, s.jitterY);
-                ss << " (" << s.jitterX << ", " << s.jitterY << ")";
-            }
-        }
-        LogInfo(ss.str());
-    }
-    LogInfo("NgxInterceptor: [Diag] Longest same-context run=" + std::to_string(m_diagLongestContextRun) +
-            " (1 means the contexts strictly alternated).");
 }
 
 void NgxInterceptor::TriggerDiscontinuityFlush() {
@@ -778,14 +866,24 @@ VirtualNgxHandle* NgxInterceptor::GetVirtualHandle(const NVSDK_NGX_Handle* handl
     return nullptr;
 }
 
-void NgxInterceptor::RegisterVirtualHandle(std::unique_ptr<VirtualNgxHandle> handle) {
+InFlightLease<VirtualNgxHandle> NgxInterceptor::AcquireVirtualHandle(const NVSDK_NGX_Handle* handle) const {
+    if (!handle) return {};
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    auto it = m_virtualHandles.find(const_cast<NVSDK_NGX_Handle*>(handle));
+    if (it != m_virtualHandles.end() && it->second) {
+        return InFlightLease<VirtualNgxHandle>(it->second);
+    }
+    return {};
+}
+
+void NgxInterceptor::RegisterVirtualHandle(std::shared_ptr<VirtualNgxHandle> handle) {
     if (!handle) return;
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     NVSDK_NGX_Handle* rawKey = static_cast<NVSDK_NGX_Handle*>(handle.get());
     m_virtualHandles[rawKey] = std::move(handle);
 }
 
-std::unique_ptr<VirtualNgxHandle> NgxInterceptor::UnregisterVirtualHandle(NVSDK_NGX_Handle* handle) {
+std::shared_ptr<VirtualNgxHandle> NgxInterceptor::UnregisterVirtualHandle(NVSDK_NGX_Handle* handle) {
     if (!handle) return nullptr;
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_virtualHandles.find(handle);
@@ -836,6 +934,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
     if (!origCreate) {
         LogError("NgxInterceptor: Original CreateFeature is null");
         return NVSDK_NGX_Result_Fail;
+    }
+
+    if (InFeatureID != NVSDK_NGX_Feature_SuperSampling) {
+        return origCreate(InCmdList, InFeatureID, InParameters, OutHandle);
     }
 
     if (!InParameters) {
@@ -891,22 +993,15 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         }
     }
 
-    int presetOverride = interceptor.GetDlssPresetOverride();
-    if (presetOverride > 0 && InParameters) {
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, presetOverride);
-        InParameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, presetOverride);
-    }
+    SavedPresetOverrides createPresetOverrides;
+    createPresetOverrides.Apply(InParameters, interceptor.GetDlssPresetOverride(), false);
 
     auto clonedParams = std::make_shared<NgxParameterImpl>();
     clonedParams->CopyFrom(InParameters);
 
     NVSDK_NGX_Handle* hLeft = nullptr;
     NVSDK_NGX_Result resLeft = origCreate(InCmdList, InFeatureID, InParameters, &hLeft);
+    createPresetOverrides.Restore(InParameters);
     if (NVSDK_NGX_FAILED(resLeft) || !hLeft) {
         std::stringstream ss;
         ss << "NgxInterceptor: Failed to create left NGX feature: " << resLeft
@@ -950,7 +1045,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
         return resRight;
     }
 
-    auto virtualHandle = std::make_unique<VirtualNgxHandle>();
+    auto virtualHandle = std::make_shared<VirtualNgxHandle>();
     virtualHandle->Id = interceptor.m_nextVirtualId.fetch_add(1);
     virtualHandle->magic = VIRTUAL_NGX_HANDLE_MAGIC;
     virtualHandle->hLeft = hLeft;
@@ -1009,12 +1104,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHa
         return NVSDK_NGX_Result_Fail;
     }
 
-    if (interceptor.IsVirtualHandle(InHandle)) {
-        auto virtualHandle = interceptor.UnregisterVirtualHandle(InHandle);
-        if (!virtualHandle) {
-            LogError("NgxInterceptor: Virtual handle not found in registry.");
-            return NVSDK_NGX_Result_FAIL_FeatureNotFound;
-        }
+    if (auto virtualHandle = interceptor.UnregisterVirtualHandle(InHandle)) {
+        virtualHandle->callGate.WaitForZero();
 
         NVSDK_NGX_Result resLeft = NVSDK_NGX_Result_Success;
         NVSDK_NGX_Result resRight = NVSDK_NGX_Result_Success;
@@ -1057,6 +1148,13 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         return NVSDK_NGX_Result_Fail;
     }
 
+    auto handleLease = interceptor.AcquireVirtualHandle(InFeatureHandle);
+    auto* vHandle = handleLease.get();
+    if (!vHandle || vHandle->magic != VIRTUAL_NGX_HANDLE_MAGIC) {
+        handleLease.Reset();
+        return origEval(InCmdList, InFeatureHandle, InParameters, InCallback);
+    }
+
     VRBridge* bridge = interceptor.GetVRBridge();
 
     int currentMode = bridge ? static_cast<int>(bridge->GetRenderingMode()) : -1;
@@ -1071,24 +1169,18 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     const NVSDK_NGX_Handle* target = nullptr;
     uint32_t contextIndex = 0;
     bool alternatesEyeContexts = false;
+    const uint32_t activeEye = bridge ? bridge->GetActiveEye() : 0;
 
-    auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
-    if (vHandle && vHandle->magic == VIRTUAL_NGX_HANDLE_MAGIC) {
-        if (bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible())) {
-            target = vHandle->hLeft;
-            contextIndex = 0;
-        } else {
-            uint32_t eyeIndex = bridge ? bridge->GetActiveEye() : 0;
-            target = (eyeIndex == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
-            contextIndex = (eyeIndex == 1 && vHandle->hRight) ? 1 : 0;
-            alternatesEyeContexts = (vHandle->hRight != nullptr);
-        }
-
-        if (!target) target = InFeatureHandle;
-    } else {
-        target = InFeatureHandle;
+    if (bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible())) {
+        target = vHandle->hLeft;
         contextIndex = 0;
+    } else {
+        target = (activeEye == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
+        contextIndex = (activeEye == 1 && vHandle->hRight) ? 1 : 0;
+        alternatesEyeContexts = (vHandle->hRight != nullptr);
     }
+
+    if (!target) target = InFeatureHandle;
 
     bool needReset = interceptor.ConsumeDiscontinuity(contextIndex);
     if (needReset) interceptor.ForgetNearEstimate();
@@ -1104,34 +1196,23 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Set(NVSDK_NGX_Parameter_Reset, 1);
     }
 
-    int prevPreset = 0;
-    bool hadPrevPreset = false;
-    int presetOverride = interceptor.GetDlssPresetOverride();
-    if (presetOverride > 0 && mutableParams) {
-        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &prevPreset)) && prevPreset > 0) {
-            hadPrevPreset = true;
-        } else {
-            mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, presetOverride);
-        }
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, presetOverride);
-        mutableParams->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, presetOverride);
-    }
+    SavedPresetOverrides evalPresetOverrides;
+    evalPresetOverrides.Apply(mutableParams, interceptor.GetDlssPresetOverride(), true);
 
     float prevSharpness = 0.0f;
     bool hadPrevSharpness = false;
+    bool wroteSharpness = false;
     float sharpnessOverride = interceptor.GetSharpnessOverride();
     if (sharpnessOverride >= 0.0f && mutableParams) {
-        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_Sharpness, &prevSharpness)) && prevSharpness > 0.0f) {
+        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_Sharpness, &prevSharpness))) {
             hadPrevSharpness = true;
-            if (interceptor.IsForceSharpnessOverride()) {
+            if (prevSharpness <= 0.0f || interceptor.IsForceSharpnessOverride()) {
                 mutableParams->Set(NVSDK_NGX_Parameter_Sharpness, sharpnessOverride);
+                wroteSharpness = true;
             }
         } else {
             mutableParams->Set(NVSDK_NGX_Parameter_Sharpness, sharpnessOverride);
+            wroteSharpness = true;
         }
     }
 
@@ -1154,7 +1235,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         scale = 1.0f;
         if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &scale))) prevScaleY = scale;
     }
-    const bool mvFixWillRun = interceptor.m_mvFixEnabled.load() && !interceptor.m_mvFixDisabled.load();
+    const bool mvFixWillRun = interceptor.m_mvRunner.IsEnabled() && !interceptor.m_mvRunner.IsDisabledForSession();
     if (eyeStride && !mvFixWillRun) {
         scaleMulX = afrFallbackMulX;
         scaleMulY = afrFallbackMulY;
@@ -1165,10 +1246,17 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         wroteScale = true;
     }
 
+    const bool needMvPass = interceptor.m_mvRunner.IsEnabled() && alternatesEyeContexts && InCmdList && mutableParams;
+    std::optional<ResolvedCameras> resolvedCameras;
+    if (bridge && (needMvPass || interceptor.m_diag.IsArmed())) {
+        resolvedCameras = bridge->GetCameraRecords().Resolve(activeEye);
+    }
+
     ID3D12Resource* prevMv = nullptr;
     bool swappedMv = false;
+    bool mvPassHandled = false;
     const char* correctionState = "off";
-    if (interceptor.m_mvFixEnabled.load() && alternatesEyeContexts && InCmdList && mutableParams) {
+    if (needMvPass) {
         ID3D12Resource* depth = nullptr;
         ID3D12Resource* mv = nullptr;
         mutableParams->Get(NVSDK_NGX_Parameter_Depth, &depth);
@@ -1176,90 +1264,78 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         if (depth && mv) {
             const float effScaleX = prevScaleX * scaleMulX;
             const float effScaleY = prevScaleY * scaleMulY;
-            const uint32_t correctionEye = bridge ? bridge->GetActiveEye() : 0;
             mvreproj::CorrectionPlan plan;
-            if (bridge) plan = mvreproj::PlanCorrection(bridge->GetCameraRecords().Resolve(correctionEye));
+            if (resolvedCameras) plan = mvreproj::PlanCorrection(*resolvedCameras);
             MvCorrectionRequest correctionRequest;
             const MvCorrectionRequest* correction = nullptr;
-            correctionState = mvreproj::CorrectionDecisionName(plan.decision);
             const bool infiniteDepth = interceptor.m_depthModelInfinite.load();
             const float nearOverride = interceptor.m_nearClipOverride.load();
-            const float autoNear = nearOverride > 0.0f ? 0.0f : interceptor.m_nearEstimator.Estimate();
+            const float autoNear =
+                (infiniteDepth && nearOverride <= 0.0f) ? interceptor.m_nearEstimator.Estimate() : 0.0f;
             const float forcedNear = nearOverride > 0.0f ? nearOverride : autoNear;
             if (plan.decision == mvreproj::CorrectionDecision::Correct) {
-                if (std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f) {
-                    plan.current.infiniteDepth = infiniteDepth;
-                    if (forcedNear > 0.0f) {
-                        plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = forcedNear;
-                    }
-                    correctionRequest.mvScaleX = effScaleX;
-                    correctionRequest.mvScaleY = effScaleY;
-                    correctionRequest.current = plan.current;
-                    correctionRequest.previousFrame = plan.previousFrame;
-                    correctionRequest.sameEye = plan.sameEye;
-                    correctionRequest.toPreviousFrame = plan.toPreviousFrame;
-                    correctionRequest.toSameEye = plan.toSameEye;
-                    correctionRequest.objectMotionFactor = eyeStride ? mvreproj::kAfrEyeStride : 1.0f;
-                    correctionRequest.gateNonStatic = true;
-                    correction = &correctionRequest;
-                } else {
-                    correctionState = "zero-mv-scale";
+                plan.current.infiniteDepth = infiniteDepth;
+                if (forcedNear > 0.0f) {
+                    plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = forcedNear;
                 }
             }
-            if (interceptor.m_diagRemaining.load() > 0) {
+            if (BuildMvCorrectionRequest(plan, effScaleX, effScaleY,
+                                         eyeStride ? mvreproj::kAfrEyeStride : 1.0f, true,
+                                         correctionRequest, correctionState)) {
+                correction = &correctionRequest;
+            }
+            if (interceptor.m_diag.IsArmed()) {
                 LogInfo("NgxInterceptor: [Diag] MvCorrection Eval #" + std::to_string(interceptor.m_evalCount.load()) +
-                        " Eye=" + std::to_string(correctionEye) + ": " + (correction ? "correcting" : correctionState));
+                        " Eye=" + std::to_string(activeEye) + ": " + correctionState);
             }
 
             MvSelfCheckRequest checkRequest;
             const MvSelfCheckRequest* check = nullptr;
-            if (interceptor.m_diagRemaining.load() > 0) {
+            if (interceptor.m_diag.IsArmed()) {
                 const uint64_t evalIndex = interceptor.m_evalCount.load();
-                const uint32_t checkEye = bridge ? bridge->GetActiveEye() : 0;
                 std::string skipReason;
-                if (bridge && BuildMvSelfCheckRequest(bridge->GetCameraRecords().Resolve(checkEye), checkEye, evalIndex,
-                                                      prevScaleX * scaleMulX, prevScaleY * scaleMulY,
-                                                      correction ? &plan : nullptr, checkRequest, skipReason)) {
+                if (resolvedCameras &&
+                    BuildMvSelfCheckRequest(*resolvedCameras, activeEye, evalIndex, effScaleX, effScaleY,
+                                            correction ? &plan : nullptr, checkRequest, skipReason)) {
                     checkRequest.current.infiniteDepth = infiniteDepth;
                     if (forcedNear > 0.0f) checkRequest.current.nearClip = checkRequest.previous.nearClip = forcedNear;
                     check = &checkRequest;
-                    if (!interceptor.m_diagProjectionLogged.exchange(true)) {
-                        const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(checkEye);
+                    if (interceptor.m_diag.ConsumeProjectionLogFlag()) {
                         unsigned int renderW = 0, renderH = 0;
                         mutableParams->Get(NVSDK_NGX_Parameter_Width, &renderW);
                         mutableParams->Get(NVSDK_NGX_Parameter_Height, &renderH);
                         MvProjectionDiag diag;
                         diag.source = nearOverride > 0.0f ? "override" : (autoNear > 0.0f ? "auto" : "camera-record");
-                        diag.used = {forcedNear > 0.0f ? forcedNear : resolved.current->nearClip,
-                                     resolved.current->farClip, resolved.current->fovY};
+                        diag.used = {forcedNear > 0.0f ? forcedNear : resolvedCameras->current->nearClip,
+                                     resolvedCameras->current->farClip, resolvedCameras->current->fovY};
                         diag.autoEstimate = autoNear;
                         diag.hasRecordNear = true;
-                        diag.recordNear = resolved.current->nearClip;
-                        diag.projOffsetX = resolved.current->projOffsetX;
-                        diag.projOffsetY = resolved.current->projOffsetY;
+                        diag.recordNear = resolvedCameras->current->nearClip;
+                        diag.projOffsetX = resolvedCameras->current->projOffsetX;
+                        diag.projOffsetY = resolvedCameras->current->projOffsetY;
                         diag.aspect = renderH ? static_cast<float>(renderW) / static_cast<float>(renderH) : 1.0f;
                         diag.infinite = infiniteDepth;
                         diag.staticGate = true;
                         diag.depthSource = "vrDlssDepthModel";
-                        LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", checkEye, evalIndex, diag));
+                        LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", activeEye, evalIndex, diag));
                     }
                 } else {
                     if (!bridge) skipReason = "no VR bridge";
-                    LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", checkEye, evalIndex, skipReason));
+                    LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", activeEye, evalIndex, skipReason));
                 }
             }
             MvSelfCheckRequest nearRequest;
             float recordNear = 0.0f;
-            if (bridge) {
-                const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(correctionEye);
-                if (resolved.current) recordNear = resolved.current->nearClip;
-                if (nearOverride <= 0.0f && resolved.current && resolved.previousFrame &&
+            if (resolvedCameras) {
+                if (resolvedCameras->current) recordNear = resolvedCameras->current->nearClip;
+                if (infiniteDepth && nearOverride <= 0.0f && resolvedCameras->current && resolvedCameras->previousFrame &&
+                    std::isfinite(effScaleX) && std::isfinite(effScaleY) &&
                     std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f &&
                     interceptor.m_nearCrossEyeEvals.fetch_add(1) % NgxInterceptor::kNearEstimateInterval ==
                         NgxInterceptor::kNearEstimateInterval - 1) {
                     std::string skipReason;
                     const uint64_t nearEvalIndex = interceptor.m_evalCount.load();
-                    if (BuildMvSelfCheckRequest(resolved, correctionEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
+                    if (BuildMvSelfCheckRequest(*resolvedCameras, activeEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
                                                 nearRequest, skipReason)) {
                         nearRequest.current.infiniteDepth = infiniteDepth;
                         if (forcedNear > 0.0f) nearRequest.current.nearClip = nearRequest.previous.nearClip = forcedNear;
@@ -1268,38 +1344,45 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     }
                 }
             }
+            MvPassInputs passInputs;
+            passInputs.cmdList = InCmdList;
+            passInputs.depth = depth;
+            passInputs.motionVectors = mv;
+            passInputs.selfCheck = check;
+            passInputs.correction = correction;
             std::vector<MvSelfCheckReport> reports;
-            ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv, check, &reports, correction);
+            MvPassRunResult passResult = interceptor.m_mvRunner.Run(passInputs, reports);
             for (const MvSelfCheckReport& report : reports) {
                 if (report.nearEstimate) {
-                    interceptor.OnNearSolution(report.evalIndex, report.nearSolution, recordNear, report.eye,
-                                               report.stats.gatedFraction);
-                    if (interceptor.m_diagRemaining.load() > 0) {
+                    if (interceptor.m_depthModelInfinite.load()) {
+                        interceptor.OnNearSolution(report.evalIndex, report.nearSolution, recordNear, report.eye,
+                                                   report.stats.gatedFraction);
+                    }
+                    if (interceptor.m_diag.IsArmed()) {
                         LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
                     }
                     continue;
                 }
-                if (!interceptor.m_diagRawRangeLogged.exchange(true)) {
-                    LogInfo(FormatMvRawRangeReport("NgxInterceptor", "Eval", report));
-                }
-                LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
+                LogSelfCheckReport("NgxInterceptor", "Eval", interceptor.m_diag, report);
             }
-            if (corrected) {
+            mvPassHandled = passResult.handled;
+            if (passResult.swapped && passResult.output) {
                 prevMv = mv;
-                mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, corrected);
+                mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, passResult.output);
                 swappedMv = true;
             }
         }
     }
 
-    if (eyeStride && mvFixWillRun && !swappedMv && mutableParams) {
+    if (eyeStride && mvFixWillRun && !mvPassHandled && mutableParams) {
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * afrFallbackMulX);
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * afrFallbackMulY);
         wroteScale = true;
     }
 
     uint64_t currentEval = interceptor.m_evalCount.fetch_add(1);
-    interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass);
+    interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass,
+                                  resolvedCameras ? &*resolvedCameras : nullptr);
     if ((currentEval == 0 || (currentEval % 300 == 0)) && InParameters) {
         unsigned int inW = 0, inH = 0, outW = 0, outH = 0;
         InParameters->Get(NVSDK_NGX_Parameter_Width, &inW);
@@ -1359,6 +1442,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY);
     }
 
+    if (wroteSharpness) {
+        mutableParams->Set(NVSDK_NGX_Parameter_Sharpness, hadPrevSharpness ? prevSharpness : 0.0f);
+    }
+
+    evalPresetOverrides.Restore(mutableParams);
+
     return res;
 }
 
@@ -1414,16 +1503,21 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter
     return NVSDK_NGX_Result_Success;
 }
 
+template <typename NamePtr>
+void NgxInterceptor::DispatchLoadedModule(HMODULE hMod, NamePtr lpLibFileName, DWORD dwFlags) {
+    if (!hMod || IsDataOrImageResourceLoad(dwFlags, hMod)) return;
+    if (MatchesNgxName(lpLibFileName)) {
+        AttachModule(hMod);
+    } else {
+        NotifyModuleLoaded(hMod, lpLibFileName);
+    }
+}
+
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryW)>(interceptor->m_detourLoadLibraryW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryW(lpLibFileName);
-
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, 0);
     return hMod;
 }
 
@@ -1431,12 +1525,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryExW)>(interceptor->m_detourLoadLibraryExW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, dwFlags);
     return hMod;
 }
 
@@ -1444,12 +1533,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryA)>(interceptor->m_detourLoadLibraryA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryA(lpLibFileName);
-
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, 0);
     return hMod;
 }
 
@@ -1457,12 +1541,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HA
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryExA)>(interceptor->m_detourLoadLibraryExA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExA(lpLibFileName, hFile, dwFlags);
-
-    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor->AttachModule(hMod);
-    } else if (interceptor && hMod) {
-        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, dwFlags);
     return hMod;
 }
 

@@ -41,6 +41,7 @@ public:
 
     const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_lastSubmittedCursorQuadLayer; }
     bool HasLastSubmittedCursorQuadLayer() const { return m_hasLastSubmittedCursorQuadLayer; }
+    XrResult GetLastXrResult() const { return m_lastXrResult; }
 
 private:
     bool EnumerateSwapchainImages(std::shared_ptr<IOpenXrDispatch> dispatch);
@@ -48,6 +49,7 @@ private:
     EyeSwapchain m_swapchain;
     bool m_hasSwapchain = false;
     bool m_textureUploaded = false;
+    XrResult m_lastXrResult = XR_SUCCESS;
     XrCompositionLayerQuad m_lastSubmittedCursorQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     bool m_hasLastSubmittedCursorQuadLayer = false;
 };

@@ -2,6 +2,7 @@
 
 #include "ngx_defs.h"
 #include "mv_pass.h"
+#include "upscaler_mv_helper.h"
 #include "near_estimator.h"
 #include "virtual_ngx_handle.h"
 #include "core/detour.h"
@@ -14,6 +15,8 @@
 #include <windows.h>
 
 namespace fs25vr {
+
+struct ResolvedCameras;
 
 class NgxInterceptor {
 public:
@@ -71,9 +74,10 @@ public:
     size_t GetActiveVirtualHandleCount() const;
     bool IsVirtualHandle(const NVSDK_NGX_Handle* handle) const;
     VirtualNgxHandle* GetVirtualHandle(const NVSDK_NGX_Handle* handle) const;
+    InFlightLease<VirtualNgxHandle> AcquireVirtualHandle(const NVSDK_NGX_Handle* handle) const;
 
-    void RegisterVirtualHandle(std::unique_ptr<VirtualNgxHandle> handle);
-    std::unique_ptr<VirtualNgxHandle> UnregisterVirtualHandle(NVSDK_NGX_Handle* handle);
+    void RegisterVirtualHandle(std::shared_ptr<VirtualNgxHandle> handle);
+    std::shared_ptr<VirtualNgxHandle> UnregisterVirtualHandle(NVSDK_NGX_Handle* handle);
 
     void RegisterTrackedParameter(std::unique_ptr<NgxParameterImpl> param);
     bool UnregisterTrackedParameter(NVSDK_NGX_Parameter* param);
@@ -129,45 +133,44 @@ public:
     static constexpr bool kDefaultMvFixEnabled = true;
     static constexpr float kDefaultAfrMvScale = 2.0f;
 
-    int GetDlssPresetOverride() const { return m_dlssPresetOverride; }
-    void SetDlssPresetOverride(int preset) { m_dlssPresetOverride = preset; }
-    float GetSharpnessOverride() const { return m_sharpnessOverride; }
+    int GetDlssPresetOverride() const { return m_dlssPresetOverride.load(); }
+    void SetDlssPresetOverride(int preset) { m_dlssPresetOverride.store(preset); }
+    float GetSharpnessOverride() const { return m_sharpnessOverride.load(); }
     void SetSharpnessOverride(float sharpness, bool force = true) {
-        m_sharpnessOverride = sharpness;
-        m_forceSharpnessOverride = force;
+        m_sharpnessOverride.store(sharpness);
+        m_forceSharpnessOverride.store(force);
     }
-    bool IsForceSharpnessOverride() const { return m_forceSharpnessOverride; }
-    float GetMvScaleMultiplierX() const { return m_mvScaleMultiplierX; }
-    float GetMvScaleMultiplierY() const { return m_mvScaleMultiplierY; }
+    bool IsForceSharpnessOverride() const { return m_forceSharpnessOverride.load(); }
+    float GetMvScaleMultiplierX() const { return m_mvScaleMultiplierX.load(); }
+    float GetMvScaleMultiplierY() const { return m_mvScaleMultiplierY.load(); }
     void SetMvScaleMultiplier(float scaleX, float scaleY) {
-        m_mvScaleMultiplierX = scaleX;
-        m_mvScaleMultiplierY = scaleY;
+        m_mvScaleMultiplierX.store(scaleX);
+        m_mvScaleMultiplierY.store(scaleY);
     }
-    float GetSdpMvScaleMultiplierX() const { return m_sdpMvScaleMultiplierX; }
-    float GetSdpMvScaleMultiplierY() const { return m_sdpMvScaleMultiplierY; }
+    float GetSdpMvScaleMultiplierX() const { return m_sdpMvScaleMultiplierX.load(); }
+    float GetSdpMvScaleMultiplierY() const { return m_sdpMvScaleMultiplierY.load(); }
     void SetSdpMvScaleMultiplier(float scaleX, float scaleY) {
-        m_sdpMvScaleMultiplierX = scaleX;
-        m_sdpMvScaleMultiplierY = scaleY;
+        m_sdpMvScaleMultiplierX.store(scaleX);
+        m_sdpMvScaleMultiplierY.store(scaleY);
     }
 
     bool SetMvFixEnabled(bool enabled);
-    bool IsMvFixEnabled() const { return m_mvFixEnabled.load(); }
-    bool IsMvFixDisabledForSession() const { return m_mvFixDisabled.load(); }
+    bool IsMvFixEnabled() const { return m_mvRunner.IsEnabled(); }
+    bool IsMvFixDisabledForSession() const { return m_mvRunner.IsDisabledForSession(); }
     std::string GetMvFixDisableReason() const;
     void SetDepthModelInfinite(bool infinite);
     bool IsDepthModelInfinite() const { return m_depthModelInfinite.load(); }
     void SetNearClipOverride(float meters);
     float GetNearClipOverride() const { return m_nearClipOverride.load(); }
     float GetAutoNearEstimate() const { return m_nearEstimator.Estimate(); }
-    // Every Nth cross-eye evaluation records a near plane estimate (a sparse self-check read back later).
     static constexpr uint32_t kNearEstimateInterval = 4;
     void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
     const char* DescribeMvFixState() const;
 
-    static constexpr uint32_t kDefaultDiagEvaluations = 128;
-    static constexpr uint32_t kMaxDiagEvaluations = 4096;
+    static constexpr uint32_t kDefaultDiagEvaluations = UpscalerDiagnostics::kDefaultWindow;
+    static constexpr uint32_t kMaxDiagEvaluations = UpscalerDiagnostics::kMaxWindow;
     void ArmDiagnostics(uint32_t evaluations = kDefaultDiagEvaluations);
-    uint32_t GetDiagEvaluationsRemaining() const { return m_diagRemaining.load(); }
+    uint32_t GetDiagEvaluationsRemaining() const { return m_diag.Remaining(); }
 
     struct JitterSummary {
         uint32_t evaluations = 0;
@@ -195,6 +198,8 @@ private:
 
     void NotifyModuleLoaded(HMODULE hMod, LPCWSTR name);
     void NotifyModuleLoaded(HMODULE hMod, LPCSTR name);
+    template <typename NamePtr>
+    void DispatchLoadedModule(HMODULE hMod, NamePtr lpLibFileName, DWORD dwFlags);
 
     mutable std::recursive_mutex m_mutex;
     class FidelityFxInterceptor* m_fidelityFx = nullptr;
@@ -205,37 +210,25 @@ private:
     class DxgiProxy* m_dxgiProxy = nullptr;
     class OpenXrManager* m_openXrManager = nullptr;
 
-    int m_dlssPresetOverride = kDefaultDlssPresetOverride;
-    float m_sharpnessOverride = kDefaultSharpnessOverride;
-    bool m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
-    float m_mvScaleMultiplierX = kDefaultAfrMvScale;
-    float m_mvScaleMultiplierY = kDefaultAfrMvScale;
-    float m_sdpMvScaleMultiplierX = 1.0f;
-    float m_sdpMvScaleMultiplierY = 1.0f;
+    std::atomic<int> m_dlssPresetOverride{kDefaultDlssPresetOverride};
+    std::atomic<float> m_sharpnessOverride{kDefaultSharpnessOverride};
+    std::atomic<bool> m_forceSharpnessOverride{kDefaultForceSharpnessOverride};
+    std::atomic<float> m_mvScaleMultiplierX{kDefaultAfrMvScale};
+    std::atomic<float> m_mvScaleMultiplierY{kDefaultAfrMvScale};
+    std::atomic<float> m_sdpMvScaleMultiplierX{1.0f};
+    std::atomic<float> m_sdpMvScaleMultiplierY{1.0f};
     std::atomic<uint64_t> m_evalCount{0};
-
-    ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
-                                 const MvSelfCheckRequest* request = nullptr,
-                                 std::vector<MvSelfCheckReport>* reports = nullptr,
-                                 const MvCorrectionRequest* correction = nullptr);
-    void DisableMvFix(const std::string& reason);
 
     std::atomic<bool> m_depthModelInfinite{true};
     std::atomic<float> m_nearClipOverride{0.0f};
     NearEstimator m_nearEstimator;
-    std::atomic<uint32_t> m_nearCrossEyeEvals{0}; // cross-eye evaluations seen, to pick every Nth
+    std::atomic<uint32_t> m_nearCrossEyeEvals{0};
     std::atomic<float> m_nearLastLogged{0.0f};
     std::atomic<int64_t> m_nearLastLogMs{INT64_MIN};
     void ForgetNearEstimate();
     void OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear, uint32_t eye,
                         double gatedFraction);
-    std::atomic<bool> m_diagProjectionLogged{false};
-    std::atomic<bool> m_mvFixEnabled{kDefaultMvFixEnabled};
-    std::atomic<bool> m_mvFixDisabled{false};
-    mutable std::mutex m_mvFixMutex;
-    std::string m_mvFixDisableReason;
-    MotionVectorPassFactory m_mvPassFactory;
-    std::unique_ptr<IMotionVectorPass> m_mvPass;
+    UpscalerMvPassRunner m_mvRunner{"NgxInterceptor", "DLSS"};
 
     std::atomic<int> m_lastRenderingMode{-1};
     std::atomic<bool> m_internalDiscontinuityPendingLeft{false};
@@ -243,25 +236,12 @@ private:
 
     std::atomic<uint32_t> m_nextVirtualId{1000};
 
-    struct DiagSample {
-        float jitterX = 0.0f;
-        float jitterY = 0.0f;
-        bool reset = false;
-    };
     void RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex, const NVSDK_NGX_Parameter* params,
-                           bool reset, bool isDualPass);
-    void LogDiagSummary();
-    static JitterSummary Summarize(const std::vector<DiagSample>& samples);
+                           bool reset, bool isDualPass, const ResolvedCameras* resolvedCameras = nullptr);
 
-    std::atomic<uint32_t> m_diagRemaining{0};
-    std::atomic<bool> m_diagRawRangeLogged{false};
-    mutable std::mutex m_diagMutex;
-    std::vector<DiagSample> m_diagSamples[2];
-    int m_diagLastContext = -1;
-    uint32_t m_diagContextRun = 0;
-    uint32_t m_diagLongestContextRun = 0;
+    UpscalerDiagnostics m_diag{"NgxInterceptor", "evaluations", "Evals"};
 
-    std::unordered_map<NVSDK_NGX_Handle*, std::unique_ptr<VirtualNgxHandle>> m_virtualHandles;
+    std::unordered_map<NVSDK_NGX_Handle*, std::shared_ptr<VirtualNgxHandle>> m_virtualHandles;
     std::unordered_map<NVSDK_NGX_Parameter*, std::unique_ptr<NgxParameterImpl>> m_trackedParameters;
 
     FunctionDetour m_detourCreateFeature;

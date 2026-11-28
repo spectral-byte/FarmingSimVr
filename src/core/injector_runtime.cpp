@@ -92,6 +92,7 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
     if (m_deps.vrBridge) {
         if (!m_deps.openXrManager) m_deps.openXrManager = m_deps.vrBridge->GetOpenXrManager();
         if (!m_deps.ngxInterceptor) m_deps.ngxInterceptor = m_deps.vrBridge->GetNgxInterceptor();
+        if (!m_deps.ffxInterceptor) m_deps.ffxInterceptor = m_deps.vrBridge->GetFidelityFxInterceptor();
     }
     if (!m_deps.systemDxgi) m_deps.systemDxgi = std::make_shared<SystemDxgi>();
     if (!m_deps.openXrManager) {
@@ -101,7 +102,9 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
     if (!m_deps.ffxInterceptor) m_deps.ffxInterceptor = std::make_shared<FidelityFxInterceptor>();
     if (!m_deps.vrBridge) {
         m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor,
-                                                     m_deps.injectorVersion);
+                                                     m_deps.injectorVersion, m_deps.ffxInterceptor);
+    } else {
+        m_deps.vrBridge->SetFidelityFxInterceptor(m_deps.ffxInterceptor);
     }
     if (!m_deps.companionSettingsFile.empty()) {
         ApplySavedMenuDistance(*m_deps.vrBridge, m_deps.companionSettingsFile);
@@ -152,6 +155,12 @@ InjectorRuntime::~InjectorRuntime() {
     m_deps.ngxInterceptor->SetDxgiProxy(nullptr);
     m_deps.ngxInterceptor->SetVRBridge(nullptr);
     m_deps.ngxInterceptor->SetOpenXrManager(nullptr);
+
+    if (m_deps.openXrManager && m_proxy &&
+        (m_proxy->GetD3D12Device() != nullptr || m_proxy->GetD3D12CommandQueue() != nullptr)) {
+        m_deps.openXrManager->Shutdown();
+    }
+    m_proxy.reset();
 }
 
 }

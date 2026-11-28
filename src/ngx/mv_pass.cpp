@@ -3,9 +3,11 @@
 #include "core/perf_trace.h"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -221,18 +223,41 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
 }
 )hlsl";
 }
-bool MvPassCompileShader(std::string& bytecode, std::string& error, const char* entryPoint) {
-    using PFN_D3DCompile = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*,
-                                            LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+namespace {
+
+using PFN_D3DCompile = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*,
+                                        LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+
+PFN_D3DCompile ResolveD3DCompile(std::string& error) {
+    static std::atomic<PFN_D3DCompile> s_compile{nullptr};
+    if (PFN_D3DCompile cached = s_compile.load(std::memory_order_acquire)) {
+        return cached;
+    }
+    static std::mutex s_mutex;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (PFN_D3DCompile cached = s_compile.load(std::memory_order_relaxed)) {
+        return cached;
+    }
     HMODULE compiler = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!compiler) {
         error = "d3dcompiler_47.dll could not be loaded";
-        return false;
+        return nullptr;
     }
     auto compile = reinterpret_cast<PFN_D3DCompile>(GetProcAddress(compiler, "D3DCompile"));
     if (!compile) {
         error = "d3dcompiler_47.dll has no D3DCompile";
         FreeLibrary(compiler);
+        return nullptr;
+    }
+    s_compile.store(compile, std::memory_order_release);
+    return compile;
+}
+
+}
+
+bool MvPassCompileShader(std::string& bytecode, std::string& error, const char* entryPoint) {
+    PFN_D3DCompile compile = ResolveD3DCompile(error);
+    if (!compile) {
         return false;
     }
     const char* source = MvPassShaderSource();
@@ -298,8 +323,10 @@ public:
         const D3D12_RESOURCE_DESC mvDesc = in.motionVectors->GetDesc();
         const D3D12_RESOURCE_DESC depthDesc = in.depth->GetDesc();
         if (mvDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || mvDesc.SampleDesc.Count != 1 ||
-            depthDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || depthDesc.SampleDesc.Count != 1) {
-            fail.failureReason = "depth and motion vectors must be single-sample 2D textures";
+            mvDesc.DepthOrArraySize != 1 ||
+            depthDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || depthDesc.SampleDesc.Count != 1 ||
+            depthDesc.DepthOrArraySize != 1) {
+            fail.failureReason = "depth and motion vectors must be single-slice single-sample 2D textures";
             return fail;
         }
         const DXGI_FORMAT mvFormat = MvPassMotionVectorViewFormat(mvDesc.Format);
@@ -312,9 +339,25 @@ public:
             fail.failureReason = "unsupported depth format " + std::to_string(static_cast<int>(depthDesc.Format));
             return fail;
         }
-        if (mvDesc.Width == 0 || mvDesc.Height == 0 || mvDesc.Width > 16384 || mvDesc.Height > 16384) {
-            fail.failureReason = "unexpected motion vector dimensions";
+        if (mvDesc.Width == 0 || mvDesc.Height == 0 || mvDesc.Width > 16384 || mvDesc.Height > 16384 ||
+            depthDesc.Width == 0 || depthDesc.Height == 0 || depthDesc.Width > 16384 || depthDesc.Height > 16384) {
+            fail.failureReason = "unexpected depth or motion vector dimensions";
             return fail;
+        }
+        if (depthDesc.Width != mvDesc.Width || depthDesc.Height != mvDesc.Height) {
+            fail.failureReason = "depth and motion vector dimensions do not match (" +
+                                 std::to_string(depthDesc.Width) + "x" + std::to_string(depthDesc.Height) + " vs " +
+                                 std::to_string(mvDesc.Width) + "x" + std::to_string(mvDesc.Height) + ")";
+            return fail;
+        }
+        if (!in.correction && !in.selfCheck) {
+            ++m_calls;
+            ReadTimings();
+            ReleaseRetired();
+            MvPassResult ok;
+            ok.ok = true;
+            ok.output = in.motionVectors;
+            return ok;
         }
 
         ComPtr<ID3D12Device> device;
@@ -381,35 +424,43 @@ public:
 
         ID3D12GraphicsCommandList* cl = in.cmdList;
         const int timingSlot = BeginTiming(cl);
-        Transition(cl, m_output.Get(), m_outputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ID3D12DescriptorHeap* heaps[] = {m_heap.Get()};
         cl->SetDescriptorHeaps(1, heaps);
         cl->SetComputeRootSignature(m_rootSignature.Get());
         const bool correcting = in.correction != nullptr;
-        cl->SetPipelineState(correcting ? m_correctPso.Get() : m_pso.Get());
-        cl->SetComputeRootDescriptorTable(0, gpu);
-        PassConstants constants = {};
-        constants.a[0] = width;
-        constants.a[1] = height;
-        if (correcting) FillCorrectionConstants(constants, *in.correction, width, height);
-        cl->SetComputeRoot32BitConstants(1, sizeof(constants) / sizeof(uint32_t), &constants, 0);
-        cl->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
-        Transition(cl, m_output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kUpscalerInputState);
-        m_outputState = kUpscalerInputState;
+        if (correcting) {
+            Transition(cl, m_output.Get(), m_outputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            cl->SetPipelineState(m_correctPso.Get());
+            cl->SetComputeRootDescriptorTable(0, gpu);
+            PassConstants constants = {};
+            constants.a[0] = width;
+            constants.a[1] = height;
+            FillCorrectionConstants(constants, *in.correction, width, height);
+            cl->SetComputeRoot32BitConstants(1, sizeof(constants) / sizeof(uint32_t), &constants, 0);
+            cl->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+            Transition(cl, m_output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kUpscalerInputState);
+            m_outputState = kUpscalerInputState;
+        }
 
         if (in.selfCheck && EnsureReadbackBuffers()) {
-            RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting && !in.selfCheck->nearEstimate);
+            RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting && !in.selfCheck->nearEstimate, mvFormat);
         }
 
         EndTiming(cl, timingSlot);
 
         MvPassResult ok;
         ok.ok = true;
-        ok.output = m_output.Get();
+        ok.output = correcting ? m_output.Get() : in.motionVectors;
         return ok;
     }
 
     std::vector<MvSelfCheckReport> PollSelfCheck() override {
+        if (m_calls == m_lastPollCall) {
+            ++m_calls;
+            ReadTimings();
+            ReleaseRetired();
+        }
+        m_lastPollCall = m_calls;
         std::vector<MvSelfCheckReport> reports;
         for (PendingCheck& p : m_pending) {
             if (!p.active || m_calls < p.recordedAtCall + kReadbackDelayCalls) continue;
@@ -427,7 +478,7 @@ public:
                 report.eye = p.eye;
                 report.evalIndex = p.evalIndex;
                 report.stats = mvreproj::Summarize(samples, kSelfCheckSamples);
-                report.mvFormat = static_cast<uint32_t>(m_format);
+                report.mvFormat = static_cast<uint32_t>(p.mvFormat);
                 if (p.nearEstimate) {
                     report.nearEstimate = true;
                     report.nearSolution = mvreproj::SolveNear(samples, kSelfCheckSamples, p.assumedNear);
@@ -453,6 +504,7 @@ private:
         uint64_t recordedAtCall = 0;
         bool nearEstimate = false;
         float assumedNear = 0.0f;
+        DXGI_FORMAT mvFormat = DXGI_FORMAT_UNKNOWN;
     };
 
     struct TimingSlot {
@@ -579,10 +631,20 @@ private:
     }
 
     void RecordSelfCheck(ID3D12GraphicsCommandList* cl, const MvSelfCheckRequest& req, UINT width, UINT height,
-                         D3D12_GPU_DESCRIPTOR_HANDLE gpu, bool readCorrected) {
-        const UINT slot = static_cast<UINT>(m_checks % kReadbackSlots);
+                         D3D12_GPU_DESCRIPTOR_HANDLE gpu, bool readCorrected, DXGI_FORMAT mvFormat) {
+        UINT slot = kReadbackSlots;
+        for (UINT offset = 0; offset < kReadbackSlots; ++offset) {
+            const UINT candidate = static_cast<UINT>((m_checks + offset) % kReadbackSlots);
+            if (!m_pending[candidate].active) {
+                slot = candidate;
+                break;
+            }
+        }
+        if (slot == kReadbackSlots) return;
         ++m_checks;
-        const uint32_t sequence = static_cast<uint32_t>(m_checks); // never 0: stale or empty reads never match
+        ++m_sequence;
+        if (m_sequence == 0) ++m_sequence;
+        const uint32_t sequence = m_sequence;
 
         PassConstants c = {};
         c.a[0] = width;
@@ -617,6 +679,7 @@ private:
         p.recordedAtCall = m_calls;
         p.nearEstimate = req.nearEstimate;
         p.assumedNear = req.current.nearClip;
+        p.mvFormat = mvFormat;
     }
 
     static void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
@@ -632,8 +695,8 @@ private:
     }
 
     bool CreatePipeline(ID3D12Device* device, std::string& reason) {
-        std::string bytecode, error;
-        if (!MvPassCompileShader(bytecode, error)) {
+        std::string correctBytecode, error;
+        if (!MvPassCompileShader(correctBytecode, error, "correct")) {
             reason = error;
             return false;
         }
@@ -675,19 +738,6 @@ private:
 
         D3D12_COMPUTE_PIPELINE_STATE_DESC pso = {};
         pso.pRootSignature = m_rootSignature.Get();
-        pso.CS.pShaderBytecode = bytecode.data();
-        pso.CS.BytecodeLength = bytecode.size();
-        hr = device->CreateComputePipelineState(&pso, IID_PPV_ARGS(&m_pso));
-        if (FAILED(hr)) {
-            reason = "compute pipeline creation failed (" + HrString(hr) + ")";
-            return false;
-        }
-
-        std::string correctBytecode;
-        if (!MvPassCompileShader(correctBytecode, error, "correct")) {
-            reason = error;
-            return false;
-        }
         pso.CS.pShaderBytecode = correctBytecode.data();
         pso.CS.BytecodeLength = correctBytecode.size();
         hr = device->CreateComputePipelineState(&pso, IID_PPV_ARGS(&m_correctPso));
@@ -785,7 +835,6 @@ private:
 
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12RootSignature> m_rootSignature;
-    ComPtr<ID3D12PipelineState> m_pso;
     ComPtr<ID3D12PipelineState> m_correctPso;
     ComPtr<ID3D12PipelineState> m_selfCheckPso;
     ComPtr<ID3D12Resource> m_results;
@@ -794,6 +843,8 @@ private:
     bool m_readbackReady = false;
     bool m_readbackFailed = false;
     uint64_t m_checks = 0;
+    uint32_t m_sequence = 0;
+    uint64_t m_lastPollCall = 0;
     ComPtr<ID3D12DescriptorHeap> m_heap;
     UINT m_descriptorSize = 0;
     ComPtr<ID3D12Resource> m_output;

@@ -3,6 +3,7 @@
 #include "openxr_dispatch.h"
 #include "openxr_types.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 
 namespace fs25vr {
@@ -27,7 +28,7 @@ public:
 
     bool Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSession session);
 
-    bool IsReady() const { return m_ready; }
+    bool IsReady() const { return m_ready.load(); }
 
     void Sync(IOpenXrDispatch& dispatch, XrSession session);
 
@@ -43,7 +44,7 @@ public:
 
 private:
     bool m_attempted = false;
-    bool m_ready = false;
+    std::atomic<bool> m_ready{false};
     XrSession m_session = XR_NULL_HANDLE;
     XrActionSet m_actionSet = XR_NULL_HANDLE;
     std::array<XrPath, kHandCount> m_handPaths{};

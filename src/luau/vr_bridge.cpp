@@ -29,6 +29,26 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
     return false;
 }
 
+static bool ParseRenderingModeArg(lua_State* L, int index, VRRenderingMode& outMode) {
+    const int type = lua_type(L, index);
+    if (type == LUA_TNUMBER) {
+        const double value = lua_tonumber(L, index);
+        if (value == 0.0) {
+            outMode = VRRenderingMode::AFR;
+            return true;
+        }
+        if (value == 1.0) {
+            outMode = VRRenderingMode::SequentialDualPass;
+            return true;
+        }
+        return false;
+    }
+    if (type == LUA_TSTRING) {
+        return ParseRenderingMode(lua_tostring(L, index), outMode);
+    }
+    return false;
+}
+
 namespace {
 
 class CollectorHold {
@@ -68,6 +88,29 @@ const char* StringArgument(lua_State* L, int index) {
     return lua_type(L, index) == LUA_TSTRING ? lua_tostring(L, index) : nullptr;
 }
 
+enum class DualBackendCombine {
+    ActiveAnyInactiveAll,
+    ActiveAllInactiveAny,
+};
+
+bool CombineUpscalerBackends(const NgxInterceptor* ngx, const FidelityFxInterceptor* ffx,
+                             bool ngxValue, bool ffxValue, DualBackendCombine combine) {
+    const bool ngxActive = ngx && (ngx->IsAttached() || ngx->GetActiveVirtualHandleCount() > 0);
+    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
+
+    if (ngxActive && !ffxActive) return ngxValue;
+    if (ffxActive && !ngxActive) return ffxValue;
+    if (ngxActive && ffxActive) {
+        return combine == DualBackendCombine::ActiveAnyInactiveAll ? (ngxValue || ffxValue) : (ngxValue && ffxValue);
+    }
+    if (ngx && ffx) {
+        return combine == DualBackendCombine::ActiveAnyInactiveAll ? (ngxValue && ffxValue) : (ngxValue || ffxValue);
+    }
+    if (ngx) return ngxValue;
+    if (ffx) return ffxValue;
+    return false;
+}
+
 }
 
 VRBridge& VRBridge::FromUpvalue(lua_State* L) {
@@ -78,10 +121,47 @@ VRBridge& VRBridge::FromUpvalue(lua_State* L) {
 
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
                    std::shared_ptr<NgxInterceptor> ngxInterceptor,
-                   std::string version)
+                   std::string version,
+                   std::shared_ptr<FidelityFxInterceptor> ffxInterceptor)
     : m_openXrManager(std::move(openXrManager)),
       m_ngxInterceptor(std::move(ngxInterceptor)),
+      m_ffxInterceptor(std::move(ffxInterceptor)),
       m_version(std::move(version)) {
+}
+
+FidelityFxInterceptor* VRBridge::ResolveFidelityFxInterceptor() const {
+    if (m_ffxInterceptor) return m_ffxInterceptor.get();
+    return m_ngxInterceptor ? m_ngxInterceptor->GetFidelityFxInterceptor() : nullptr;
+}
+
+bool VRBridge::SetMvFixEnabled(bool enabled) {
+    FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
+    const bool ngxOk = m_ngxInterceptor ? (m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled) : false;
+    const bool ffxOk = ffx ? (ffx->SetMvFixEnabled(enabled) == enabled) : false;
+    return CombineUpscalerBackends(m_ngxInterceptor.get(), ffx, ngxOk, ffxOk,
+                                   DualBackendCombine::ActiveAnyInactiveAll);
+}
+
+bool VRBridge::IsMvFixEnabled() const {
+    FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
+    const bool ngxEnabled = m_ngxInterceptor ? m_ngxInterceptor->IsMvFixEnabled() : false;
+    const bool ffxEnabled = ffx ? ffx->IsMvFixEnabled() : false;
+    return CombineUpscalerBackends(m_ngxInterceptor.get(), ffx, ngxEnabled, ffxEnabled,
+                                   DualBackendCombine::ActiveAnyInactiveAll);
+}
+
+bool VRBridge::IsMvFixDisabledForSession() const {
+    FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
+    const bool ngxDisabled = m_ngxInterceptor ? m_ngxInterceptor->IsMvFixDisabledForSession() : false;
+    const bool ffxDisabled = ffx ? ffx->IsMvFixDisabledForSession() : false;
+    return CombineUpscalerBackends(m_ngxInterceptor.get(), ffx, ngxDisabled, ffxDisabled,
+                                   DualBackendCombine::ActiveAllInactiveAny);
+}
+
+const char* VRBridge::DescribeMvFixState() const {
+    if (!m_ngxInterceptor && !ResolveFidelityFxInterceptor()) return "unavailable";
+    if (IsMvFixDisabledForSession()) return "failed";
+    return IsMvFixEnabled() ? "on" : "off";
 }
 
 bool VRBridge::IsInjected(lua_State* L) {
@@ -177,7 +257,7 @@ bool VRBridge::IsReady() const {
 }
 
 bool VRBridge::PerformHandshake() {
-    m_handshakeCompleted = true;
+    m_handshakeCompleted.store(true);
     m_subPassIndex.store(0);
     SetFrameParity(0);
     LogInfo("[VRBridge] Native-to-Luau handshake completed successfully. SubPassIndex and FrameParity aligned to 0.");
@@ -205,15 +285,12 @@ int VRBridge::Lua_IsReady(lua_State* L) {
 int VRBridge::Lua_Handshake(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
-    if (lua_gettop(L) >= 1) {
-        if (lua_isnumber(L, 1)) {
-            int val = lua_tointeger(L, 1);
-            self->SetRenderingMode((val == 1) ? VRRenderingMode::SequentialDualPass : VRRenderingMode::AFR);
-        } else if (lua_isstring(L, 1)) {
-            VRRenderingMode parsedMode;
-            if (ParseRenderingMode(lua_tostring(L, 1), parsedMode)) {
-                self->SetRenderingMode(parsedMode);
-            }
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        VRRenderingMode parsedMode;
+        if (ParseRenderingModeArg(L, 1, parsedMode)) {
+            self->SetRenderingMode(parsedMode);
+        } else {
+            LogWarn("[VRBridge] Handshake: ignoring unknown rendering mode argument.");
         }
     }
 
@@ -296,14 +373,14 @@ bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
 }
 
 PanelHit VRBridge::GetPanelHit(uint32_t hand) {
-    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+    if (m_openXrManager && (m_menuVisible.load() || m_2dViewActive.load())) {
         return m_openXrManager->GetPanelHit(hand);
     }
     return {};
 }
 
 PanelHit VRBridge::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
-    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+    if (m_openXrManager && (m_menuVisible.load() || m_2dViewActive.load())) {
         return m_openXrManager->GetPanelHitAlongRay(hand, origin, direction);
     }
     return {};
@@ -446,6 +523,7 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
         FillPoseTable(L, outIndex, pose);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushPoseTable(L, pose);
     }
     return 1;
@@ -499,6 +577,7 @@ int VRBridge::Lua_GetHandState(lua_State* L) {
         FillHandStateTable(L, outIndex, state);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushHandStateTable(L, state);
     }
     return 1;
@@ -647,6 +726,7 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
         FillEyeProjectionTable(L, outIndex, proj, eyeIndex);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushEyeProjectionTable(L, proj, eyeIndex);
     }
     return 1;
@@ -654,9 +734,9 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
 
 void VRBridge::ResetSubPassAndParity() {
     if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
-        m_frameParity = 0;
+        m_frameParity.store(0);
     } else {
-        m_frameParity = static_cast<uint32_t>(m_frameIndex % 2);
+        m_frameParity.store(static_cast<uint32_t>(m_frameIndex % 2));
     }
     m_subPassIndex.store(0);
 }
@@ -697,8 +777,9 @@ bool VRBridge::LatchPendingRenderingMode() {
 }
 
 void VRBridge::SetFrameParity(uint32_t parity) {
-    m_frameParity = parity % 2;
-    if (static_cast<uint32_t>(m_frameIndex % 2) != m_frameParity) {
+    const uint32_t normalized = parity % 2;
+    m_frameParity.store(normalized);
+    if (static_cast<uint32_t>(m_frameIndex % 2) != normalized) {
         m_frameIndex++;
     }
 }
@@ -759,6 +840,7 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
         FillPoseTable(L, outIndex, pose, static_cast<int>(eyeIndex));
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         PushPoseTable(L, pose, static_cast<int>(eyeIndex));
     }
     return 1;
@@ -766,13 +848,12 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
 
 void VRBridge::UpdateFovOverscanSuspension() {
     if (m_openXrManager) {
-        m_openXrManager->SetFovOverscanSuspended(m_menuVisible || m_2dViewActive);
+        m_openXrManager->SetFovOverscanSuspended(m_menuVisible.load() || m_2dViewActive.load());
     }
 }
 
 void VRBridge::SetMenuVisible(bool visible) {
-    if (m_menuVisible != visible) {
-        m_menuVisible = visible;
+    if (m_menuVisible.exchange(visible) != visible) {
         UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
@@ -828,6 +909,7 @@ int VRBridge::Lua_GetPanelHit(lua_State* L) {
         FillPanelHitTable(L, outIndex, hit);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
         FillPanelHitTable(L, -1, hit);
     }
@@ -862,6 +944,7 @@ int VRBridge::Lua_GetPanelHitAlongRay(lua_State* L) {
         FillPanelHitTable(L, outIndex, hit);
         lua_pushvalue(L, outIndex);
     } else {
+        CollectorHold collectorHold(L);
         lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
         FillPanelHitTable(L, -1, hit);
     }
@@ -899,8 +982,7 @@ int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
 }
 
 void VRBridge::Set2DViewActive(bool active) {
-    if (m_2dViewActive != active) {
-        m_2dViewActive = active;
+    if (m_2dViewActive.exchange(active) != active) {
         UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
@@ -1043,37 +1125,28 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.setRenderingMode");
-    if (lua_gettop(L) >= 1) {
-        VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
-        bool hasTarget = false;
-        if (lua_isnumber(L, 1)) {
-            int val = lua_tointeger(L, 1);
-            targetMode = (val == 0) ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
-            hasTarget = true;
-        } else if (lua_isstring(L, 1)) {
-            const char* s = lua_tostring(L, 1);
-            if (s && (_stricmp(s, "toggle") == 0)) {
-                targetMode = self->IsSequentialDualPass() ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
-                hasTarget = true;
-            } else {
-                VRRenderingMode parsedMode;
-                if (ParseRenderingMode(s, parsedMode)) {
-                    targetMode = parsedMode;
-                    hasTarget = true;
-                } else {
-                    targetMode = VRRenderingMode::SequentialDualPass;
-                    hasTarget = true;
-                }
-            }
-        }
+    if (lua_gettop(L) < 1) {
+        return 0;
+    }
 
-        if (hasTarget) {
-            if (self->m_openXrManager && self->m_openXrManager->IsActive()) {
-                self->SetPendingRenderingMode(targetMode);
-            } else {
-                self->SetRenderingMode(targetMode);
-            }
-        }
+    VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
+    bool hasTarget = false;
+    if (const char* s = StringArgument(L, 1); s && _stricmp(s, "toggle") == 0) {
+        targetMode = self->IsSequentialDualPass() ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
+        hasTarget = true;
+    } else {
+        hasTarget = ParseRenderingModeArg(L, 1, targetMode);
+    }
+
+    if (!hasTarget) {
+        LogWarn("[VRBridge] setRenderingMode: ignoring unknown rendering mode argument.");
+        return 0;
+    }
+
+    if (self->m_openXrManager && self->m_openXrManager->IsActive()) {
+        self->SetPendingRenderingMode(targetMode);
+    } else {
+        self->SetRenderingMode(targetMode);
     }
     return 0;
 }
@@ -1247,17 +1320,37 @@ int VRBridge::Lua_SetDlssSdpMvScale(lua_State* L) {
     return 1;
 }
 
+static bool HasValidCameraRecordArgTypes(lua_State* L) {
+    if (lua_gettop(L) < 11) return false;
+    for (int i = 1; i <= 11; ++i) {
+        if (lua_type(L, i) != LUA_TNUMBER) return false;
+    }
+    for (int i = 12; i <= 13; ++i) {
+        const int type = lua_type(L, i);
+        if (type != LUA_TNONE && type != LUA_TNIL && type != LUA_TNUMBER) return false;
+    }
+    return true;
+}
+
 int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
-    CameraRecord record;
-    record.eye = static_cast<uint32_t>((std::max)(0, static_cast<int>(luaL_checkinteger(L, 1))));
-    for (int i = 0; i < 3; ++i) record.position[i] = luaL_checknumber(L, 2 + i);
-    for (int i = 0; i < 4; ++i) record.orientation[i] = luaL_checknumber(L, 5 + i);
-    record.fovY = static_cast<float>(luaL_checknumber(L, 9));
-    record.nearClip = static_cast<float>(luaL_checknumber(L, 10));
-    record.farClip = static_cast<float>(luaL_checknumber(L, 11));
-    record.projOffsetX = static_cast<float>(luaL_optnumber(L, 12, 0.0));
-    record.projOffsetY = static_cast<float>(luaL_optnumber(L, 13, 0.0));
     VRBridge* self = &FromUpvalue(L);
+    CameraRecord record;
+    const auto readArgs = [&] {
+        record.eye = static_cast<uint32_t>((std::max)(0, static_cast<int>(luaL_checkinteger(L, 1))));
+        for (int i = 0; i < 3; ++i) record.position[i] = luaL_checknumber(L, 2 + i);
+        for (int i = 0; i < 4; ++i) record.orientation[i] = luaL_checknumber(L, 5 + i);
+        record.fovY = static_cast<float>(luaL_checknumber(L, 9));
+        record.nearClip = static_cast<float>(luaL_checknumber(L, 10));
+        record.farClip = static_cast<float>(luaL_checknumber(L, 11));
+        record.projOffsetX = static_cast<float>(luaL_optnumber(L, 12, 0.0));
+        record.projOffsetY = static_cast<float>(luaL_optnumber(L, 13, 0.0));
+    };
+    if (HasValidCameraRecordArgTypes(L)) {
+        readArgs();
+    } else {
+        CollectorHold collectorHold(L);
+        readArgs();
+    }
     lua_pushboolean(L, self->m_cameraRecords.Report(record) ? 1 : 0);
     return 1;
 }
@@ -1265,11 +1358,7 @@ int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
 int VRBridge::Lua_SetDlssMvFix(lua_State* L) {
     bool enabled = lua_toboolean(L, 1) != 0;
     VRBridge* self = &FromUpvalue(L);
-    if (!self->m_ngxInterceptor) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    lua_pushboolean(L, self->m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled ? 1 : 0);
+    lua_pushboolean(L, self->SetMvFixEnabled(enabled) ? 1 : 0);
     return 1;
 }
 
@@ -1301,12 +1390,15 @@ int VRBridge::Lua_DlssDiag(lua_State* L) {
     int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
                                          : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);
     VRBridge* self = &FromUpvalue(L);
-    if (!self->m_ngxInterceptor || evaluations <= 0) {
+    FidelityFxInterceptor* ffx = self->ResolveFidelityFxInterceptor();
+    if ((!self->m_ngxInterceptor && !ffx) || evaluations <= 0) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
-    if (FidelityFxInterceptor* ffx = self->m_ngxInterceptor->GetFidelityFxInterceptor()) {
+    if (self->m_ngxInterceptor) {
+        self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
+    }
+    if (ffx) {
         ffx->ArmDiagnostics(static_cast<uint32_t>(evaluations));
     }
     lua_pushboolean(L, 1);

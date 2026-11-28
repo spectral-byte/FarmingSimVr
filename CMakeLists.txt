@@ -107,6 +107,8 @@ set(CORE_SOURCES
     src/openxr/openxr_types.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
+    src/proxy/system_version.cpp
+    src/proxy/version_exports.h
     src/proxy/dxgi_export_hooks.h
     src/proxy/dxgi_export_hooks.cpp
     src/proxy/desktop_cursor_port.h
@@ -123,6 +125,8 @@ set(CORE_SOURCES
     src/ngx/ngx_interceptor.cpp
     src/ngx/mv_pass.h
     src/ngx/mv_pass.cpp
+    src/ngx/upscaler_mv_helper.h
+    src/ngx/upscaler_mv_helper.cpp
     src/ngx/mv_reprojection.h
     src/ngx/mv_reprojection.cpp
     src/ngx/near_estimator.h

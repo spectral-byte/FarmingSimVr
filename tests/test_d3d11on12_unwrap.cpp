@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "core/injector_runtime.h"
 #include "proxy/dxgi_proxy.h"
 #include "proxy/mirror_window_controller.h"
 #include <d3d12.h>
@@ -186,6 +187,47 @@ TEST_F(D3D11On12UnwrapTest, SwapsNothingBeforeTheGameHasADevice) {
     fresh.UnwrapForD3D11On12(device, nullptr, 0);
 
     EXPECT_EQ(static_cast<void*>(device), static_cast<void*>(wrapper.AsUnknown()));
+}
+
+TEST_F(D3D11On12UnwrapTest, InterceptD3D11On12ResolvesLiveHookOwnerAcrossMultipleRuntimes) {
+    m_proxy.reset();
+
+    ComPtr<IUnknown> d3d11Dev;
+    FakeD3D12Wrapper wrappedDevice(FakeD3D12Wrapper::Kind::Device, m_device.Get());
+    FakeD3D12Wrapper wrappedQueue(FakeD3D12Wrapper::Kind::Queue, m_queue.Get());
+    IUnknown* queues[] = { wrappedQueue.AsUnknown() };
+
+    auto runtime1 = std::make_unique<InjectorRuntime>();
+    runtime1->GetDxgiProxy().SetD3D12DeviceAndQueue(m_device.Get(), m_queue.Get());
+
+    auto runtime2 = std::make_unique<InjectorRuntime>();
+    runtime2->GetDxgiProxy().SetD3D12DeviceAndQueue(m_device.Get(), m_queue.Get());
+    ASSERT_EQ(InjectorRuntime::Current(), runtime2.get());
+
+    const HRESULT hrWhileBothLive = DxgiProxy::Intercept_D3D11On12CreateDevice(
+        wrappedDevice.AsUnknown(), 0, nullptr, 0, queues, 1, 0,
+        reinterpret_cast<void**>(d3d11Dev.ReleaseAndGetAddressOf()), nullptr, nullptr);
+    EXPECT_EQ(hrWhileBothLive, S_OK);
+    EXPECT_NE(d3d11Dev.Get(), nullptr);
+    d3d11Dev.Reset();
+
+    runtime1.reset();
+    const HRESULT hrAfterOwnerDestroyed = DxgiProxy::Intercept_D3D11On12CreateDevice(
+        wrappedDevice.AsUnknown(), 0, nullptr, 0, queues, 1, 0,
+        reinterpret_cast<void**>(d3d11Dev.ReleaseAndGetAddressOf()), nullptr, nullptr);
+    EXPECT_EQ(hrAfterOwnerDestroyed, E_FAIL);
+    EXPECT_EQ(d3d11Dev.Get(), nullptr);
+
+    runtime2.reset();
+
+    auto runtime3 = std::make_unique<InjectorRuntime>();
+    runtime3->GetDxgiProxy().SetD3D12DeviceAndQueue(m_device.Get(), m_queue.Get());
+    EXPECT_EQ(DxgiProxy::Intercept_D3D11On12CreateDevice(
+        wrappedDevice.AsUnknown(), 0, nullptr, 0, queues, 1, 0,
+        reinterpret_cast<void**>(d3d11Dev.ReleaseAndGetAddressOf()), nullptr, nullptr), S_OK);
+    EXPECT_NE(d3d11Dev.Get(), nullptr);
+    d3d11Dev.Reset();
+    runtime3.reset();
 }
 
 }

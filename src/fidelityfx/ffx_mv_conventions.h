@@ -37,6 +37,7 @@ inline FfxMvConventions ReadFfxMvConventions(uint32_t createFlags, const ffxDisp
         c.unsupportedReason = "FSR3 motion vectors include jitter";
     }
 
+    const bool factorOk = std::isfinite(desc.viewSpaceToMetersFactor) && desc.viewSpaceToMetersFactor >= 0.0f;
     const float factor = desc.viewSpaceToMetersFactor > 0.0f ? desc.viewSpaceToMetersFactor : 1.0f;
     const float a = desc.cameraNear;
     const float b = desc.cameraFar;
@@ -45,22 +46,29 @@ inline FfxMvConventions ReadFfxMvConventions(uint32_t createFlags, const ffxDisp
     const float hi = (std::max)(a, b);
     const float fov = desc.cameraFovAngleVertical;
     const bool fovOk = std::isfinite(fov) && fov > 0.0f && fov < 3.1415926f;
+    const float tanHalfFovY = fovOk ? std::tan(fov * 0.5f) : 0.0f;
+    const bool tanOk = fovOk && std::isfinite(tanHalfFovY) && tanHalfFovY > 0.0f;
     if (c.depthInfinite) {
         float nearPlane = 0.0f;
         for (float v : {a, b}) {
             if (std::isfinite(v) && v > 0.0f && v < kInfiniteFar && (nearPlane == 0.0f || v < nearPlane)) nearPlane = v;
         }
-        if (nearPlane > 0.0f && fovOk) {
+        const float scaledNear = nearPlane * factor;
+        if (factorOk && nearPlane > 0.0f && tanOk && std::isfinite(scaledNear) && scaledNear > 0.0f) {
             c.hasProjection = true;
-            c.tanHalfFovY = std::tan(fov * 0.5f);
-            c.nearClip = nearPlane * factor;
+            c.tanHalfFovY = tanHalfFovY;
+            c.nearClip = scaledNear;
             c.farClip = 0.0f;
         }
-    } else if (std::isfinite(lo) && std::isfinite(hi) && lo > 0.0f && hi > lo && hi < kInfiniteFar && fovOk) {
-        c.hasProjection = true;
-        c.tanHalfFovY = std::tan(fov * 0.5f);
-        c.nearClip = lo * factor;
-        c.farClip = hi * factor;
+    } else if (factorOk && std::isfinite(lo) && std::isfinite(hi) && lo > 0.0f && hi > lo && hi < kInfiniteFar && tanOk) {
+        const float scaledNear = lo * factor;
+        const float scaledFar = hi * factor;
+        if (std::isfinite(scaledNear) && std::isfinite(scaledFar) && scaledNear > 0.0f && scaledFar > scaledNear) {
+            c.hasProjection = true;
+            c.tanHalfFovY = tanHalfFovY;
+            c.nearClip = scaledNear;
+            c.farClip = scaledFar;
+        }
     }
     return c;
 }

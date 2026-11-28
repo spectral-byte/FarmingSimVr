@@ -4,6 +4,7 @@
 #include "core/injector_runtime.h"
 #include "lua.h"
 #include <windows.h>
+#include <array>
 #include <cstring>
 #include <iterator>
 #include <string>
@@ -23,13 +24,20 @@ bool HostEmbedsMatchingLuau(const uint8_t* rdataBase, size_t rdataSize) {
     if (!rdataBase) return false;
 
     constexpr size_t markerCount = std::size(kHostLuauFingerprint);
+    constexpr std::array<size_t, markerCount> needleLens = [] {
+        std::array<size_t, markerCount> lens{};
+        for (size_t m = 0; m < markerCount; ++m) {
+            lens[m] = std::char_traits<char>::length(kHostLuauFingerprint[m]) + 1;
+        }
+        return lens;
+    }();
     bool found[markerCount] = {};
     size_t remaining = markerCount;
     for (size_t i = 0; i < rdataSize && remaining > 0; ++i) {
         if (rdataBase[i] == 0 || (i != 0 && rdataBase[i - 1] != 0)) continue;
         for (size_t m = 0; m < markerCount; ++m) {
             if (found[m]) continue;
-            const size_t needleLen = std::strlen(kHostLuauFingerprint[m]) + 1;
+            const size_t needleLen = needleLens[m];
             if (needleLen <= rdataSize - i && std::memcmp(rdataBase + i, kHostLuauFingerprint[m], needleLen) == 0) {
                 found[m] = true;
                 --remaining;

@@ -32,6 +32,8 @@ static std::vector<float> s_evaluatedMvScaleX;
 static std::vector<float> s_evaluatedMvScaleY;
 static std::vector<NVSDK_NGX_Parameter*> s_createdParams;
 static std::vector<ID3D12Resource*> s_evaluatedMotionVectors;
+static std::vector<int> s_evaluatedPresets;
+static std::vector<float> s_evaluatedSharpness;
 
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreateFeature(
     ID3D12GraphicsCommandList*,
@@ -107,6 +109,20 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluateFeature(
         s_evaluatedMvScaleY.push_back(1.0f);
     }
 
+    int presetVal = 0;
+    if (InParameters && NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &presetVal))) {
+        s_evaluatedPresets.push_back(presetVal);
+    } else {
+        s_evaluatedPresets.push_back(0);
+    }
+
+    float sharpnessVal = 0.0f;
+    if (InParameters && NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_Sharpness, &sharpnessVal))) {
+        s_evaluatedSharpness.push_back(sharpnessVal);
+    } else {
+        s_evaluatedSharpness.push_back(0.0f);
+    }
+
     return NVSDK_NGX_Result_Success;
 }
 
@@ -129,6 +145,8 @@ protected:
         s_evaluatedMvScaleY.clear();
         s_createdParams.clear();
         s_evaluatedMotionVectors.clear();
+        s_evaluatedPresets.clear();
+        s_evaluatedSharpness.clear();
 
         m_ngx.DetachAll();
         m_ngx.SetDxgiProxy(nullptr);
@@ -990,13 +1008,10 @@ TEST_F(DlssEvaluationTest, DlssPresetAndSharpnessOverridesAppliedDuringEvaluateF
 
     ASSERT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
 
-    ASSERT_EQ(s_evaluatedParams.size(), 1u);
-    int evaluatedPreset = 0;
-    float evaluatedSharpness = 0.0f;
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &evaluatedPreset), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_Sharpness, &evaluatedSharpness), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(evaluatedPreset, static_cast<int>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
-    EXPECT_FLOAT_EQ(evaluatedSharpness, 0.35f);
+    ASSERT_EQ(s_evaluatedPresets.size(), 1u);
+    ASSERT_EQ(s_evaluatedSharpness.size(), 1u);
+    EXPECT_EQ(s_evaluatedPresets[0], static_cast<int>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
+    EXPECT_FLOAT_EQ(s_evaluatedSharpness[0], 0.35f);
 
     MockReleaseFeature(virtualHandle);
 }
@@ -1022,13 +1037,10 @@ TEST_F(DlssEvaluationTest, PreservesExplicitCallerSharpnessAndPreset) {
 
     ASSERT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
 
-    ASSERT_EQ(s_evaluatedParams.size(), 1u);
-    int evaluatedPreset = 0;
-    float evaluatedSharpness = 0.0f;
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, &evaluatedPreset), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(s_evaluatedParams[0]->Get(NVSDK_NGX_Parameter_Sharpness, &evaluatedSharpness), NVSDK_NGX_Result_Success);
-    EXPECT_EQ(evaluatedPreset, 3);
-    EXPECT_FLOAT_EQ(evaluatedSharpness, 0.75f);
+    ASSERT_EQ(s_evaluatedPresets.size(), 1u);
+    ASSERT_EQ(s_evaluatedSharpness.size(), 1u);
+    EXPECT_EQ(s_evaluatedPresets[0], 3);
+    EXPECT_FLOAT_EQ(s_evaluatedSharpness[0], 0.75f);
 
     MockReleaseFeature(virtualHandle);
 }
@@ -1444,6 +1456,7 @@ TEST_F(DlssEvaluationTest, DiagnosticsSummarizeJitterPerEyeContextUntilCountdown
 class FakeMvPass : public IMotionVectorPass {
 public:
     int recordCount = 0;
+    int pollCount = 0;
     MvPassInputs lastInputs;
     ID3D12Resource* output = reinterpret_cast<ID3D12Resource*>(0xBEEF);
     bool fail = false;
@@ -1452,6 +1465,7 @@ public:
     std::vector<MvCorrectionRequest> corrections;
     std::vector<MvSelfCheckReport> pendingReports;
     std::vector<MvSelfCheckReport> PollSelfCheck() override {
+        ++pollCount;
         std::vector<MvSelfCheckReport> out;
         out.swap(pendingReports);
         return out;
@@ -1478,6 +1492,25 @@ protected:
     ID3D12Resource* m_engineDepth = reinterpret_cast<ID3D12Resource*>(0xDDD0);
     NgxParameterImpl m_params;
     NVSDK_NGX_Handle* m_handle = nullptr;
+
+    static CameraRecord PassCamera(uint32_t eye, double x) {
+        CameraRecord r;
+        r.eye = eye;
+        r.position[0] = x;
+        r.fovY = 1.0f;
+        r.nearClip = 0.15f;
+        r.farClip = 2000.0f;
+        return r;
+    }
+
+    void ReportStereoCameras() {
+        CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+        ASSERT_TRUE(cameras.Report(PassCamera(0, 9.9)));
+        cameras.AdvanceFrame();
+        ASSERT_TRUE(cameras.Report(PassCamera(1, 10.064)));
+        cameras.AdvanceFrame();
+        ASSERT_TRUE(cameras.Report(PassCamera(0, 10.0)));
+    }
 
     void SetUpPass() {
         ASSERT_TRUE(m_ngx.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature));
@@ -1506,6 +1539,7 @@ protected:
 
 TEST_F(MvPassEvaluationTest, DlssReceivesTheInjectorsTextureAndTheGameParametersAreRestored) {
     SetUpPass();
+    ReportStereoCameras();
     m_ngx.SetMvFixEnabled(true);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
 
@@ -1523,10 +1557,13 @@ TEST_F(MvPassEvaluationTest, SequentialDualPassEyeContextsBothGetTheInjectorsTex
     SetUpPass();
     m_ngx.SetMvFixEnabled(true);
     m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    for (uint32_t subPass = 0; subPass < 2; ++subPass) {
-        m_bridge.SetSubPassIndex(subPass);
-        MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    }
+    ReportStereoCameras();
+    m_bridge.SetSubPassIndex(0);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    m_bridge.GetCameraRecords().AdvanceFrame();
+    ASSERT_TRUE(m_bridge.GetCameraRecords().Report(PassCamera(1, 10.064)));
+    m_bridge.SetSubPassIndex(1);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     ASSERT_EQ(s_evaluatedMotionVectors.size(), 2u);
     EXPECT_EQ(s_evaluatedMotionVectors[0], m_pass->output);
     EXPECT_EQ(s_evaluatedMotionVectors[1], m_pass->output);
@@ -1535,6 +1572,7 @@ TEST_F(MvPassEvaluationTest, SequentialDualPassEyeContextsBothGetTheInjectorsTex
 
 TEST_F(MvPassEvaluationTest, OnByDefaultAndSwitchableAtRuntime) {
     SetUpPass();
+    ReportStereoCameras();
     EXPECT_TRUE(m_ngx.IsMvFixEnabled());
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
@@ -1555,6 +1593,7 @@ TEST_F(MvPassEvaluationTest, OnByDefaultAndSwitchableAtRuntime) {
 
 TEST_F(MvPassEvaluationTest, MenusAndTwoDimensionalViewKeepTheEnginesMotionVectors) {
     SetUpPass();
+    ReportStereoCameras();
     m_ngx.SetMvFixEnabled(true);
     m_bridge.SetMenuVisible(true);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
@@ -1569,6 +1608,7 @@ TEST_F(MvPassEvaluationTest, MenusAndTwoDimensionalViewKeepTheEnginesMotionVecto
 
 TEST_F(MvPassEvaluationTest, EvaluationWithoutCommandListOrInputsPassesThroughWithoutDisabling) {
     SetUpPass();
+    ReportStereoCameras();
     m_ngx.SetMvFixEnabled(true);
     MockEvaluateFeature(nullptr, m_handle, &m_params, nullptr);
     NgxParameterImpl noDepth;
@@ -1581,6 +1621,7 @@ TEST_F(MvPassEvaluationTest, EvaluationWithoutCommandListOrInputsPassesThroughWi
 
 TEST_F(MvPassEvaluationTest, FailureDisablesThePassForTheSessionAndDlssKeepsTheEnginesVectors) {
     SetUpPass();
+    ReportStereoCameras();
     m_ngx.SetMvFixEnabled(true);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     ASSERT_NE(m_pass, nullptr);
@@ -1603,6 +1644,7 @@ TEST_F(MvPassEvaluationTest, FailureDisablesThePassForTheSessionAndDlssKeepsTheE
 
 TEST_F(MvPassEvaluationTest, MissingPassFromFactoryDisablesThePass) {
     SetUpPass();
+    ReportStereoCameras();
     m_ngx.SetMotionVectorPassFactory([](ID3D12GraphicsCommandList*) { return std::unique_ptr<IMotionVectorPass>(); });
     m_ngx.SetMvFixEnabled(true);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
@@ -1766,6 +1808,13 @@ TEST_F(MvSelfCheckTest, NoRequestWhileDiagnosticsAreNotArmed) {
     SetUpSdp(true);
     m_ngx.ArmDiagnostics(0);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+
+    m_bridge.GetCameraRecords().Clear();
+    ReportStereoCameras();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     ASSERT_NE(m_pass, nullptr);
     EXPECT_EQ(m_pass->recordCount, 1);
     EXPECT_TRUE(m_pass->selfChecks.empty());
@@ -1777,10 +1826,9 @@ TEST_F(MvSelfCheckTest, MissingCameraRecordSkipsThePredictionAndSaysSo) {
     m_ngx.ArmDiagnostics(4);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
 
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_EQ(m_pass->recordCount, 1);
-    EXPECT_TRUE(m_pass->selfChecks.empty());
-    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
     const std::string log = Log();
     EXPECT_NE(log.find("MvCheck skipped"), std::string::npos) << log;
     EXPECT_NE(log.find("missing camera record"), std::string::npos) << log;
@@ -1794,7 +1842,9 @@ TEST_F(MvSelfCheckTest, ARecordForTheCurrentFrameButNotThePreviousOneAlsoSkips) 
     m_bridge.SetSubPassIndex(0);
     m_ngx.ArmDiagnostics(4);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    EXPECT_TRUE(m_pass->selfChecks.empty());
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
     EXPECT_NE(Log().find("missing camera record"), std::string::npos);
 }
 
@@ -1908,16 +1958,44 @@ TEST_F(MvCorrectionEvaluationTest, TheRequestCarriesBothPreviousCamerasAndTheSca
 TEST_F(MvCorrectionEvaluationTest, FramesWithoutCameraRecordsPassTheEnginesVectorsThrough) {
     SetUpCorrection();
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_TRUE(m_pass->corrections.empty());
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
 
     CameraRecordStore& cameras = m_bridge.GetCameraRecords();
     ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
     cameras.AdvanceFrame();
     ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NE(m_pass, nullptr);
     EXPECT_TRUE(m_pass->corrections.empty());
     EXPECT_FALSE(m_ngx.IsMvFixDisabledForSession());
+}
+
+TEST_F(MvCorrectionEvaluationTest, NoOpFramePollsPendingSelfChecksWithoutDispatchingPass) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.ArmDiagnostics(0);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->recordCount, 1);
+    ASSERT_EQ(m_pass->pollCount, 1);
+
+    MvSelfCheckReport report;
+    report.eye = 0;
+    report.evalIndex = 42;
+    report.stats.total = 1024;
+    report.stats.valid = 512;
+    m_pass->pendingReports.push_back(report);
+
+    m_bridge.GetCameraRecords().Clear();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(m_pass->pollCount, 2);
+    EXPECT_TRUE(m_pass->pendingReports.empty());
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_NE(Log().find("MvCheck Eye=0 Eval #42"), std::string::npos) << Log();
 }
 
 TEST_F(MvCorrectionEvaluationTest, ASelfCheckAlongsideTheCorrectionTargetsTheSameEyesPreviousCamera) {
@@ -2064,9 +2142,9 @@ TEST_F(MvCorrectionAfrEvaluationTest, FramesWithoutCameraRecordsPassTheEnginesVe
     SetUpAfr();
     m_ngx.SetMvFixEnabled(true);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_TRUE(m_pass->corrections.empty());
-    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
     ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
     EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 1.0f);
 }
@@ -2334,6 +2412,30 @@ TEST_F(AutoNearTest, TheEstimateIsLoggedOncePerTwoSecondsWhileItMoves) {
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_NEAR(m_ngx.GetAutoNearEstimate(), 0.15f, 1e-6f);
     EXPECT_EQ(count(), 1u) << "throttled: less than 2 s since the last line";
+}
+
+TEST_F(AutoNearTest, AutoNearEstimationIsSuppressedUnderFiniteDepthModel) {
+    SetUpAuto();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NE(m_pass, nullptr);
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NEAR(m_ngx.GetAutoNearEstimate(), 0.1f, 1e-6f);
+
+    m_ngx.SetDepthModelInfinite(false);
+    EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
+
+    const size_t requestsBefore = NearRequests();
+    for (int i = 0; i < 8; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(NearRequests(), requestsBefore);
+    EXPECT_FLOAT_EQ(m_pass->corrections.back().current.nearClip, 0.15f);
+
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(100, 0.1f));
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
+    EXPECT_FLOAT_EQ(m_pass->corrections.back().current.nearClip, 0.15f);
+    EXPECT_NE(Log().find("used=camera-record"), std::string::npos) << Log();
 }
 
 }
