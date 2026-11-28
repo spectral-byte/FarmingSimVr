@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
+#include "core/detour.h"
 #include "core/injector_runtime.h"
 #include "fake_openxr_runtime.h"
 #include "input/virtual_gamepad.h"
 #include "luau/vr_bridge.h"
 #include <array>
+#include <atomic>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -219,4 +222,102 @@ TEST_F(XInputHooksTest, VibrationForThePadPlaysOnTheHandsAndVibrationForEverySlo
 
     bridge->GetVirtualGamepad().Configure(false, true);
     EXPECT_EQ(RealSlots::Read().vibration, real.vibration);
+}
+
+TEST_F(XInputHooksTest, RealXInputCallsNeverDropAcrossVirtualGamepadDisableOrTeardown) {
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = bridge;
+    auto runtime = std::make_unique<InjectorRuntime>(std::move(deps));
+    bridge->GetVirtualGamepad().Configure(true, true);
+    ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
+
+    ASSERT_EQ(XInputGetState(99, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
+    ASSERT_EQ(XInputGetCapabilities(99, 0, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
+    ASSERT_EQ(XInputSetState(99, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
+
+    std::atomic<bool> stop{false};
+    std::atomic<DWORD> unexpectedStateResult{0};
+    std::atomic<DWORD> unexpectedCapsResult{0};
+    std::atomic<DWORD> unexpectedSetResult{0};
+
+    std::thread poller([&] {
+        while (!stop.load()) {
+            const DWORD st = XInputGetState(99, nullptr);
+            if (st != ERROR_BAD_ARGUMENTS) {
+                unexpectedStateResult.store(st);
+                break;
+            }
+            const DWORD cap = XInputGetCapabilities(99, 0, nullptr);
+            if (cap != ERROR_BAD_ARGUMENTS) {
+                unexpectedCapsResult.store(cap);
+                break;
+            }
+            const DWORD vib = XInputSetState(99, nullptr);
+            if (vib != ERROR_BAD_ARGUMENTS) {
+                unexpectedSetResult.store(vib);
+                break;
+            }
+        }
+    });
+
+    for (int i = 0; i < 25; ++i) {
+        bridge->GetVirtualGamepad().Configure(false, true);
+        bridge->GetVirtualGamepad().Configure(true, true);
+    }
+    runtime.reset();
+    stop.store(true);
+    poller.join();
+
+    EXPECT_EQ(unexpectedStateResult.load(), 0u);
+    EXPECT_EQ(unexpectedCapsResult.load(), 0u);
+    EXPECT_EQ(unexpectedSetResult.load(), 0u);
+}
+
+TEST_F(XInputHooksTest, PartialHookInstallFailureRollsBackAndPreservesRealXInputCalls) {
+    HMODULE xinput = GetModuleHandleW(L"xinput1_4.dll");
+    if (!xinput) xinput = LoadLibraryW(L"xinput1_4.dll");
+    ASSERT_NE(xinput, nullptr);
+    void* getStateTarget = reinterpret_cast<void*>(GetProcAddress(xinput, "XInputGetState"));
+    ASSERT_NE(getStateTarget, nullptr);
+
+    static fs25vr::FunctionDetour s_blockingDetour;
+    const auto passthrough = +[](DWORD userIndex, XINPUT_STATE* state) -> DWORD {
+        auto orig = reinterpret_cast<fs25vr::VirtualGamepad::GetStateFn>(s_blockingDetour.GetOriginal());
+        return orig ? orig(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
+    };
+    ASSERT_TRUE(s_blockingDetour.Install(getStateTarget, reinterpret_cast<void*>(passthrough)));
+
+    std::atomic<bool> stop{false};
+    std::atomic<DWORD> unexpectedCapsResult{0};
+    std::atomic<DWORD> unexpectedSetResult{0};
+    std::thread poller([&] {
+        while (!stop.load()) {
+            const DWORD cap = XInputGetCapabilities(99, 0, nullptr);
+            if (cap != ERROR_BAD_ARGUMENTS) {
+                unexpectedCapsResult.store(cap);
+                break;
+            }
+            const DWORD vib = XInputSetState(99, nullptr);
+            if (vib != ERROR_BAD_ARGUMENTS) {
+                unexpectedSetResult.store(vib);
+                break;
+            }
+        }
+    });
+
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = bridge;
+    InjectorRuntime runtime(std::move(deps));
+
+    stop.store(true);
+    poller.join();
+
+    EXPECT_EQ(unexpectedCapsResult.load(), 0u);
+    EXPECT_EQ(unexpectedSetResult.load(), 0u);
+    EXPECT_FALSE(bridge->GetVirtualGamepad().AreHooksInstalled());
+    EXPECT_EQ(XInputGetCapabilities(99, 0, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
+    EXPECT_EQ(XInputSetState(99, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
+    EXPECT_EQ(XInputGetState(99, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
+
+    s_blockingDetour.Uninstall();
 }

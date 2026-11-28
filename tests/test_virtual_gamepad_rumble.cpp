@@ -243,3 +243,52 @@ TEST_F(VirtualGamepadRumbleTest, VibrationSetForAnotherSlotReachesNoHandAndGoesT
     for (int i = 0; i < 3; ++i) Frame();
     EXPECT_TRUE(headset.HapticPulses().empty());
 }
+
+TEST_F(VirtualGamepadRumbleTest, AShorterCompanionPulseDoesNotShortenAnActiveLongerOne) {
+    TurnPadOn();
+    ASSERT_EQ(GameRumbles(0, 13107), static_cast<DWORD>(ERROR_SUCCESS));
+    Frame();
+    ASSERT_FALSE(PulsesTo(kRight).empty());
+
+    bridge.GetVirtualGamepad().NoteCompanionPulse(kRight, 45.0);
+    Frame(5.0);
+    bridge.GetVirtualGamepad().NoteCompanionPulse(kRight, 10.0);
+
+    const int frames = FramesUntilAnotherPulseTo(kRight, 5.0, 14);
+    EXPECT_GE(frames, 8);
+    EXPECT_LE(frames, 9);
+}
+
+TEST(VirtualGamepadRumbleConcurrencyTest, RumbleHapticPulsesInvokeOpenXrOutsideTheGamepadMutex) {
+    class ReentrantHapticRuntime : public fs25vr::FakeOpenXrRuntime {
+    public:
+        fs25vr::VirtualGamepad* pad = nullptr;
+        bool reentered = false;
+
+        XrResult ApplyHapticFeedback(XrSession session, const XrHapticActionInfo* info,
+                                     const XrHapticBaseHeader* feedback) override {
+            if (pad) {
+                pad->SetInputsInUse(kLeft, 0);
+                reentered = true;
+            }
+            return FakeOpenXrRuntime::ApplyHapticFeedback(session, info, feedback);
+        }
+    };
+
+    auto runtime = std::make_shared<ReentrantHapticRuntime>();
+    auto manager = std::make_shared<fs25vr::OpenXrManager>(runtime);
+    ASSERT_TRUE(manager->Initialize() && manager->CreateSession() && manager->CreateTrackingSpaces());
+    manager->PollEvents();
+    ASSERT_TRUE(manager->IsSessionRunning());
+
+    fs25vr::VRBridge localBridge(manager, nullptr);
+    runtime->pad = &localBridge.GetVirtualGamepad();
+    localBridge.GetVirtualGamepad().Configure(true, true);
+    ASSERT_TRUE(manager->BeginFrame());
+    XINPUT_VIBRATION vibration{ kFull, 0 };
+    ASSERT_EQ(localBridge.GetVirtualGamepad().SetState(3, &vibration), static_cast<DWORD>(ERROR_SUCCESS));
+    manager->EndFrame();
+    ASSERT_TRUE(manager->BeginFrame());
+    EXPECT_TRUE(runtime->reentered);
+    runtime->pad = nullptr;
+}
