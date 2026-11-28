@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -44,11 +45,16 @@ std::filesystem::path DefaultCompanionSettingsPath() {
 }
 
 std::optional<float> ReadCompanionSettingFloat(const std::filesystem::path& file, std::string_view name) {
-    std::ifstream in(file, std::ios::binary);
+    std::ifstream in(file, std::ios::binary | std::ios::ate);
     if (!in) return std::nullopt;
-    constexpr std::streamsize kMaxBytes = 1 << 20;
-    std::string text(static_cast<size_t>(kMaxBytes), '\0');
-    in.read(text.data(), kMaxBytes);
+    const std::ifstream::pos_type endPos = in.tellg();
+    if (endPos <= 0) return std::nullopt;
+    constexpr std::streamoff kMaxBytes = 1 << 20;
+    const std::streamsize bytesToRead = static_cast<std::streamsize>((std::min)(static_cast<std::streamoff>(endPos), kMaxBytes));
+    in.seekg(0, std::ios::beg);
+    if (!in) return std::nullopt;
+    std::string text(static_cast<size_t>(bytesToRead), '\0');
+    in.read(text.data(), bytesToRead);
     text.resize(static_cast<size_t>(in.gcount()));
 
     const std::string open = "<" + std::string(name) + ">";

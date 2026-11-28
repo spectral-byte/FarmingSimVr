@@ -3003,4 +3003,197 @@ TEST(OpenXrManagerTest, HeadPoseLocateFailuresAreLoggedAgainInANewManagerAndAfte
     EXPECT_EQ(capture.Count(failed), 3u);
 }
 
+TEST(OpenXrManagerTest, CreateEyeSwapchainsSessionLostEntersPassThrough) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsSessionRunning());
+
+    dispatch->createSwapchainResult = XR_ERROR_SESSION_LOST;
+    EXPECT_FALSE(manager.CreateEyeSwapchains(1920, 1080));
+    EXPECT_FALSE(manager.HasEyeSwapchains());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+    EXPECT_TRUE(dispatch->destroySessionCalled);
+}
+
+TEST(OpenXrManagerTest, CopyBackBufferToEyeAcquireFailureClosesFrameAndRecoversOrEntersPassThrough) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    dispatch->acquireSwapchainImageResult = XR_ERROR_RUNTIME_FAILURE;
+    EXPECT_FALSE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_EQ(dispatch->endFrameCalls, 1u);
+
+    dispatch->acquireSwapchainImageResult = XR_SUCCESS;
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_TRUE(manager.SubmitFramePair());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(dispatch->endFrameCalls, 2u);
+
+    dispatch->acquireSwapchainImageResult = XR_ERROR_SESSION_LOST;
+    EXPECT_FALSE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+}
+
+TEST(OpenXrManagerTest, CopyBackBufferToEyeWaitFailureClosesFrameAndEntersPassThroughIfLost) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    dispatch->waitSwapchainImageResult = XR_ERROR_RUNTIME_FAILURE;
+    EXPECT_FALSE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_EQ(dispatch->releaseSwapchainImageCalls, 1u);
+    EXPECT_EQ(dispatch->endFrameCalls, 1u);
+
+    dispatch->waitSwapchainImageResult = XR_ERROR_INSTANCE_LOST;
+    EXPECT_FALSE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+}
+
+TEST(OpenXrManagerTest, CopyBackBufferToEyeReleaseFailureClosesFrameAndEntersPassThroughIfLost) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    dispatch->releaseSwapchainImageResult = XR_ERROR_RUNTIME_FAILURE;
+    EXPECT_FALSE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_EQ(dispatch->endFrameCalls, 1u);
+
+    dispatch->releaseSwapchainImageResult = XR_ERROR_SESSION_LOST;
+    EXPECT_FALSE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+}
+
+TEST(OpenXrManagerTest, SubmitFramePairAndSubmitMenuQuadCloseBegunFrameWhenIncomplete) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.IsFrameBegun());
+    EXPECT_FALSE(manager.SubmitMenuQuad());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(dispatch->endFrameCalls, 1u);
+
+    ASSERT_TRUE(manager.BeginFrame());
+    EXPECT_TRUE(manager.IsFrameBegun());
+    EXPECT_FALSE(manager.SubmitMenuQuad());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(dispatch->endFrameCalls, 2u);
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_TRUE(manager.IsFrameBegun());
+    EXPECT_FALSE(manager.SubmitFramePair());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(dispatch->endFrameCalls, 3u);
+}
+
+TEST(OpenXrManagerTest, ShutdownResetsTimingCapabilitiesFocusAndSubmittedCountsForReInit) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = {
+        XR_KHR_D3D12_ENABLE_EXTENSION_NAME,
+        XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME
+    };
+    dispatch->mockRuntimeName = "First Runtime";
+    dispatch->mockPredictedDisplayTime = 5000000000LL;
+
+    OpenXrManager manager(dispatch);
+    int64_t qpcTicks = 1000;
+    manager.SetPerformanceCounterSource([&]() {
+        return OpenXrManager::PerformanceCounterSample{ qpcTicks, 10000000 };
+    });
+
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+    dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    manager.PollEvents();
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    ASSERT_TRUE(manager.SubmitFramePair());
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), 1u);
+    EXPECT_TRUE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
+
+    qpcTicks = 2000;
+    EXPECT_EQ(manager.GetCurrentXrTime(), 5000000000LL + 100000LL);
+
+    manager.Shutdown();
+
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(manager.GetRuntimeInfo().systemId, XR_NULL_SYSTEM_ID);
+    EXPECT_TRUE(manager.GetRuntimeInfo().runtimeName.empty());
+    EXPECT_FALSE(manager.GetRuntimeInfo().d3d12ExtensionSupported);
+    EXPECT_FALSE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
+    EXPECT_EQ(manager.GetCurrentXrTime(), 200000LL);
+
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    dispatch->mockRuntimeName = "Second Runtime";
+    dispatch->tracking.SetHeadPose(HeadPose{ Vector3(0.0f, 1.8f, 0.0f), Quaternion(0.0f, 0.0f, 0.0f, 1.0f), true });
+    ASSERT_TRUE(manager.Initialize());
+    EXPECT_FALSE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
+    EXPECT_EQ(manager.GetRuntimeInfo().runtimeName, "Second Runtime");
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();
+    manager.PollHeadPose();
+    manager.AlignMenuQuadToHeadPose();
+
+    dispatch->tracking.SetHeadPose(HeadPose{ Vector3(3.0f, 1.8f, 0.0f), Quaternion(0.0f, 0.0f, 0.0f, 1.0f), true });
+    dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    manager.PollEvents();
+    ASSERT_TRUE(manager.BeginFrame());
+    EXPECT_NEAR(manager.ComputeMenuQuadPose().position.x, 3.0f, 0.01f);
+}
+
+TEST(OpenXrManagerTest, CreateCursorSwapchainSessionLostEntersPassThrough) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();
+
+    dispatch->createSwapchainResult = XR_ERROR_SESSION_LOST;
+    EXPECT_FALSE(manager.CreateCursorSwapchain());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+}
+
 }

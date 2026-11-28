@@ -7,6 +7,121 @@
 
 namespace {
 
+constexpr DWORD kCursorUploadWaitTimeoutMs = 5000;
+
+bool UploadPixelsToResource(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* destRes,
+                            uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels) {
+    D3D12_RESOURCE_DESC textureDesc = destRes->GetDesc();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT numRows = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 totalBytes = 0;
+    device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+    if (totalBytes == 0 || numRows == 0 || numRows > height) {
+        return false;
+    }
+
+    const size_t copyBytes = static_cast<size_t>(width) * sizeof(uint32_t);
+    if (copyBytes > footprint.Footprint.RowPitch || pixels.size() < static_cast<size_t>(numRows) * width) {
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC bufDesc{};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = totalBytes;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+    if (FAILED(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+                                               D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                               IID_PPV_ARGS(&uploadBuffer))) || !uploadBuffer) {
+        return false;
+    }
+
+    {
+        fs25vr::ScopedResourceMap<uint8_t> mappedBuffer(uploadBuffer.Get(), 0);
+        if (!mappedBuffer) {
+            return false;
+        }
+        const uint8_t* pSrc = reinterpret_cast<const uint8_t*>(pixels.data());
+        uint8_t* pDst = mappedBuffer.Get() + footprint.Offset;
+        for (UINT r = 0; r < numRows; ++r) {
+            memcpy(pDst + static_cast<size_t>(r) * footprint.Footprint.RowPitch,
+                   pSrc + static_cast<size_t>(r) * copyBytes,
+                   copyBytes);
+        }
+    }
+
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> cmdAlloc;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> cmdList;
+    if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc))) || !cmdAlloc) {
+        return false;
+    }
+    if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr,
+                                         IID_PPV_ARGS(&cmdList))) || !cmdList) {
+        return false;
+    }
+    fs25vr::ScopedCommandListRecording cmdListScope(cmdList.Get());
+
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) || !fence) {
+        return false;
+    }
+    fs25vr::ScopedEventHandle hEvent = fs25vr::ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
+    if (!hEvent.IsValid()) {
+        return false;
+    }
+
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = destRes;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    cmdList->ResourceBarrier(1, &barrier);
+
+    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+    dstLoc.pResource = destRes;
+    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLoc.SubresourceIndex = 0;
+
+    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+    srcLoc.pResource = uploadBuffer.Get();
+    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    srcLoc.PlacedFootprint = footprint;
+
+    cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    cmdList->ResourceBarrier(1, &barrier);
+
+    if (FAILED(cmdListScope.Close())) {
+        return false;
+    }
+    ID3D12CommandList* lists[] = { cmdList.Get() };
+    queue->ExecuteCommandLists(1, lists);
+
+    if (FAILED(queue->Signal(fence.Get(), 1))) {
+        return false;
+    }
+    if (fence->GetCompletedValue() < 1) {
+        if (FAILED(fence->SetEventOnCompletion(1, hEvent.Get()))) {
+            return false;
+        }
+        if (WaitForSingleObject(hEvent.Get(), kCursorUploadWaitTimeoutMs) != WAIT_OBJECT_0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static const char* const s_arrowCursorPattern[32] = {
     "X                               ",
     "XX                              ",
@@ -104,6 +219,7 @@ XrPosef OpenXrCursorOverlay::ComputeCursorQuadPose(const XrPosef& menuQuadPose, 
 bool OpenXrCursorOverlay::CreateSwapchain(XrSession session, std::shared_ptr<IOpenXrDispatch> dispatch,
                                          uint32_t width, uint32_t height, DXGI_FORMAT format,
                                          ID3D12Device* device, ID3D12CommandQueue* queue) {
+    m_lastXrResult = XR_SUCCESS;
     if (session == XR_NULL_HANDLE || !dispatch) {
         return false;
     }
@@ -135,6 +251,7 @@ bool OpenXrCursorOverlay::CreateSwapchain(XrSession session, std::shared_ptr<IOp
     }
 
     XrSwapchainCreateInfo createInfo{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
+    createInfo.createFlags = XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT;
     createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
     createInfo.format = selectedFormat;
     createInfo.sampleCount = 1;
@@ -146,11 +263,17 @@ bool OpenXrCursorOverlay::CreateSwapchain(XrSession session, std::shared_ptr<IOp
 
     XrResult res = dispatch->CreateSwapchain(session, &createInfo, &m_swapchain.handle);
     if (XR_FAILED(res)) {
+        m_lastXrResult = res;
         LogError("OpenXrCursorOverlay::CreateSwapchain: CreateSwapchain failed (result " + std::to_string(res) + ")");
         return false;
     }
 
-    EnumerateSwapchainImages(dispatch);
+    if (!EnumerateSwapchainImages(dispatch)) {
+        dispatch->DestroySwapchain(m_swapchain.handle);
+        m_swapchain.handle = XR_NULL_HANDLE;
+        m_swapchain.images.clear();
+        return false;
+    }
 
     m_swapchain.width = width;
     m_swapchain.height = height;
@@ -176,21 +299,31 @@ void OpenXrCursorOverlay::DestroySwapchain(std::shared_ptr<IOpenXrDispatch> disp
     m_swapchain.images.clear();
     m_hasSwapchain = false;
     m_textureUploaded = false;
+    m_lastXrResult = XR_SUCCESS;
     m_hasLastSubmittedCursorQuadLayer = false;
 }
 
 bool OpenXrCursorOverlay::EnumerateSwapchainImages(std::shared_ptr<IOpenXrDispatch> dispatch) {
     if (m_swapchain.handle == XR_NULL_HANDLE || !dispatch) return false;
     uint32_t imgCount = 0;
-    if (XR_FAILED(dispatch->EnumerateSwapchainImages(m_swapchain.handle, 0, &imgCount, nullptr)) || imgCount == 0) {
+    XrResult res = dispatch->EnumerateSwapchainImages(m_swapchain.handle, 0, &imgCount, nullptr);
+    if (XR_FAILED(res) || imgCount == 0) {
+        if (XR_FAILED(res)) m_lastXrResult = res;
         return false;
     }
     m_swapchain.images.resize(imgCount, { XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR });
-    return XR_SUCCEEDED(dispatch->EnumerateSwapchainImages(m_swapchain.handle, imgCount, &imgCount,
-        reinterpret_cast<XrSwapchainImageBaseHeader*>(m_swapchain.images.data())));
+    res = dispatch->EnumerateSwapchainImages(m_swapchain.handle, imgCount, &imgCount,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(m_swapchain.images.data()));
+    if (XR_FAILED(res)) {
+        m_lastXrResult = res;
+        m_swapchain.images.clear();
+        return false;
+    }
+    return true;
 }
 
 bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue* queue, std::shared_ptr<IOpenXrDispatch> dispatch) {
+    m_lastXrResult = XR_SUCCESS;
     if (m_textureUploaded) {
         return true;
     }
@@ -207,99 +340,42 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
 
     XrSwapchainImageAcquireInfo acqInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     uint32_t imgIdx = 0;
-    if (XR_FAILED(dispatch->AcquireSwapchainImage(m_swapchain.handle, &acqInfo, &imgIdx))) {
+    XrResult res = dispatch->AcquireSwapchainImage(m_swapchain.handle, &acqInfo, &imgIdx);
+    if (XR_FAILED(res)) {
+        m_lastXrResult = res;
         return false;
     }
 
     XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = XR_INFINITE_DURATION;
-    if (XR_FAILED(dispatch->WaitSwapchainImage(m_swapchain.handle, &waitInfo))) {
+    res = dispatch->WaitSwapchainImage(m_swapchain.handle, &waitInfo);
+    if (XR_FAILED(res)) {
+        m_lastXrResult = res;
+        XrSwapchainImageReleaseInfo relInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        XrResult relRes = dispatch->ReleaseSwapchainImage(m_swapchain.handle, &relInfo);
+        if (XR_FAILED(relRes) && res != XR_ERROR_SESSION_LOST && res != XR_ERROR_INSTANCE_LOST) {
+            m_lastXrResult = relRes;
+        }
         return false;
     }
 
-    ID3D12Resource* destRes = m_swapchain.images[imgIdx].texture;
-    if (destRes) {
-        UINT64 uploadBufferSize = 0;
-        D3D12_RESOURCE_DESC textureDesc = destRes->GetDesc();
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-        UINT numRows = 0;
-        UINT64 rowSizeInBytes = 0;
-        UINT64 totalBytes = 0;
-        device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
-        uploadBufferSize = totalBytes;
-
-        D3D12_HEAP_PROPERTIES heapProps{};
-        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC bufDesc{};
-        bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bufDesc.Width = uploadBufferSize;
-        bufDesc.Height = 1;
-        bufDesc.DepthOrArraySize = 1;
-        bufDesc.MipLevels = 1;
-        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
-        bufDesc.SampleDesc.Count = 1;
-        bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
-        if (SUCCEEDED(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-                                                      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                      IID_PPV_ARGS(&uploadBuffer)))) {
-            ScopedResourceMap<uint8_t> mappedBuffer(uploadBuffer.Get(), 0);
-            if (mappedBuffer) {
-                const uint8_t* pSrc = reinterpret_cast<const uint8_t*>(pixels.data());
-                uint8_t* pDst = mappedBuffer.Get() + footprint.Offset;
-                for (UINT r = 0; r < numRows; ++r) {
-                    memcpy(pDst + r * footprint.Footprint.RowPitch,
-                           pSrc + r * (width * sizeof(uint32_t)),
-                           width * sizeof(uint32_t));
-                }
-                mappedBuffer.Unmap();
-
-                Microsoft::WRL::ComPtr<ID3D12CommandAllocator> cmdAlloc;
-                Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> cmdList;
-                device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
-                device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList));
-                ScopedCommandListRecording cmdListScope(cmdList.Get());
-
-                D3D12_RESOURCE_BARRIER barrier{};
-                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barrier.Transition.pResource = destRes;
-                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                cmdList->ResourceBarrier(1, &barrier);
-
-                D3D12_TEXTURE_COPY_LOCATION dstLoc{};
-                dstLoc.pResource = destRes;
-                dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                dstLoc.SubresourceIndex = 0;
-
-                D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-                srcLoc.pResource = uploadBuffer.Get();
-                srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-                srcLoc.PlacedFootprint = footprint;
-
-                cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
-
-                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-                cmdList->ResourceBarrier(1, &barrier);
-
-                cmdListScope.Close();
-                ID3D12CommandList* lists[] = { cmdList.Get() };
-                queue->ExecuteCommandLists(1, lists);
-
-                Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-                device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-                ScopedEventHandle hEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
-                queue->Signal(fence.Get(), 1);
-                fence->SetEventOnCompletion(1, hEvent.Get());
-                WaitForSingleObject(hEvent.Get(), INFINITE);
-            }
+    bool uploaded = false;
+    if (imgIdx < m_swapchain.images.size()) {
+        ID3D12Resource* destRes = m_swapchain.images[imgIdx].texture;
+        if (destRes) {
+            uploaded = UploadPixelsToResource(device, queue, destRes, width, height, pixels);
         }
     }
 
     XrSwapchainImageReleaseInfo relInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-    dispatch->ReleaseSwapchainImage(m_swapchain.handle, &relInfo);
+    XrResult relRes = dispatch->ReleaseSwapchainImage(m_swapchain.handle, &relInfo);
+    if (XR_FAILED(relRes)) {
+        m_lastXrResult = relRes;
+        return false;
+    }
+    if (!uploaded) {
+        return false;
+    }
 
     m_textureUploaded = true;
     return true;

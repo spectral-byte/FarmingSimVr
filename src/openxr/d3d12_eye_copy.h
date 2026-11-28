@@ -11,6 +11,7 @@ namespace fs25vr {
 
 class D3D12EyeCopy {
 public:
+    ~D3D12EyeCopy();
     static constexpr uint32_t kRingSize = 2;
 
     void SetDeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);

@@ -90,7 +90,7 @@ FunctionDetour::~FunctionDetour() {
 FunctionDetour::FunctionDetour(FunctionDetour&& other) noexcept
     : m_target(std::exchange(other.m_target, nullptr)),
       m_detour(std::exchange(other.m_detour, nullptr)),
-      m_original(std::exchange(other.m_original, nullptr)),
+      m_original(other.m_original.exchange(nullptr)),
       m_installed(other.m_installed.exchange(false)) {}
 
 FunctionDetour& FunctionDetour::operator=(FunctionDetour&& other) noexcept {
@@ -98,8 +98,8 @@ FunctionDetour& FunctionDetour::operator=(FunctionDetour&& other) noexcept {
         Uninstall();
         m_target = std::exchange(other.m_target, nullptr);
         m_detour = std::exchange(other.m_detour, nullptr);
-        m_original = std::exchange(other.m_original, nullptr);
-        m_installed = other.m_installed.exchange(false);
+        m_original.store(other.m_original.exchange(nullptr));
+        m_installed.store(other.m_installed.exchange(false));
     }
     return *this;
 }
@@ -109,7 +109,7 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
         LogError("FunctionDetour: Target or detour function pointer is null.");
         return false;
     }
-    if (m_installed) {
+    if (m_installed.load(std::memory_order_acquire)) {
         LogWarn("FunctionDetour: Detour already installed.");
         return false;
     }
@@ -139,10 +139,13 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
 
     m_target = targetFunction;
     m_detour = detourFunction;
-    m_original = original;
+    m_original.store(original, std::memory_order_release);
+    m_installed.store(true, std::memory_order_release);
 
     status = MH_EnableHook(targetFunction);
     if (status != MH_OK) {
+        m_installed.store(false, std::memory_order_release);
+        m_original.store(nullptr, std::memory_order_release);
         LogError(std::string("FunctionDetour: MH_EnableHook failed: ") + MH_StatusToString(status));
         if (MH_RemoveHook(targetFunction) == MH_OK) {
             ForgetHook(targetFunction);
@@ -151,17 +154,15 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
         }
         m_target = nullptr;
         m_detour = nullptr;
-        m_original = nullptr;
         return false;
     }
 
-    m_installed = true;
     LogInfo("FunctionDetour: Successfully installed detour.");
     return true;
 }
 
 bool FunctionDetour::Uninstall() {
-    if (!m_installed || !m_target) {
+    if (!m_installed.load(std::memory_order_acquire) || !m_target) {
         return false;
     }
 
@@ -170,6 +171,8 @@ bool FunctionDetour::Uninstall() {
         LogError(std::string("FunctionDetour: MH_DisableHook failed: ") + MH_StatusToString(disableStatus));
         return false;
     }
+    m_installed.store(false, std::memory_order_release);
+    m_original.store(nullptr, std::memory_order_release);
     const MH_STATUS removeStatus = g_failNextRemoval.exchange(false) ? MH_ERROR_MEMORY_PROTECT : MH_RemoveHook(m_target);
     if (removeStatus == MH_OK) {
         ForgetHook(m_target);
@@ -180,8 +183,6 @@ bool FunctionDetour::Uninstall() {
 
     m_target = nullptr;
     m_detour = nullptr;
-    m_original = nullptr;
-    m_installed = false;
 
     LogInfo("FunctionDetour: Successfully uninstalled detour.");
     return removeStatus == MH_OK;

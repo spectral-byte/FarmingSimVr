@@ -18,13 +18,13 @@ void OnProcessAttach(HMODULE selfModule) {
 }
 
 void OnProcessDetach(LPVOID lpReserved) {
-    LogInfo("Farming Simulator 25 VR Injector detaching from process.");
     if (lpReserved != nullptr) {
         s_processTerminating = true;
-    } else {
-        NgxInterceptor::DetachLiveHooks();
-        FidelityFxInterceptor::DetachLiveHooks();
+        return;
     }
+    LogInfo("Farming Simulator 25 VR Injector detaching from process.");
+    NgxInterceptor::DetachLiveHooks();
+    FidelityFxInterceptor::DetachLiveHooks();
     Logger::Instance().Flush();
 }
 

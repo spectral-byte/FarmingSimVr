@@ -83,6 +83,8 @@ enum class FirstCall {
 };
 FirstCall g_firstCall = FirstCall::EndsTheProcess;
 std::atomic<int> g_filterCalls{0};
+std::atomic<int> g_versionLoadsDuringCrash{0};
+bool g_trackVersionLoads = false;
 
 std::vector<HMODULE> LoadedModules() {
     std::vector<HMODULE> modules(256);
@@ -123,7 +125,12 @@ LONG WINAPI GamesFilter(EXCEPTION_POINTERS* info) {
     std::fprintf(stderr, "previous filter ran: call=%d code=%08lX rva=%llX thread=%lu\n", call,
                  info->ExceptionRecord->ExceptionCode, static_cast<unsigned long long>(address - base),
                  GetCurrentThreadId());
-    if (call == 1) ReportModulesLoadedSinceTheFault();
+    if (call == 1) {
+        ReportModulesLoadedSinceTheFault();
+        if (g_trackVersionLoads) {
+            std::fprintf(stderr, "version loads during crash: %d\n", g_versionLoadsDuringCrash.load());
+        }
+    }
     if (call == 1 && g_firstCall == FirstCall::CrashesItself) {
         WriteThroughANullPointer(nullptr);
     } else if (call == 1 && g_firstCall == FirstCall::CrashesAnotherThread) {
@@ -269,6 +276,22 @@ enum class FilterInstalledLater {
 };
 
 FunctionDetour g_loadLibraryEx;
+FunctionDetour g_loadLibraryW;
+
+bool EndsWithVersionDll(LPCWSTR name) {
+    if (!name) return false;
+    const std::wstring_view given(name);
+    const std::wstring_view wanted = L"version.dll";
+    return given.size() >= wanted.size() &&
+           _wcsicmp(given.substr(given.size() - wanted.size()).data(), wanted.data()) == 0;
+}
+
+HMODULE WINAPI TrackingLoadLibraryW(LPCWSTR name) {
+    if (g_trackVersionLoads && EndsWithVersionDll(name)) {
+        g_versionLoadsDuringCrash.fetch_add(1);
+    }
+    return reinterpret_cast<decltype(&LoadLibraryW)>(g_loadLibraryW.GetOriginal())(name);
+}
 
 HMODULE WINAPI LoadLibraryExThatCannotLoadDbghelp(LPCWSTR name, HANDLE file, DWORD flags) {
     const std::wstring_view wanted = L"dbghelp.dll";
@@ -277,6 +300,9 @@ HMODULE WINAPI LoadLibraryExThatCannotLoadDbghelp(LPCWSTR name, HANDLE file, DWO
         _wcsicmp(given.substr(given.size() - wanted.size()).data(), wanted.data()) == 0) {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return nullptr;
+    }
+    if (g_trackVersionLoads && EndsWithVersionDll(name)) {
+        g_versionLoadsDuringCrash.fetch_add(1);
     }
     return reinterpret_cast<decltype(&LoadLibraryExW)>(g_loadLibraryEx.GetOriginal())(name, file, flags);
 }
@@ -288,6 +314,7 @@ struct ChildSetup {
     DumpWriter dumpWriter = DumpWriter::TheSystems;
     bool unloadsAModule = false;
     size_t stackToLeave = 0;
+    bool trackVersionLoadsDuringCrash = false;
 };
 
 ChildSetup AfterTheFirstFactory(DumpWriter writer = DumpWriter::TheSystems) {
@@ -358,6 +385,18 @@ void CrashLikeTheGame(Fault fault = Fault::WriteThroughANullPointer, FirstCall f
         const HRESULT created = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
         std::fprintf(stderr, "factory created: hr=%08lX\n", static_cast<unsigned long>(created));
         std::fprintf(stderr, "dbghelp after the first factory call: %s\n", PathOfDbghelpInThisProcess().c_str());
+    }
+    if (setup.trackVersionLoadsDuringCrash) {
+        g_trackVersionLoads = true;
+        g_versionLoadsDuringCrash.store(0);
+        if (!g_loadLibraryW.Install(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW")),
+                                    reinterpret_cast<void*>(&TrackingLoadLibraryW)) ||
+            (!g_loadLibraryEx.IsInstalled() &&
+             !g_loadLibraryEx.Install(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryExW")),
+                                      reinterpret_cast<void*>(&LoadLibraryExThatCannotLoadDbghelp)))) {
+            std::fprintf(stderr, "could not stand in for LoadLibraryW\n");
+            ExitProcess(1);
+        }
     }
     FunctionDetour outputDebugString;
     if (fault == Fault::WhileTheInjectorWritesItsLog &&
@@ -841,6 +880,16 @@ TEST_F(CrashReporterTest, TheCrashLoadsNoLibrary) {
     RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     EXPECT_NE(m_childReport.find("modules loaded since the fault: 0"), std::string::npos) << m_childReport;
+}
+
+TEST_F(CrashReporterTest, PrimedSystemVersionDllMakesNoLoadLibraryCallDuringCrash) {
+    ChildSetup setup = AfterTheFirstFactory();
+    setup.trackVersionLoadsDuringCrash = true;
+
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, setup);
+
+    EXPECT_NE(m_childReport.find("version loads during crash: 0"), std::string::npos) << m_childReport;
+    EXPECT_TRUE(Minidump(BytesOf(DumpPath())).HasSignature());
 }
 
 TEST_F(CrashReporterTest, WithoutDbghelpTheCrashLineSaysWhyThereIsNoDump) {
