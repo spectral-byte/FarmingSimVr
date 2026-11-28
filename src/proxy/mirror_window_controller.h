@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -126,6 +127,7 @@ private:
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;
 
+    mutable std::mutex m_mouseClipMutex;
     std::optional<RECT> m_gameClip;
     std::optional<POINT> m_gameClipOrigin;
     bool m_holdingMouse = false;

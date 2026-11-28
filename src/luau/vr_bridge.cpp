@@ -98,10 +98,71 @@ VRBridge& VRBridge::FromUpvalue(lua_State* L) {
 
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
                    std::shared_ptr<NgxInterceptor> ngxInterceptor,
-                   std::string version)
+                   std::string version,
+                   std::shared_ptr<FidelityFxInterceptor> ffxInterceptor)
     : m_openXrManager(std::move(openXrManager)),
       m_ngxInterceptor(std::move(ngxInterceptor)),
+      m_ffxInterceptor(std::move(ffxInterceptor)),
       m_version(std::move(version)) {
+}
+
+FidelityFxInterceptor* VRBridge::ResolveFidelityFxInterceptor() const {
+    if (m_ffxInterceptor) return m_ffxInterceptor.get();
+    return m_ngxInterceptor ? m_ngxInterceptor->GetFidelityFxInterceptor() : nullptr;
+}
+
+bool VRBridge::SetMvFixEnabled(bool enabled) {
+    FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
+    if (!m_ngxInterceptor && !ffx) return false;
+
+    const bool ngxActive =
+        m_ngxInterceptor && (m_ngxInterceptor->IsAttached() || m_ngxInterceptor->GetActiveVirtualHandleCount() > 0);
+    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
+
+    const bool ngxOk = m_ngxInterceptor ? (m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled) : false;
+    const bool ffxOk = ffx ? (ffx->SetMvFixEnabled(enabled) == enabled) : false;
+
+    if (ngxActive && !ffxActive) return ngxOk;
+    if (ffxActive && !ngxActive) return ffxOk;
+    if (ngxActive && ffxActive) return ngxOk || ffxOk;
+    if (m_ngxInterceptor && ffx) return ngxOk && ffxOk;
+    return m_ngxInterceptor ? ngxOk : ffxOk;
+}
+
+bool VRBridge::IsMvFixEnabled() const {
+    FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
+    const bool ngxActive =
+        m_ngxInterceptor && (m_ngxInterceptor->IsAttached() || m_ngxInterceptor->GetActiveVirtualHandleCount() > 0);
+    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
+
+    if (ngxActive && !ffxActive) return m_ngxInterceptor->IsMvFixEnabled();
+    if (ffxActive && !ngxActive) return ffx->IsMvFixEnabled();
+    if (ngxActive && ffxActive) return m_ngxInterceptor->IsMvFixEnabled() || ffx->IsMvFixEnabled();
+    if (m_ngxInterceptor && ffx) return m_ngxInterceptor->IsMvFixEnabled() && ffx->IsMvFixEnabled();
+    if (m_ngxInterceptor) return m_ngxInterceptor->IsMvFixEnabled();
+    if (ffx) return ffx->IsMvFixEnabled();
+    return false;
+}
+
+bool VRBridge::IsMvFixDisabledForSession() const {
+    FidelityFxInterceptor* ffx = ResolveFidelityFxInterceptor();
+    const bool ngxActive =
+        m_ngxInterceptor && (m_ngxInterceptor->IsAttached() || m_ngxInterceptor->GetActiveVirtualHandleCount() > 0);
+    const bool ffxActive = ffx && (ffx->IsAttached() || ffx->GetActiveVirtualContextCount() > 0);
+
+    if (ngxActive && !ffxActive) return m_ngxInterceptor->IsMvFixDisabledForSession();
+    if (ffxActive && !ngxActive) return ffx->IsMvFixDisabledForSession();
+    if (ngxActive && ffxActive) return m_ngxInterceptor->IsMvFixDisabledForSession() && ffx->IsMvFixDisabledForSession();
+    if (m_ngxInterceptor && ffx) return m_ngxInterceptor->IsMvFixDisabledForSession() || ffx->IsMvFixDisabledForSession();
+    if (m_ngxInterceptor) return m_ngxInterceptor->IsMvFixDisabledForSession();
+    if (ffx) return ffx->IsMvFixDisabledForSession();
+    return false;
+}
+
+const char* VRBridge::DescribeMvFixState() const {
+    if (!m_ngxInterceptor && !ResolveFidelityFxInterceptor()) return "unavailable";
+    if (IsMvFixDisabledForSession()) return "failed";
+    return IsMvFixEnabled() ? "on" : "off";
 }
 
 bool VRBridge::IsInjected(lua_State* L) {
@@ -1301,11 +1362,7 @@ int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
 int VRBridge::Lua_SetDlssMvFix(lua_State* L) {
     bool enabled = lua_toboolean(L, 1) != 0;
     VRBridge* self = &FromUpvalue(L);
-    if (!self->m_ngxInterceptor) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    lua_pushboolean(L, self->m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled ? 1 : 0);
+    lua_pushboolean(L, self->SetMvFixEnabled(enabled) ? 1 : 0);
     return 1;
 }
 
@@ -1337,12 +1394,15 @@ int VRBridge::Lua_DlssDiag(lua_State* L) {
     int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
                                          : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);
     VRBridge* self = &FromUpvalue(L);
-    if (!self->m_ngxInterceptor || evaluations <= 0) {
+    FidelityFxInterceptor* ffx = self->ResolveFidelityFxInterceptor();
+    if ((!self->m_ngxInterceptor && !ffx) || evaluations <= 0) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
-    if (FidelityFxInterceptor* ffx = self->m_ngxInterceptor->GetFidelityFxInterceptor()) {
+    if (self->m_ngxInterceptor) {
+        self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
+    }
+    if (ffx) {
         ffx->ArmDiagnostics(static_cast<uint32_t>(evaluations));
     }
     lua_pushboolean(L, 1);

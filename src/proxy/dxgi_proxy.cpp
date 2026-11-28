@@ -67,7 +67,6 @@ std::string DescribeCallers(unsigned long skip, unsigned long maxFrames = 32) {
     return ss.str();
 }
 
-DxgiProxy* g_d3d11On12Owner = nullptr;
 using PFN_D3D11On12CreateDevice = HRESULT(WINAPI*)(IUnknown*, UINT, const D3D_FEATURE_LEVEL*, UINT, IUnknown* const*,
                                                    UINT, UINT, void**, void**, D3D_FEATURE_LEVEL*);
 
@@ -231,7 +230,17 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
 }
 
 DxgiProxy::~DxgiProxy() {
-    if (IsProcessTerminating()) return;
+    if (IsProcessTerminating()) {
+        m_d3d12Device.Detach();
+        m_d3d12Queue.Detach();
+        m_cachedSwapChain = nullptr;
+        m_cachedSwapChain3.Detach();
+        for (auto& buf : m_cachedBackBuffers) {
+            buf.Detach();
+        }
+        m_cachedBackBuffers.clear();
+        return;
+    }
     DetachAll();
 }
 
@@ -272,13 +281,9 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
         if (m_ownedByRuntime && !m_detourD3D11On12CreateDevice.IsInstalled()) {
             HMODULE d3d11 = LoadLibraryExW(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
             void* target = d3d11 ? reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11On12CreateDevice")) : nullptr;
-            if (target) {
-                g_d3d11On12Owner = this;
-                if (!m_detourD3D11On12CreateDevice.Install(
-                        target, reinterpret_cast<void*>(&DxgiProxy::Intercept_D3D11On12CreateDevice))) {
-                    g_d3d11On12Owner = nullptr;
-                    LogWarn("DxgiProxy: Could not hook D3D11On12CreateDevice; quad layers may fail under a D3D12 wrapper.");
-                }
+            if (target && !m_detourD3D11On12CreateDevice.Install(
+                              target, reinterpret_cast<void*>(&DxgiProxy::Intercept_D3D11On12CreateDevice))) {
+                LogWarn("DxgiProxy: Could not hook D3D11On12CreateDevice; quad layers may fail under a D3D12 wrapper.");
             }
         }
     }
@@ -294,6 +299,9 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
             }
         }
         m_openXrManager->SetD3D12DeviceAndQueue(device, queue);
+        if (!IsActive()) {
+            ReleaseCachedBackBuffers();
+        }
     }
 }
 
@@ -328,7 +336,7 @@ std::string DxgiProxy::UnwrapForD3D11On12(IUnknown*& device, IUnknown** queues, 
 HRESULT WINAPI DxgiProxy::Intercept_D3D11On12CreateDevice(IUnknown* pDevice, UINT flags,
     const D3D_FEATURE_LEVEL* pFeatureLevels, UINT featureLevels, IUnknown* const* ppCommandQueues, UINT numQueues,
     UINT nodeMask, void** ppDevice, void** ppImmediateContext, D3D_FEATURE_LEVEL* pChosenFeatureLevel) {
-    DxgiProxy* proxy = g_d3d11On12Owner;
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourD3D11On12CreateDevice);
     auto original = proxy ? reinterpret_cast<PFN_D3D11On12CreateDevice>(proxy->m_detourD3D11On12CreateDevice.GetOriginal())
                           : nullptr;
     if (!original) return E_FAIL;
@@ -585,7 +593,6 @@ void DxgiProxy::DetachAll() {
     if (m_detourSetColorSpace1.IsInstalled()) m_detourSetColorSpace1.Uninstall();
     if (m_detourOutputGetDesc1.IsInstalled()) m_detourOutputGetDesc1.Uninstall();
     if (m_detourD3D11On12CreateDevice.IsInstalled()) m_detourD3D11On12CreateDevice.Uninstall();
-    if (g_d3d11On12Owner == this) g_d3d11On12Owner = nullptr;
     m_swapChainAttached = false;
     m_factoryAttached = false;
     m_outputAttached = false;
@@ -631,6 +638,10 @@ void DxgiProxy::LatchPendingRenderingMode() {
 }
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
+    if (flags & DXGI_PRESENT_TEST) {
+        m_lastPresentSuppressed = false;
+        return true;
+    }
     m_mouseConfinementUpdated = false;
     bool shouldPresent;
     {
@@ -669,11 +680,13 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
     facts.mirrorWasShowing = m_desktopMirrorWasShowing;
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        ReleaseCachedBackBuffers();
         return facts;
     }
 
     m_openXrManager->PollEvents();
     if (!m_openXrManager->IsActive()) {
+        ReleaseCachedBackBuffers();
         return facts;
     }
     facts.active = true;
@@ -719,6 +732,11 @@ PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
             }
 
             m_openXrManager->CreateEyeSwapchains(bufferWidth, bufferHeight, format);
+            if (!m_openXrManager->IsActive()) {
+                ReleaseCachedBackBuffers();
+                facts.active = false;
+                return facts;
+            }
         }
 
         UINT bufferIndex = 0;
@@ -820,6 +838,9 @@ bool DxgiProxy::CarryOutPresentPlan(IDXGISwapChain* swapChain, ID3D12Resource* b
     if (plan.mirror != MirrorBookkeeping::Unchanged) {
         m_desktopMirrorWasShowing = plan.mirror == MirrorBookkeeping::Showing;
     }
+    if (!IsActive()) {
+        ReleaseCachedBackBuffers();
+    }
     m_lastPresentSuppressed = !plan.callRealPresent;
     return plan.callRealPresent;
 }
@@ -901,6 +922,9 @@ void DxgiProxy::OnPresentReturned(HRESULT presentResult) {
     if (m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
         m_openXrManager->HasEyeSwapchains()) {
         m_openXrManager->BeginFrame();
+        if (!IsActive()) {
+            ReleaseCachedBackBuffers();
+        }
     }
 }
 
@@ -917,7 +941,7 @@ bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT f
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent);
     if (!proxy) return S_OK;
-    if (!proxy->IsGameSwapChain(self)) {
+    if (!proxy->IsGameSwapChain(self) || (flags & DXGI_PRESENT_TEST)) {
         auto passThrough = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
             proxy->m_detourPresent.GetOriginal());
         return passThrough ? passThrough(self, syncInterval, flags) : S_OK;
@@ -942,7 +966,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent1);
     if (!proxy) return S_OK;
-    if (!proxy->IsGameSwapChain(self)) {
+    if (!proxy->IsGameSwapChain(self) || (flags & DXGI_PRESENT_TEST)) {
         auto passThrough = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
             proxy->m_detourPresent1.GetOriginal());
         return passThrough ? passThrough(self, syncInterval, flags, params) : S_OK;
@@ -964,10 +988,23 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     return hr;
 }
 
-void DxgiProxy::PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height) {
+void DxgiProxy::PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height, DXGI_FORMAT newFormat) {
     if (!proxy) return;
     proxy->ReleaseCachedBackBuffers();
     proxy->m_windowController->SetWindowClampDirty(true);
+    if (proxy->IsActive() && newFormat != DXGI_FORMAT_UNKNOWN && proxy->m_openXrManager) {
+        if (!proxy->m_openXrManager->EnsureBackBufferFormatSupported(newFormat)) {
+            return;
+        }
+        if (proxy->m_openXrManager->HasEyeSwapchains()) {
+            const DXGI_FORMAT eyeFormat = proxy->m_openXrManager->GetEyeSwapchain(0).format;
+            if (OpenXrManager::SelectCompatibleSwapchainFormat(newFormat, { static_cast<int64_t>(eyeFormat) }) == DXGI_FORMAT_UNKNOWN) {
+                LogInfo(std::string("DxgiProxy::") + hookName + ": Swapchain format changed to " +
+                        std::to_string(static_cast<int>(newFormat)) + "; releasing incompatible eye swapchains.");
+                proxy->m_openXrManager->DestroyEyeSwapchains();
+            }
+        }
+    }
     if (proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
         const UINT requestedWidth = width;
         const UINT requestedHeight = height;
@@ -985,7 +1022,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
     if (proxy && proxy->IsGameSwapChain(self)) {
-        PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight);
+        PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight, NewFormat);
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT)>(
         proxy ? proxy->m_detourResizeBuffers.GetOriginal() : nullptr
@@ -1003,7 +1040,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
     if (proxy && proxy->IsGameSwapChain(self)) {
-        PrepareResize(proxy, "Intercept_ResizeBuffers1", effectiveWidth, effectiveHeight);
+        PrepareResize(proxy, "Intercept_ResizeBuffers1", effectiveWidth, effectiveHeight, NewFormat);
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*)>(
         proxy ? proxy->m_detourResizeBuffers1.GetOriginal() : nullptr
@@ -1152,7 +1189,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         localDesc = *pDesc;
         localDesc.Scaling = DXGI_SCALING_STRETCH;
         pEffectiveDesc = &localDesc;
-        const_cast<DXGI_SWAP_CHAIN_DESC1*>(pDesc)->Scaling = DXGI_SCALING_STRETCH;
         LogInfo("DxgiProxy: Enforced DXGI_SCALING_STRETCH on swapchain descriptor for resolution decoupling.");
     }
 
@@ -1162,7 +1198,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         localFullscreenDesc = *pFullscreenDesc;
         localFullscreenDesc.Windowed = TRUE;
         pEffectiveFullscreenDesc = &localFullscreenDesc;
-        const_cast<DXGI_SWAP_CHAIN_FULLSCREEN_DESC*>(pFullscreenDesc)->Windowed = TRUE;
         LogInfo("DxgiProxy: Enforced Windowed = TRUE on swapchain descriptor for resolution decoupling.");
     }
 

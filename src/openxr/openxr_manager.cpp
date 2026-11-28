@@ -279,10 +279,20 @@ void OpenXrManager::Shutdown() {
         m_instance = XR_NULL_HANDLE;
     }
     m_state.store(OpenXrState::Uninitialized);
+    m_runtimeInfo = {};
     m_sessionRunning = false;
     m_sessionState = XR_SESSION_STATE_UNKNOWN;
     m_beginSessionFailures = 0;
     m_frameBegun = false;
+    m_frameState = {XR_TYPE_FRAME_STATE};
+    m_lastPredictedDisplayTime = 0;
+    m_lastPredictedQpc = 0;
+    m_win32TimeConversionAvailable = false;
+    m_focusedSinceBegin = false;
+    m_submittedFramePairCount = 0;
+    m_frameSerial = 0;
+    m_handsFrameSerial = 0;
+    m_handPosesStale = false;
     ClearRenderPoses();
     m_eyeProjections[0] = {};
     m_eyeProjections[1] = {};
@@ -1036,10 +1046,14 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
         if (XR_FAILED(res)) {
             LogError("OpenXrManager::CreateEyeSwapchains failed for eye " + std::to_string(i) + " (result " + std::to_string(res) + ")");
             DestroyEyeSwapchains();
+            EnterPassThroughIfLost(res);
             return false;
         }
 
-        EnumerateSwapchainImagesHelper(m_eyeSwapchains[i]);
+        if (!EnumerateSwapchainImagesHelper(m_eyeSwapchains[i])) {
+            DestroyEyeSwapchains();
+            return false;
+        }
 
         m_eyeSwapchains[i].width = eyeWidth;
         m_eyeSwapchains[i].height = eyeHeight;
@@ -1082,14 +1096,25 @@ bool OpenXrManager::EnumerateSwapchainImagesHelper(EyeSwapchain& sc) {
         return false;
     }
     uint32_t imageCount = 0;
-    m_dispatch->EnumerateSwapchainImages(sc.handle, 0, &imageCount, nullptr);
+    XrResult res = m_dispatch->EnumerateSwapchainImages(sc.handle, 0, &imageCount, nullptr);
+    if (XR_FAILED(res)) {
+        LogError("OpenXrManager::EnumerateSwapchainImages failed (result " + std::to_string(res) + ")");
+        EnterPassThroughIfLost(res);
+        return false;
+    }
     if (imageCount > 0) {
         sc.images.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
-        m_dispatch->EnumerateSwapchainImages(
+        res = m_dispatch->EnumerateSwapchainImages(
             sc.handle,
             imageCount,
             &imageCount,
             reinterpret_cast<XrSwapchainImageBaseHeader*>(sc.images.data()));
+        if (XR_FAILED(res)) {
+            LogError("OpenXrManager::EnumerateSwapchainImages failed (result " + std::to_string(res) + ")");
+            sc.images.clear();
+            EnterPassThroughIfLost(res);
+            return false;
+        }
     }
     return true;
 }
@@ -1102,7 +1127,11 @@ bool OpenXrManager::CreateCursorSwapchain(uint32_t width, uint32_t height, DXGI_
     if (m_session == XR_NULL_HANDLE) {
         return false;
     }
-    return m_cursorOverlay.CreateSwapchain(m_session, m_dispatch, width, height, format, m_device, m_queue);
+    bool created = m_cursorOverlay.CreateSwapchain(m_session, m_dispatch, width, height, format, m_device, m_queue);
+    if (EnterPassThroughIfLost(m_cursorOverlay.GetLastXrResult())) {
+        return false;
+    }
+    return created;
 }
 
 void OpenXrManager::DestroyCursorSwapchain() {
@@ -1120,6 +1149,14 @@ void OpenXrManager::RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose) {
 void OpenXrManager::ClearRenderPoses() {
     m_hasRenderPose[0] = false;
     m_hasRenderPose[1] = false;
+}
+
+void OpenXrManager::ResetCopiedSwapchainsAndCloseFrame() {
+    m_eyeSwapchains[0].hasCopiedFrame = false;
+    m_eyeSwapchains[1].hasCopiedFrame = false;
+    if (m_frameBegun) {
+        EndFrame();
+    }
 }
 
 bool OpenXrManager::BeginFrame() {
@@ -1252,29 +1289,36 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     XrSwapchain swapchain = m_eyeSwapchains[eyeIndex].handle;
     if (swapchain == XR_NULL_HANDLE) {
+        ResetCopiedSwapchainsAndCloseFrame();
         return false;
     }
 
     XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t imageIndex = 0;
-    XrResult res;
+    XrResult res = XR_SUCCESS;
+    bool acquired = false;
     {
         PerfScope swapchainTiming(PerfSection::SwapchainWait);
         res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
         if (XR_SUCCEEDED(res)) {
+            acquired = true;
             XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
             waitInfo.timeout = XR_INFINITE_DURATION;
             res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
-            if (XR_FAILED(res)) {
-                LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
-                XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-                m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
-                return false;
-            }
         }
     }
     if (XR_FAILED(res)) {
-        LogError("OpenXrManager::CopyBackBufferToEye: AcquireSwapchainImage failed (result " + std::to_string(res) + ")");
+        LogError(std::string(acquired ? "OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result "
+                                      : "OpenXrManager::CopyBackBufferToEye: AcquireSwapchainImage failed (result ") +
+                 std::to_string(res) + ")");
+        XrResult releaseRes = XR_SUCCESS;
+        if (acquired) {
+            XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            releaseRes = m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
+        }
+        if (!EnterPassThroughIfLost(res) && !EnterPassThroughIfLost(releaseRes)) {
+            ResetCopiedSwapchainsAndCloseFrame();
+        }
         return false;
     }
 
@@ -1290,6 +1334,9 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
     res = m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
     if (XR_FAILED(res)) {
         LogError("OpenXrManager::CopyBackBufferToEye: ReleaseSwapchainImage failed (result " + std::to_string(res) + ")");
+        if (!EnterPassThroughIfLost(res)) {
+            ResetCopiedSwapchainsAndCloseFrame();
+        }
         return false;
     }
 
@@ -1311,6 +1358,9 @@ bool OpenXrManager::SubmitFramePair() {
     }
 
     if (!m_eyeSwapchains[0].hasCopiedFrame || !m_eyeSwapchains[1].hasCopiedFrame) {
+        if (!m_eyeSwapchains[0].hasCopiedFrame) {
+            ResetCopiedSwapchainsAndCloseFrame();
+        }
         return false;
     }
 
@@ -1324,9 +1374,7 @@ bool OpenXrManager::SubmitFramePair() {
             m_loggedMissingEyeProjection = true;
             LogWarn("OpenXrManager::SubmitFramePair: No eye projection with a usable field of view from the runtime yet (the views are not located, or a field of view is near zero); submitting empty frames until it reports one.");
         }
-        EndFrame();
-        m_eyeSwapchains[0].hasCopiedFrame = false;
-        m_eyeSwapchains[1].hasCopiedFrame = false;
+        ResetCopiedSwapchainsAndCloseFrame();
         return false;
     }
 
@@ -1439,6 +1487,7 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
     }
 
     if (!m_eyeSwapchains[0].hasCopiedFrame) {
+        ResetCopiedSwapchainsAndCloseFrame();
         return false;
     }
 
@@ -1449,6 +1498,7 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
 
     if (m_localSpace == XR_NULL_HANDLE) {
         LogError("OpenXrManager::SubmitMenuQuad: Local reference space is not initialized.");
+        ResetCopiedSwapchainsAndCloseFrame();
         return false;
     }
 
@@ -1475,6 +1525,9 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
     bool showCursor = m_cursorOverlay.PrepareCompositionLayer(
         quadLayer, m_menuCursorState, m_localSpace, cursorQuadLayer,
         m_device, m_queue, m_dispatch);
+    if (EnterPassThroughIfLost(m_cursorOverlay.GetLastXrResult())) {
+        return false;
+    }
 
     const XrCompositionLayerBaseHeader* layers[2] = {
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quadLayer),

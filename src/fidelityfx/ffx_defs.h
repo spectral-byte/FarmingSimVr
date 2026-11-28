@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/in_flight_gate.h"
 #include <cstdint>
 
 namespace fs25vr {
@@ -123,6 +124,7 @@ struct VirtualFfxContext {
     uint32_t flags = 0;
     ffxApiDimensions2D maxRenderSize{};
     ffxApiDimensions2D maxUpscaleSize{};
+    InFlightCallGate callGate;
 };
 
 }

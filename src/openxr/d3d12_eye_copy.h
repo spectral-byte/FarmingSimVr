@@ -11,7 +11,9 @@ namespace fs25vr {
 
 class D3D12EyeCopy {
 public:
-    static constexpr uint32_t kRingSize = 2;
+    ~D3D12EyeCopy();
+    static constexpr uint32_t kRingSize = 4;
+    static constexpr DWORD kFenceWaitTimeoutMs = 5000;
 
     void SetDeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
 
@@ -42,11 +44,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocators[kRingSize];
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandLists[kRingSize];
     Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
-    uint64_t m_copyFenceValues[kRingSize] = {0, 0};
+    uint64_t m_copyFenceValues[kRingSize]{};
     uint64_t m_currentFenceValue = 0;
     uint32_t m_ringIndex = 0;
     ScopedEventHandle m_fenceEvent;
-    void EnsureFence();
+    bool EnsureFence();
+    bool WaitForFenceValue(uint64_t fenceValue);
 
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_clearAllocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
@@ -55,9 +58,10 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_timestampHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_timestampReadback;
+    void* m_timestampReadbackMapped = nullptr;
     bool m_timestampsFailed = false;
-    bool m_timestampPending[kRingSize] = {false, false};
-    int64_t m_copySubmitNs[kRingSize] = {0, 0};
+    bool m_timestampPending[kRingSize]{};
+    int64_t m_copySubmitNs[kRingSize]{};
     uint64_t m_gpuTimestampFrequency = 0;
     uint64_t m_gpuCalibrationTicks = 0;
     int64_t m_gpuCalibrationCpuNs = 0;

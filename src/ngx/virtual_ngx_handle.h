@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/in_flight_gate.h"
 #include "ngx_defs.h"
 #include <memory>
 #include <string>
@@ -54,8 +55,13 @@ struct NgxParamValue {
 
 class NgxParameterImpl : public NVSDK_NGX_Parameter {
 public:
-    NgxParameterImpl() = default;
-    virtual ~NgxParameterImpl() = default;
+    NgxParameterImpl();
+    virtual ~NgxParameterImpl();
+
+    NgxParameterImpl(const NgxParameterImpl&) = delete;
+    NgxParameterImpl& operator=(const NgxParameterImpl&) = delete;
+    NgxParameterImpl(NgxParameterImpl&&) = delete;
+    NgxParameterImpl& operator=(NgxParameterImpl&&) = delete;
 
     void Set(const char* InName, unsigned long long InValue) override {
         NgxParamValue val;
@@ -223,109 +229,7 @@ public:
         return clone;
     }
 
-    void CopyFrom(const NVSDK_NGX_Parameter* source) {
-        if (!source) return;
-
-        const auto* impl = dynamic_cast<const NgxParameterImpl*>(source);
-        if (impl) {
-            m_params = impl->m_params;
-            return;
-        }
-
-        static const char* const s_knownNames[] = {
-            NVSDK_NGX_Parameter_Width,
-            NVSDK_NGX_Parameter_Height,
-            NVSDK_NGX_Parameter_OutWidth,
-            NVSDK_NGX_Parameter_OutHeight,
-            NVSDK_NGX_Parameter_PerfQualityValue,
-            NVSDK_NGX_Parameter_RTXValue,
-            NVSDK_NGX_Parameter_Reset,
-            NVSDK_NGX_Parameter_CreationNodeMask,
-            NVSDK_NGX_Parameter_VisibilityNodeMask,
-            NVSDK_NGX_Parameter_Color,
-            NVSDK_NGX_Parameter_Output,
-            NVSDK_NGX_Parameter_Depth,
-            NVSDK_NGX_Parameter_MotionVectors,
-            NVSDK_NGX_Parameter_Jitter_Offset_X,
-            NVSDK_NGX_Parameter_Jitter_Offset_Y,
-            NVSDK_NGX_Parameter_MV_Scale_X,
-            NVSDK_NGX_Parameter_MV_Scale_Y,
-            NVSDK_NGX_Parameter_MV_Offset_X,
-            NVSDK_NGX_Parameter_MV_Offset_Y,
-            NVSDK_NGX_Parameter_Sharpness,
-            NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags,
-            NVSDK_NGX_Parameter_InWidth,
-            NVSDK_NGX_Parameter_InHeight,
-            NVSDK_NGX_Parameter_DLSS_Optimal_Render_Width,
-            NVSDK_NGX_Parameter_DLSS_Optimal_Render_Height,
-            NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width,
-            NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height,
-            NVSDK_NGX_Parameter_ExposureTexture,
-            NVSDK_NGX_Parameter_PreExposure,
-            NVSDK_NGX_Parameter_DLSS_Exposure_Texture,
-            NVSDK_NGX_Parameter_DLSS_Pre_Exposure,
-            NVSDK_NGX_Parameter_DLSS_Exposure,
-            NVSDK_NGX_Parameter_TonemapperType,
-            NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance,
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality,
-            NVSDK_NGX_Parameter_Resource_Width,
-            NVSDK_NGX_Parameter_Resource_Height,
-            NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects,
-            NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X,
-            NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y,
-            NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X,
-            NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y
-        };
-
-        for (const char* name : s_knownNames) {
-            unsigned int uVal = 0;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &uVal))) {
-                Set(name, uVal);
-                continue;
-            }
-            int iVal = 0;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &iVal))) {
-                Set(name, iVal);
-                continue;
-            }
-            float fVal = 0.0f;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &fVal))) {
-                Set(name, fVal);
-                continue;
-            }
-            double dVal = 0.0;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &dVal))) {
-                Set(name, dVal);
-                continue;
-            }
-            unsigned long long ullVal = 0;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &ullVal))) {
-                Set(name, ullVal);
-                continue;
-            }
-            ID3D12Resource* res12 = nullptr;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &res12))) {
-                Set(name, res12);
-                continue;
-            }
-            ID3D11Resource* res11 = nullptr;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &res11))) {
-                Set(name, res11);
-                continue;
-            }
-            void* pVal = nullptr;
-            if (NVSDK_NGX_SUCCEED(source->Get(name, &pVal))) {
-                Set(name, pVal);
-                continue;
-            }
-        }
-    }
+    void CopyFrom(const NVSDK_NGX_Parameter* source);
 
     void MirrorTo(NVSDK_NGX_Parameter* destination) const {
         if (!destination) return;
@@ -392,6 +296,7 @@ struct VirtualNgxHandle : public NVSDK_NGX_Handle {
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;
     NVSDK_NGX_PerfQuality_Value perfQuality = NVSDK_NGX_PerfQuality_Value_MaxQuality;
+    InFlightCallGate callGate;
 
     bool IsValid() const {
         return magic == VIRTUAL_NGX_HANDLE_MAGIC && hLeft != nullptr && hRight != nullptr;

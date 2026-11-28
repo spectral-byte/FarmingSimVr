@@ -1,4 +1,5 @@
 #include "system_dxgi.h"
+#include "core/dll_lifecycle.h"
 #include "core/logger.h"
 #include <iterator>
 
@@ -39,6 +40,10 @@ SystemDxgi::SystemDxgi() {
 }
 
 SystemDxgi::~SystemDxgi() {
+    if (IsProcessTerminating()) {
+        m_hModule = nullptr;
+        return;
+    }
     if (m_hModule) {
         FreeLibrary(m_hModule);
         m_hModule = nullptr;

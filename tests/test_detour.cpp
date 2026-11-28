@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <windows.h>
+#include <atomic>
 #include <cstring>
+#include <thread>
 #include "core/detour.h"
 
 namespace {
@@ -228,4 +230,65 @@ TEST_F(DetourTest, SecondDetourOnLiveTargetIsRefused) {
     EXPECT_EQ(AddNumbers(2, 3), 13);
     EXPECT_TRUE(owner.Uninstall());
     EXPECT_EQ(AddNumbers(2, 3), 5);
+}
+
+namespace {
+
+fs25vr::FunctionDetour* s_concurrentDetour = nullptr;
+std::atomic<int> s_concurrentNullOriginals{0};
+std::atomic<int> s_concurrentNotInstalled{0};
+
+int ConcurrentDetourAddNumbers(int a, int b) {
+    if (s_concurrentDetour && !s_concurrentDetour->IsInstalled()) {
+        s_concurrentNotInstalled.fetch_add(1);
+    }
+    void* orig = s_concurrentDetour ? s_concurrentDetour->GetOriginal() : nullptr;
+    if (!orig) {
+        s_concurrentNullOriginals.fetch_add(1);
+        return a + b;
+    }
+    return reinterpret_cast<int(*)(int, int)>(orig)(a, b);
+}
+
+}
+
+TEST_F(DetourTest, ConcurrentCallsAndInstallUninstallObserveSafeAtomicOriginal) {
+    static_assert(std::atomic<void*>::is_always_lock_free);
+
+    s_concurrentNullOriginals.store(0);
+    s_concurrentNotInstalled.store(0);
+
+    for (int i = 0; i < 40; ++i) {
+        fs25vr::FunctionDetour detour;
+        s_concurrentDetour = &detour;
+        std::atomic<bool> stop{false};
+        std::atomic<bool> running{false};
+
+        std::thread caller([&]() {
+            running.store(true);
+            while (!stop.load()) {
+                const int sum = AddNumbers(4, 7);
+                if (sum != 11) {
+                    s_concurrentNullOriginals.fetch_add(1);
+                }
+            }
+        });
+
+        while (!running.load()) {}
+        ASSERT_TRUE(detour.Install(reinterpret_cast<void*>(&AddNumbers),
+                                   reinterpret_cast<void*>(&ConcurrentDetourAddNumbers)));
+        EXPECT_TRUE(detour.IsInstalled());
+        EXPECT_NE(detour.GetOriginal(), nullptr);
+
+        stop.store(true);
+        caller.join();
+
+        EXPECT_TRUE(detour.Uninstall());
+        EXPECT_FALSE(detour.IsInstalled());
+        EXPECT_EQ(detour.GetOriginal(), nullptr);
+        s_concurrentDetour = nullptr;
+    }
+
+    EXPECT_EQ(s_concurrentNullOriginals.load(), 0);
+    EXPECT_EQ(s_concurrentNotInstalled.load(), 0);
 }

@@ -5,6 +5,10 @@
 #include "core/injector_runtime.h"
 #include <windows.h>
 #include <commctrl.h>
+#include <atomic>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 namespace fs25vr {
 
@@ -231,6 +235,184 @@ TEST(MirrorWindowControllerTest, DecoupledResolutionCoordinateTransforms) {
     EXPECT_EQ(physClip.top, clientOrigin.y);
     EXPECT_EQ(physClip.right, clientOrigin.x + physW);
     EXPECT_EQ(physClip.bottom, clientOrigin.y + physH);
+
+    controller.DetachAll();
+    DestroyWindow(testWnd);
+}
+
+TEST(MirrorWindowControllerTest, WmNcDestroyFollowedByDetachAllUninstallsAllUser32Detours) {
+    HWND testWnd = CreateWindowA("STATIC", "NcDestroyDetourWnd", WS_OVERLAPPEDWINDOW, 10, 10, 800, 600, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto controllerPtr = std::make_shared<MirrorWindowController>();
+    InjectorRuntime::Dependencies deps;
+    deps.windowController = controllerPtr;
+    InjectorRuntime runtime(std::move(deps));
+    MirrorWindowController& controller = *controllerPtr;
+    controller.SetIsVrActiveCallback([]() { return true; });
+
+    ASSERT_TRUE(controller.AttachWindowSubclass(testWnd));
+    ASSERT_TRUE(controller.IsWindowSubclassed());
+    ASSERT_TRUE(controller.IsDetourGetClientRectInstalled());
+    ASSERT_TRUE(controller.IsDetourScreenToClientInstalled());
+    ASSERT_TRUE(controller.IsDetourSetCursorPosInstalled());
+    ASSERT_TRUE(controller.IsDetourClipCursorInstalled());
+
+    DestroyWindow(testWnd);
+    EXPECT_FALSE(controller.IsWindowSubclassed());
+
+    controller.DetachAll();
+    EXPECT_FALSE(controller.IsDetourGetClientRectInstalled());
+    EXPECT_FALSE(controller.IsDetourScreenToClientInstalled());
+    EXPECT_FALSE(controller.IsDetourSetCursorPosInstalled());
+    EXPECT_FALSE(controller.IsDetourClipCursorInstalled());
+}
+
+namespace {
+
+struct RecordedSizeEvent {
+    WPARAM wParam;
+    UINT width;
+    UINT height;
+};
+
+LRESULT CALLBACK RecordingSizeSubclassProc(
+    HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    if (uMsg == WM_SIZE && dwRefData) {
+        auto* events = reinterpret_cast<std::vector<RecordedSizeEvent>*>(dwRefData);
+        events->push_back({ wParam, LOWORD(lParam), HIWORD(lParam) });
+    } else if (uMsg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hWnd, &RecordingSizeSubclassProc, uIdSubclass);
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+class ThreadSafeSpyCursorPort : public IDesktopCursorPort {
+public:
+    HWND foreground = nullptr;
+    std::atomic<int> activeSetClip{0};
+    std::atomic<int> maxActiveSetClip{0};
+
+    HWND GetForegroundWindow() override { return foreground; }
+
+    bool GetClip(RECT& out) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        out = m_clip ? *m_clip : RECT{ 0, 0, 1920, 1080 };
+        return true;
+    }
+
+    bool SetClip(const RECT* rect) override {
+        const int concurrent = activeSetClip.fetch_add(1) + 1;
+        int prevMax = maxActiveSetClip.load();
+        while (concurrent > prevMax && !maxActiveSetClip.compare_exchange_weak(prevMax, concurrent)) {}
+        std::this_thread::yield();
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (rect) {
+                m_clip = *rect;
+            } else {
+                m_clip.reset();
+            }
+        }
+        activeSetClip.fetch_sub(1);
+        return true;
+    }
+
+    bool GetCursorPos(POINT& out) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        out = m_cursor;
+        return true;
+    }
+
+    bool SetCursorPos(int x, int y) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_cursor = { x, y };
+        return true;
+    }
+
+    bool IsCursorShowing() override { return true; }
+
+private:
+    std::mutex m_mutex;
+    std::optional<RECT> m_clip;
+    POINT m_cursor{ 0, 0 };
+};
+
+}
+
+TEST(MirrorWindowControllerTest, WmWindowPosChangedDoesNotSynthesizeSizeRestoredWhileMinimized) {
+    HWND testWnd = CreateWindowA("STATIC", "MinimizeWnd", WS_OVERLAPPEDWINDOW, 10, 10, 800, 600, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    std::vector<RecordedSizeEvent> recordedSizes;
+    ASSERT_TRUE(SetWindowSubclass(testWnd, &RecordingSizeSubclassProc, 0x1234, reinterpret_cast<DWORD_PTR>(&recordedSizes)));
+
+    MirrorWindowController controller([]() { return true; });
+    controller.SetTargetRenderResolution(3840, 2160);
+    ASSERT_TRUE(controller.AttachWindowSubclass(testWnd));
+
+    recordedSizes.clear();
+    ShowWindow(testWnd, SW_MINIMIZE);
+    ASSERT_TRUE(IsIconic(testWnd));
+
+    WINDOWPOS wp{};
+    wp.hwnd = testWnd;
+    wp.cx = 160;
+    wp.cy = 28;
+    wp.flags = SWP_NOMOVE | SWP_NOZORDER;
+    SendMessageW(testWnd, WM_WINDOWPOSCHANGED, 0, reinterpret_cast<LPARAM>(&wp));
+
+    for (const auto& ev : recordedSizes) {
+        EXPECT_NE(ev.wParam, static_cast<WPARAM>(SIZE_RESTORED));
+    }
+
+    recordedSizes.clear();
+    ShowWindow(testWnd, SW_RESTORE);
+    ASSERT_FALSE(IsIconic(testWnd));
+    bool sawRestoredTarget = false;
+    for (const auto& ev : recordedSizes) {
+        if (ev.wParam == SIZE_RESTORED && ev.width == 3840 && ev.height == 2160) {
+            sawRestoredTarget = true;
+        }
+    }
+    EXPECT_TRUE(sawRestoredTarget);
+
+    controller.DetachAll();
+    DestroyWindow(testWnd);
+}
+
+TEST(MirrorWindowControllerTest, HandleGameClipCursorAndUpdateMouseConfinementSynchronizeState) {
+    HWND testWnd = CreateWindowA("STATIC", "ClipRaceWnd", WS_OVERLAPPEDWINDOW, 10, 10, 800, 600, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto port = std::make_shared<ThreadSafeSpyCursorPort>();
+    port->foreground = testWnd;
+    MirrorWindowController controller([]() { return true; }, port);
+    controller.SetTargetRenderResolution(3840, 2160);
+    controller.SetGameHwnd(testWnd);
+
+    std::atomic<bool> start{false};
+    std::thread updater([&]() {
+        while (!start.load()) {}
+        for (int i = 0; i < 400; ++i) {
+            controller.UpdateMouseConfinement(
+                (i % 2 == 0) ? MirrorWindowController::MouseConfinementState::Holding
+                             : MirrorWindowController::MouseConfinementState::FocusLost);
+        }
+    });
+    std::thread clipper([&]() {
+        while (!start.load()) {}
+        const RECT gameRect{ 0, 0, 1920, 1080 };
+        for (int i = 0; i < 400; ++i) {
+            controller.HandleGameClipCursor((i % 2 == 0) ? &gameRect : nullptr);
+        }
+    });
+
+    start.store(true);
+    updater.join();
+    clipper.join();
+
+    EXPECT_LE(port->maxActiveSetClip.load(), 1);
 
     controller.DetachAll();
     DestroyWindow(testWnd);

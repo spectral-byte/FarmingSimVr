@@ -77,7 +77,7 @@
 6 tests/test_dlss_evaluation.cpp
 7 tests/test_dual_pass_pacing.luau
 15 tests/test_dxgi_proxy.cpp
-8 tests/test_fidelityfx_interceptor.cpp
+6 tests/test_fidelityfx_interceptor.cpp
 14 tests/test_fov_coverage.cpp
 4 tests/test_fov_overscan.cpp
 13 tests/test_hand_tools_chainsaw.cpp

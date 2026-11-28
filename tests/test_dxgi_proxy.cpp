@@ -22,6 +22,7 @@
 #include <functional>
 #include <future>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -718,6 +719,360 @@ TEST(InjectorRuntimeTest, DestructorTakesNoNgxLockWhileProcessTerminates) {
     ngx->SetDxgiProxy(nullptr);
     ngx->SetVRBridge(nullptr);
     ngx->SetOpenXrManager(nullptr);
+}
+
+namespace {
+
+class DestructionLogger final : public IUnknown {
+public:
+    DestructionLogger(std::vector<std::string>& log, std::string name)
+        : m_log(log), m_name(std::move(name)) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown)) {
+            *ppv = static_cast<IUnknown*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refs; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --m_refs;
+        if (remaining == 0) {
+            m_log.push_back(m_name);
+            delete this;
+        }
+        return remaining;
+    }
+
+private:
+    std::vector<std::string>& m_log;
+    std::string m_name;
+    std::atomic<ULONG> m_refs{1};
+};
+
+class TeardownRecordingOpenXrRuntime : public FakeOpenXrRuntime {
+public:
+    explicit TeardownRecordingOpenXrRuntime(std::vector<std::string>& log) : m_log(log) {}
+
+    XrResult CreateSwapchain(XrSession session, const XrSwapchainCreateInfo* createInfo, XrSwapchain* swapchain) override {
+        const XrResult result = FakeOpenXrRuntime::CreateSwapchain(session, createInfo, swapchain);
+        if (XR_FAILED(result) || !createInfo || !swapchain || !device) return result;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = createInfo->width;
+        desc.Height = createInfo->height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = static_cast<DXGI_FORMAT>(createInfo->format);
+        desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        ComPtr<ID3D12Resource> tex;
+        if (SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                      D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&tex)))) {
+            m_images[*swapchain] = tex;
+        }
+        return result;
+    }
+    XrResult EnumerateSwapchainImages(XrSwapchain swapchain, uint32_t capacity, uint32_t* count,
+                                      XrSwapchainImageBaseHeader* images) override {
+        if (count) *count = 1;
+        if (capacity >= 1 && images) {
+            auto* d3d12Images = reinterpret_cast<XrSwapchainImageD3D12KHR*>(images);
+            d3d12Images[0].type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
+            d3d12Images[0].next = nullptr;
+            auto it = m_images.find(swapchain);
+            d3d12Images[0].texture = it != m_images.end() ? it->second.Get() : nullptr;
+        }
+        return XR_SUCCESS;
+    }
+    XrResult DestroySwapchain(XrSwapchain swapchain) override {
+        m_log.push_back("DestroySwapchain");
+        m_images.erase(swapchain);
+        return FakeOpenXrRuntime::DestroySwapchain(swapchain);
+    }
+    XrResult DestroySession(XrSession session) override {
+        m_log.push_back("DestroySession");
+        return FakeOpenXrRuntime::DestroySession(session);
+    }
+    XrResult DestroyInstance(XrInstance instance) override {
+        m_log.push_back("DestroyInstance");
+        return FakeOpenXrRuntime::DestroyInstance(instance);
+    }
+
+    ID3D12Device* device = nullptr;
+
+private:
+    std::vector<std::string>& m_log;
+    std::map<XrSwapchain, ComPtr<ID3D12Resource>> m_images;
+};
+
+class ReleaseRecordingDevice final : public ID3D12Device {
+public:
+    ReleaseRecordingDevice(ComPtr<ID3D12Device> inner, std::vector<std::string>& log, std::string tag)
+        : m_inner(std::move(inner)), m_log(log), m_tag(std::move(tag)) {}
+    ~ReleaseRecordingDevice() { m_log.push_back(std::move(m_tag)); }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(ID3D12Object) || riid == __uuidof(ID3D12Device)) {
+            *ppvObject = static_cast<ID3D12Device*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return m_inner->QueryInterface(riid, ppvObject);
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refCount; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --m_refCount;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT* pDataSize, void* pData) override {
+        return m_inner->GetPrivateData(guid, pDataSize, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT DataSize, const void* pData) override {
+        return m_inner->SetPrivateData(guid, DataSize, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown* pData) override {
+        return m_inner->SetPrivateDataInterface(guid, pData);
+    }
+    HRESULT STDMETHODCALLTYPE SetName(LPCWSTR Name) override { return m_inner->SetName(Name); }
+    UINT STDMETHODCALLTYPE GetNodeCount() override { return m_inner->GetNodeCount(); }
+    HRESULT STDMETHODCALLTYPE CreateCommandQueue(const D3D12_COMMAND_QUEUE_DESC* pDesc, REFIID riid, void** ppCommandQueue) override {
+        return m_inner->CreateCommandQueue(pDesc, riid, ppCommandQueue);
+    }
+    HRESULT STDMETHODCALLTYPE CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE type, REFIID riid, void** ppCommandAllocator) override {
+        return m_inner->CreateCommandAllocator(type, riid, ppCommandAllocator);
+    }
+    HRESULT STDMETHODCALLTYPE CreateGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc, REFIID riid,
+                                                          void** ppPipelineState) override {
+        return m_inner->CreateGraphicsPipelineState(pDesc, riid, ppPipelineState);
+    }
+    HRESULT STDMETHODCALLTYPE CreateComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC* pDesc, REFIID riid,
+                                                         void** ppPipelineState) override {
+        return m_inner->CreateComputePipelineState(pDesc, riid, ppPipelineState);
+    }
+    HRESULT STDMETHODCALLTYPE CreateCommandList(UINT nodeMask, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pCommandAllocator,
+                                                ID3D12PipelineState* pInitialState, REFIID riid, void** ppCommandList) override {
+        return m_inner->CreateCommandList(nodeMask, type, pCommandAllocator, pInitialState, riid, ppCommandList);
+    }
+    HRESULT STDMETHODCALLTYPE CheckFeatureSupport(D3D12_FEATURE Feature, void* pFeatureSupportData, UINT FeatureSupportDataSize) override {
+        return m_inner->CheckFeatureSupport(Feature, pFeatureSupportData, FeatureSupportDataSize);
+    }
+    HRESULT STDMETHODCALLTYPE CreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC* pDescriptorHeapDesc, REFIID riid,
+                                                   void** ppvHeap) override {
+        return m_inner->CreateDescriptorHeap(pDescriptorHeapDesc, riid, ppvHeap);
+    }
+    UINT STDMETHODCALLTYPE GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE DescriptorHeapType) override {
+        return m_inner->GetDescriptorHandleIncrementSize(DescriptorHeapType);
+    }
+    HRESULT STDMETHODCALLTYPE CreateRootSignature(UINT nodeMask, const void* pBlobWithRootSignature, SIZE_T blobLengthInBytes,
+                                                  REFIID riid, void** ppvRootSignature) override {
+        return m_inner->CreateRootSignature(nodeMask, pBlobWithRootSignature, blobLengthInBytes, riid, ppvRootSignature);
+    }
+    void STDMETHODCALLTYPE CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIEW_DESC* pDesc,
+                                                    D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        m_inner->CreateConstantBufferView(pDesc, DestDescriptor);
+    }
+    void STDMETHODCALLTYPE CreateShaderResourceView(ID3D12Resource* pResource, const D3D12_SHADER_RESOURCE_VIEW_DESC* pDesc,
+                                                    D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        m_inner->CreateShaderResourceView(pResource, pDesc, DestDescriptor);
+    }
+    void STDMETHODCALLTYPE CreateUnorderedAccessView(ID3D12Resource* pResource, ID3D12Resource* pCounterResource,
+                                                     const D3D12_UNORDERED_ACCESS_VIEW_DESC* pDesc,
+                                                     D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        m_inner->CreateUnorderedAccessView(pResource, pCounterResource, pDesc, DestDescriptor);
+    }
+    void STDMETHODCALLTYPE CreateRenderTargetView(ID3D12Resource* pResource, const D3D12_RENDER_TARGET_VIEW_DESC* pDesc,
+                                                  D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        m_inner->CreateRenderTargetView(pResource, pDesc, DestDescriptor);
+    }
+    void STDMETHODCALLTYPE CreateDepthStencilView(ID3D12Resource* pResource, const D3D12_DEPTH_STENCIL_VIEW_DESC* pDesc,
+                                                  D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        m_inner->CreateDepthStencilView(pResource, pDesc, DestDescriptor);
+    }
+    void STDMETHODCALLTYPE CreateSampler(const D3D12_SAMPLER_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        m_inner->CreateSampler(pDesc, DestDescriptor);
+    }
+    void STDMETHODCALLTYPE CopyDescriptors(UINT NumDescriptors, const D3D12_CPU_DESCRIPTOR_HANDLE* pDestDescriptorRangeStarts,
+                                           const UINT* pDestDescriptorRangeSizes, UINT NumSrcDescriptors,
+                                           const D3D12_CPU_DESCRIPTOR_HANDLE* pSrcDescriptorRangeStarts,
+                                           const UINT* pSrcDescriptorRangeSizes,
+                                           D3D12_DESCRIPTOR_HEAP_TYPE DescriptorHeapType) override {
+        m_inner->CopyDescriptors(NumDescriptors, pDestDescriptorRangeStarts, pDestDescriptorRangeSizes, NumSrcDescriptors,
+                                 pSrcDescriptorRangeStarts, pSrcDescriptorRangeSizes, DescriptorHeapType);
+    }
+    void STDMETHODCALLTYPE CopyDescriptorsSimple(UINT NumDescriptors, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptorRangeStart,
+                                                 D3D12_CPU_DESCRIPTOR_HANDLE SrcDescriptorRangeStart,
+                                                 D3D12_DESCRIPTOR_HEAP_TYPE DescriptorHeapType) override {
+        m_inner->CopyDescriptorsSimple(NumDescriptors, DestDescriptorRangeStart, SrcDescriptorRangeStart, DescriptorHeapType);
+    }
+    D3D12_RESOURCE_ALLOCATION_INFO STDMETHODCALLTYPE GetResourceAllocationInfo(UINT visibleMask, UINT numResourceDescs,
+                                                                               const D3D12_RESOURCE_DESC* pResourceDescs) override {
+        return m_inner->GetResourceAllocationInfo(visibleMask, numResourceDescs, pResourceDescs);
+    }
+    D3D12_HEAP_PROPERTIES STDMETHODCALLTYPE GetCustomHeapProperties(UINT nodeMask, D3D12_HEAP_TYPE heapType) override {
+        return m_inner->GetCustomHeapProperties(nodeMask, heapType);
+    }
+    HRESULT STDMETHODCALLTYPE CreateCommittedResource(const D3D12_HEAP_PROPERTIES* pHeapProperties, D3D12_HEAP_FLAGS HeapFlags,
+                                                      const D3D12_RESOURCE_DESC* pDesc, D3D12_RESOURCE_STATES InitialResourceState,
+                                                      const D3D12_CLEAR_VALUE* pOptimizedClearValue, REFIID riidResource,
+                                                      void** ppvResource) override {
+        return m_inner->CreateCommittedResource(pHeapProperties, HeapFlags, pDesc, InitialResourceState, pOptimizedClearValue,
+                                                riidResource, ppvResource);
+    }
+    HRESULT STDMETHODCALLTYPE CreateHeap(const D3D12_HEAP_DESC* pDesc, REFIID riid, void** ppvHeap) override {
+        return m_inner->CreateHeap(pDesc, riid, ppvHeap);
+    }
+    HRESULT STDMETHODCALLTYPE CreatePlacedResource(ID3D12Heap* pHeap, UINT64 HeapOffset, const D3D12_RESOURCE_DESC* pDesc,
+                                                   D3D12_RESOURCE_STATES InitialState, const D3D12_CLEAR_VALUE* pOptimizedClearValue,
+                                                   REFIID riid, void** ppvResource) override {
+        return m_inner->CreatePlacedResource(pHeap, HeapOffset, pDesc, InitialState, pOptimizedClearValue, riid, ppvResource);
+    }
+    HRESULT STDMETHODCALLTYPE CreateReservedResource(const D3D12_RESOURCE_DESC* pDesc, D3D12_RESOURCE_STATES InitialState,
+                                                     const D3D12_CLEAR_VALUE* pOptimizedClearValue, REFIID riid,
+                                                     void** ppvResource) override {
+        return m_inner->CreateReservedResource(pDesc, InitialState, pOptimizedClearValue, riid, ppvResource);
+    }
+    HRESULT STDMETHODCALLTYPE CreateSharedHandle(ID3D12DeviceChild* pObject, const SECURITY_ATTRIBUTES* pAttributes, DWORD Access,
+                                                 LPCWSTR Name, HANDLE* pHandle) override {
+        return m_inner->CreateSharedHandle(pObject, pAttributes, Access, Name, pHandle);
+    }
+    HRESULT STDMETHODCALLTYPE OpenSharedHandle(HANDLE NTHandle, REFIID riid, void** ppvObj) override {
+        return m_inner->OpenSharedHandle(NTHandle, riid, ppvObj);
+    }
+    HRESULT STDMETHODCALLTYPE OpenSharedHandleByName(LPCWSTR Name, DWORD Access, HANDLE* pNTHandle) override {
+        return m_inner->OpenSharedHandleByName(Name, Access, pNTHandle);
+    }
+    HRESULT STDMETHODCALLTYPE MakeResident(UINT NumObjects, ID3D12Pageable* const* ppObjects) override {
+        return m_inner->MakeResident(NumObjects, ppObjects);
+    }
+    HRESULT STDMETHODCALLTYPE Evict(UINT NumObjects, ID3D12Pageable* const* ppObjects) override {
+        return m_inner->Evict(NumObjects, ppObjects);
+    }
+    HRESULT STDMETHODCALLTYPE CreateFence(UINT64 InitialValue, D3D12_FENCE_FLAGS Flags, REFIID riid, void** ppFence) override {
+        return m_inner->CreateFence(InitialValue, Flags, riid, ppFence);
+    }
+    HRESULT STDMETHODCALLTYPE GetDeviceRemovedReason() override { return m_inner->GetDeviceRemovedReason(); }
+    void STDMETHODCALLTYPE GetCopyableFootprints(const D3D12_RESOURCE_DESC* pResourceDesc, UINT FirstSubresource, UINT NumSubresources,
+                                                 UINT64 BaseOffset, D3D12_PLACED_SUBRESOURCE_FOOTPRINT* pLayouts, UINT* pNumRows,
+                                                 UINT64* pRowSizeInBytes, UINT64* pTotalBytes) override {
+        m_inner->GetCopyableFootprints(pResourceDesc, FirstSubresource, NumSubresources, BaseOffset, pLayouts, pNumRows, pRowSizeInBytes,
+                                       pTotalBytes);
+    }
+    HRESULT STDMETHODCALLTYPE CreateQueryHeap(const D3D12_QUERY_HEAP_DESC* pDesc, REFIID riid, void** ppvHeap) override {
+        return m_inner->CreateQueryHeap(pDesc, riid, ppvHeap);
+    }
+    HRESULT STDMETHODCALLTYPE SetStablePowerState(BOOL Enable) override { return m_inner->SetStablePowerState(Enable); }
+    HRESULT STDMETHODCALLTYPE CreateCommandSignature(const D3D12_COMMAND_SIGNATURE_DESC* pDesc, ID3D12RootSignature* pRootSignature,
+                                                     REFIID riid, void** ppvCommandSignature) override {
+        return m_inner->CreateCommandSignature(pDesc, pRootSignature, riid, ppvCommandSignature);
+    }
+    void STDMETHODCALLTYPE GetResourceTiling(ID3D12Resource* pTiledResource, UINT* pNumTilesForEntireResource,
+                                             D3D12_PACKED_MIP_INFO* pPackedMipDesc, D3D12_TILE_SHAPE* pStandardTileShapeForNonTiledResource,
+                                             UINT* pNumSubresourceTilings, UINT FirstSubresourceTilingToGet,
+                                             D3D12_SUBRESOURCE_TILING* pSubresourceTilingsForNonTiledResource) override {
+        m_inner->GetResourceTiling(pTiledResource, pNumTilesForEntireResource, pPackedMipDesc, pStandardTileShapeForNonTiledResource,
+                                   pNumSubresourceTilings, FirstSubresourceTilingToGet, pSubresourceTilingsForNonTiledResource);
+    }
+    LUID STDMETHODCALLTYPE GetAdapterLuid() override { return m_inner->GetAdapterLuid(); }
+
+private:
+    std::atomic<ULONG> m_refCount{ 1 };
+    ComPtr<ID3D12Device> m_inner;
+    std::vector<std::string>& m_log;
+    std::string m_tag;
+};
+
+}
+
+TEST(InjectorRuntimeTest, DestroysOpenXrAndEyeCopyResourcesBeforeReleasingD3D12DeviceAndQueue) {
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter> warp;
+    ComPtr<ID3D12Device> realDevice;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
+        FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&realDevice)))) {
+        GTEST_SKIP() << "no WARP D3D12 device";
+    }
+    ComPtr<ID3D12CommandQueue> queue;
+    D3D12_COMMAND_QUEUE_DESC direct{D3D12_COMMAND_LIST_TYPE_DIRECT};
+    ASSERT_TRUE(SUCCEEDED(realDevice->CreateCommandQueue(&direct, IID_PPV_ARGS(&queue))));
+
+    std::vector<std::string> events;
+    ComPtr<ID3D12Device> device;
+    device.Attach(new ReleaseRecordingDevice(realDevice, events, "D3D12DeviceReleased"));
+    static const GUID kQueueTag = {0x12345678, 0x1111, 0x2222, {0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x02}};
+    {
+        auto* queueNotifier = new DestructionLogger(events, "D3D12QueueReleased");
+        ASSERT_TRUE(SUCCEEDED(queue->SetPrivateDataInterface(kQueueTag, queueNotifier)));
+        queueNotifier->Release();
+    }
+
+    auto dispatch = std::make_shared<TeardownRecordingOpenXrRuntime>(events);
+    dispatch->device = realDevice.Get();
+    dispatch->tracking.SetEyeFov(0, {-0.8f, 0.8f, 0.8f, -0.8f});
+    dispatch->tracking.SetEyeFov(1, {-0.8f, 0.8f, 0.8f, -0.8f});
+    auto openXrManager = std::make_shared<OpenXrManager>(dispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = openXrManager;
+    auto runtime = std::make_unique<InjectorRuntime>(std::move(deps));
+    runtime->GetDxgiProxy().SetD3D12DeviceAndQueue(device.Get(), queue.Get());
+    ASSERT_TRUE(openXrManager->HasSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(256, 256));
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = 256;
+    desc.Height = 256;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    ComPtr<ID3D12Resource> backBuffer;
+    ASSERT_TRUE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                          D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&backBuffer))));
+    ASSERT_TRUE(openXrManager->CopyBackBufferToEye(0, backBuffer.Get()));
+    ASSERT_TRUE(openXrManager->CopyBackBufferToEye(1, backBuffer.Get()));
+    ASSERT_TRUE(openXrManager->SubmitFramePair());
+
+    backBuffer.Reset();
+    queue.Reset();
+    device.Reset();
+    openXrManager.reset();
+    runtime.reset();
+
+    auto pos = [&](const std::string& name) {
+        return std::find(events.begin(), events.end(), name);
+    };
+    auto itSwapchain = pos("DestroySwapchain");
+    auto itSession = pos("DestroySession");
+    auto itInstance = pos("DestroyInstance");
+    auto itQueue = pos("D3D12QueueReleased");
+    auto itDevice = pos("D3D12DeviceReleased");
+    ASSERT_NE(itSwapchain, events.end());
+    ASSERT_NE(itSession, events.end());
+    ASSERT_NE(itInstance, events.end());
+    ASSERT_NE(itQueue, events.end());
+    ASSERT_NE(itDevice, events.end());
+    EXPECT_LT(itSwapchain, itQueue);
+    EXPECT_LT(itSession, itQueue);
+    EXPECT_LT(itInstance, itQueue);
+    EXPECT_LT(itSwapchain, itDevice);
+    EXPECT_LT(itSession, itDevice);
+    EXPECT_LT(itInstance, itDevice);
 }
 
 TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPass) {
@@ -3457,8 +3812,41 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainLeavesSwapChainUntouchedWhenFormatUn
     EXPECT_TRUE(desc.Windowed == FALSE);
 }
 
+namespace {
+
+struct SystemCreationRequest {
+    int calls = 0;
+    DXGI_SWAP_CHAIN_DESC desc{};
+    DXGI_SWAP_CHAIN_DESC1 desc1{};
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    bool hadFullscreenDesc = false;
+};
+SystemCreationRequest g_systemCreationRequest;
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChainForHwnd(
+    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc,
+    IDXGIOutput*, IDXGISwapChain1** ppSwapChain) {
+    ++g_systemCreationRequest.calls;
+    if (desc) g_systemCreationRequest.desc1 = *desc;
+    g_systemCreationRequest.hadFullscreenDesc = fullscreenDesc != nullptr;
+    if (fullscreenDesc) g_systemCreationRequest.fullscreenDesc = *fullscreenDesc;
+    if (ppSwapChain) *ppSwapChain = nullptr;
+    return S_OK;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChain(
+    IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** ppSwapChain) {
+    ++g_systemCreationRequest.calls;
+    if (desc) g_systemCreationRequest.desc = *desc;
+    if (ppSwapChain) *ppSwapChain = nullptr;
+    return S_OK;
+}
+
+}
+
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiveVrMode) {
     {
+        g_systemCreationRequest = {};
         auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
         auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
         ASSERT_TRUE(activeOpenXrManager->Initialize());
@@ -3466,23 +3854,38 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         EXPECT_TRUE(activeOpenXrManager->IsActive());
 
         auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+        MockFactory2 factory;
+        factory.vtable[kCreateSwapChainForHwndVTableSlot] = reinterpret_cast<void*>(&DescRecordingCreateSwapChainForHwnd);
+        ASSERT_TRUE(activeProxyRuntime->GetDxgiProxy().AttachFactory(factory.Get()));
 
-        DXGI_SWAP_CHAIN_DESC1 desc{};
-        desc.Width = 3840;
-        desc.Height = 2160;
-        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        desc.Scaling = DXGI_SCALING_NONE;
+        const DXGI_SWAP_CHAIN_DESC1 desc = [] {
+            DXGI_SWAP_CHAIN_DESC1 d{};
+            d.Width = 3840;
+            d.Height = 2160;
+            d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            d.Scaling = DXGI_SCALING_NONE;
+            return d;
+        }();
+        const DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc = [] {
+            DXGI_SWAP_CHAIN_FULLSCREEN_DESC fs{};
+            fs.Windowed = FALSE;
+            return fs;
+        }();
 
-        DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
-        fullscreenDesc.Windowed = FALSE;
+        IDXGISwapChain1* outSwapChain = nullptr;
+        EXPECT_EQ(DxgiProxy::Intercept_CreateSwapChainForHwnd(
+            reinterpret_cast<IDXGIFactory2*>(factory.Get()), nullptr, nullptr, &desc, &fullscreenDesc, nullptr, &outSwapChain), S_OK);
 
-        DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
-
-        EXPECT_EQ(desc.Scaling, DXGI_SCALING_STRETCH);
-        EXPECT_TRUE(fullscreenDesc.Windowed == TRUE);
+        ASSERT_EQ(g_systemCreationRequest.calls, 1);
+        EXPECT_EQ(g_systemCreationRequest.desc1.Scaling, DXGI_SCALING_STRETCH);
+        ASSERT_TRUE(g_systemCreationRequest.hadFullscreenDesc);
+        EXPECT_TRUE(g_systemCreationRequest.fullscreenDesc.Windowed == TRUE);
+        EXPECT_EQ(desc.Scaling, DXGI_SCALING_NONE);
+        EXPECT_TRUE(fullscreenDesc.Windowed == FALSE);
     }
 
     {
+        g_systemCreationRequest = {};
         auto mockFailingDispatch = std::make_shared<MockFailingOpenXrDispatch>();
         auto ptOpenXrManager = std::make_shared<OpenXrManager>(mockFailingDispatch);
         ASSERT_TRUE(ptOpenXrManager->Initialize());
@@ -5889,34 +6292,6 @@ public:
     }
 };
 
-struct SystemCreationRequest {
-    int calls = 0;
-    DXGI_SWAP_CHAIN_DESC desc{};
-    DXGI_SWAP_CHAIN_DESC1 desc1{};
-    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
-    bool hadFullscreenDesc = false;
-};
-SystemCreationRequest g_systemCreationRequest;
-
-__declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChainForHwnd(
-    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc,
-    IDXGIOutput*, IDXGISwapChain1** ppSwapChain) {
-    ++g_systemCreationRequest.calls;
-    if (desc) g_systemCreationRequest.desc1 = *desc;
-    g_systemCreationRequest.hadFullscreenDesc = fullscreenDesc != nullptr;
-    if (fullscreenDesc) g_systemCreationRequest.fullscreenDesc = *fullscreenDesc;
-    if (ppSwapChain) *ppSwapChain = nullptr;
-    return S_OK;
-}
-
-__declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChain(
-    IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** ppSwapChain) {
-    ++g_systemCreationRequest.calls;
-    if (desc) g_systemCreationRequest.desc = *desc;
-    if (ppSwapChain) *ppSwapChain = nullptr;
-    return S_OK;
-}
-
 struct RefusedSessionRig {
     std::shared_ptr<SessionRefusingOpenXrRuntime> runtime = std::make_shared<SessionRefusingOpenXrRuntime>();
     std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(runtime);
@@ -6127,6 +6502,138 @@ TEST(DxgiProxyTest, WhenTheRuntimeNeedsTheGamesAdapterThereIsNoAdapterWarning) {
     const std::string log = capture.Text();
     EXPECT_EQ(log.find("the headset must be on the GPU"), std::string::npos) << log;
     EXPECT_EQ(rig.runtime->createSessionCalls, 1u);
+}
+
+TEST(DxgiProxyTest, PresentAndPresent1WithDxgiPresentTestForwardStraightThroughWithoutVrWork) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::SequentialDualPass);
+    const uint32_t waitBefore = rig.dispatch->waitFrameCalls;
+    const uint32_t beginBefore = rig.dispatch->beginFrameCalls;
+    const uint32_t endBefore = rig.dispatch->endFrameCalls;
+
+    EXPECT_EQ(rig.Present(rig.game, 2, DXGI_PRESENT_TEST), S_OK);
+    ASSERT_EQ(g_systemPresents.size(), 1u);
+    EXPECT_EQ(g_systemPresents[0].syncInterval, 2u);
+    EXPECT_EQ(g_systemPresents[0].flags, static_cast<UINT>(DXGI_PRESENT_TEST));
+    EXPECT_FALSE(rig.openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(rig.dispatch->waitFrameCalls, waitBefore);
+    EXPECT_EQ(rig.dispatch->beginFrameCalls, beginBefore);
+    EXPECT_EQ(rig.dispatch->endFrameCalls, endBefore);
+
+    DXGI_PRESENT_PARAMETERS params{};
+    EXPECT_EQ(rig.Present1(rig.game, 3, DXGI_PRESENT_TEST | DXGI_PRESENT_DO_NOT_WAIT, &params), S_OK);
+    ASSERT_EQ(g_systemPresents1.size(), 1u);
+    EXPECT_EQ(g_systemPresents1[0].syncInterval, 3u);
+    EXPECT_EQ(g_systemPresents1[0].flags, static_cast<UINT>(DXGI_PRESENT_TEST | DXGI_PRESENT_DO_NOT_WAIT));
+    EXPECT_EQ(g_systemPresents1[0].params, &params);
+    EXPECT_FALSE(rig.openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(rig.dispatch->waitFrameCalls, waitBefore);
+    EXPECT_EQ(rig.dispatch->beginFrameCalls, beginBefore);
+
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
+    EXPECT_EQ(rig.Present(rig.game, 1, DXGI_PRESENT_TEST), S_OK);
+    EXPECT_EQ(g_systemPresents.size(), 2u);
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
+    EXPECT_EQ(rig.Present(rig.game, 1, 0), S_OK);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+}
+
+TEST(DxgiProxyTest, EnteringPassThroughModeImmediatelyReleasesCachedBackBuffers) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = rig.MakeWindow("PassThroughReleaseWnd");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain chain(rig.vtable);
+    creating.CreateForHwnd(chain.Get(), gameWindow);
+
+    rig.Present(chain.Get(), 1, 0);
+    ASSERT_EQ(chain.buffer.references, 2);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present(chain.Get(), 1, 0);
+
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(chain.buffer.references, 1);
+}
+
+namespace {
+
+class MultiFormatOpenXrDispatch : public MockActiveOpenXrDispatch {
+public:
+    std::vector<int64_t> formats{ DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM };
+
+    XrResult EnumerateSwapchainFormats(XrSession, uint32_t capacity, uint32_t* count, int64_t* out) override {
+        if (count) *count = static_cast<uint32_t>(formats.size());
+        if (capacity >= formats.size() && out) {
+            std::copy(formats.begin(), formats.end(), out);
+        }
+        return XR_SUCCESS;
+    }
+};
+
+}
+
+TEST(DxgiProxyTest, ResizeBuffersValidatesNewFormatAgainstRuntimeAndExistingEyeSwapchains) {
+    {
+        GameAndOtherSwapChainRig rig(VRRenderingMode::AFR);
+        rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+        ASSERT_TRUE(rig.openXrManager->IsActive());
+
+        EXPECT_EQ(rig.game->ResizeBuffers(2, 1280, 720, DXGI_FORMAT_R16G16B16A16_FLOAT, 0), S_OK);
+        EXPECT_TRUE(rig.openXrManager->IsPassThrough());
+        EXPECT_FALSE(rig.openXrManager->HasSession());
+        ASSERT_EQ(g_systemResizes.size(), 1u);
+        EXPECT_EQ(g_systemResizes[0].width, 1280u);
+        EXPECT_EQ(g_systemResizes[0].height, 720u);
+    }
+
+    {
+        auto dispatch = std::make_shared<MultiFormatOpenXrDispatch>();
+        auto openXrManager = std::make_shared<OpenXrManager>(dispatch);
+        ASSERT_TRUE(openXrManager->Initialize());
+        ASSERT_TRUE(openXrManager->CreateSession());
+        ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+        ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM));
+        auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+        vrBridge->PerformHandshake();
+        auto runtime = MakeRuntime(openXrManager, vrBridge);
+
+        std::vector<void*> vtable(41, nullptr);
+        vtable[0] = reinterpret_cast<void*>(&MockSwapChain3QI);
+        vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+        vtable[2] = reinterpret_cast<void*>(&MockRelease);
+        vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+        vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&RecordingPresent);
+        vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+        vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+        vtable[kResizeBuffersVTableSlot] = reinterpret_cast<void*>(&RecordingResizeBuffers);
+        vtable[kResizeBuffers1VTableSlot] = reinterpret_cast<void*>(&RecordingResizeBuffers1);
+        MockComObject scObj{ vtable.data() };
+        auto* sc3 = reinterpret_cast<IDXGISwapChain3*>(&scObj);
+        ASSERT_TRUE(runtime->GetDxgiProxy().AttachSwapChain(sc3));
+
+        EXPECT_EQ(sc3->ResizeBuffers(2, 1920, 1080, DXGI_FORMAT_UNKNOWN, 0), S_OK);
+        EXPECT_TRUE(openXrManager->IsActive());
+        EXPECT_TRUE(openXrManager->HasEyeSwapchains());
+
+        EXPECT_EQ(sc3->ResizeBuffers(2, 1920, 1080, DXGI_FORMAT_B8G8R8A8_UNORM, 0), S_OK);
+        EXPECT_TRUE(openXrManager->IsActive());
+        EXPECT_FALSE(openXrManager->HasEyeSwapchains());
+
+        ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_B8G8R8A8_UNORM));
+        const UINT nodeMask[2] = { 1, 1 };
+        IUnknown* queues[2] = { nullptr, nullptr };
+        EXPECT_EQ(sc3->ResizeBuffers1(2, 1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM, 0, nodeMask, queues), S_OK);
+        EXPECT_TRUE(openXrManager->IsActive());
+        EXPECT_FALSE(openXrManager->HasEyeSwapchains());
+
+        EXPECT_EQ(sc3->ResizeBuffers1(2, 1920, 1080, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, nodeMask, queues), S_OK);
+        EXPECT_TRUE(openXrManager->IsPassThrough());
+        runtime->GetDxgiProxy().DetachAll();
+    }
 }
 
 }

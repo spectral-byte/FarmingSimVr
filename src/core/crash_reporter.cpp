@@ -2,6 +2,7 @@
 
 #include "core/injector_version.h"
 #include "core/logger.h"
+#include "proxy/version_exports.h"
 
 #include <windows.h>
 #include <intrin.h>
@@ -236,7 +237,7 @@ void ReportDumpFailure(DWORD waited) {
     Logger* log = g_log.load();
     if (!log || g_failureReported.exchange(true)) return;
 
-    CrashText& line = g_crashText;
+    static CrashText line;
     line.length = 0;
     line.Add("Injector: Crash dump not written: ");
     if (waited == WAIT_TIMEOUT) {
@@ -348,7 +349,7 @@ void PrepareTheDump(const std::wstring& path) {
         FailPreparing(DumpState::NoDbghelp, GetLastError());
         return;
     }
-    LoadLibraryExW((std::wstring(systemDirectory, length) + L"\\version.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    SystemVersionDll();
     g_miniDumpWriteDump = reinterpret_cast<MiniDumpWriteDumpFn>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
     if (!g_miniDumpWriteDump) {
         g_dumpState = DumpState::NoMiniDumpWriteDump;
