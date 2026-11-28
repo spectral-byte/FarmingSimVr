@@ -626,11 +626,19 @@ TEST(FfxMvConventionsTest, ConventionsTheCorrectionCannotHonourAreReportedAsUnsu
 class FfxFakeMvPass : public IMotionVectorPass {
 public:
     int recordCount = 0;
+    int pollCount = 0;
     MvPassInputs lastInputs;
     ID3D12Resource* output = reinterpret_cast<ID3D12Resource*>(0xBEEF);
     bool fail = false;
     std::vector<MvCorrectionRequest> corrections;
     std::vector<MvSelfCheckRequest> selfChecks;
+    std::vector<MvSelfCheckReport> pendingReports;
+    std::vector<MvSelfCheckReport> PollSelfCheck() override {
+        ++pollCount;
+        std::vector<MvSelfCheckReport> out;
+        out.swap(pendingReports);
+        return out;
+    }
     MvPassResult Record(const MvPassInputs& inputs) override {
         ++recordCount;
         lastInputs = inputs;
@@ -832,25 +840,27 @@ TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingSelfChecksTheCorrectedVectors
     EXPECT_NEAR(m_pass->selfChecks[0].toPrevious.c[0], 0.0f, 1e-5f);
 }
 
-TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingWithoutRecordsKeepsTheEnginesVectorsThroughACopy) {
+TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingWithoutRecordsKeepsTheEnginesVectorsWithoutDispatchingPass) {
     m_bridge.SetRenderingMode(VRRenderingMode::AFR);
     m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_TRUE(m_pass->corrections.empty());
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(s_dispatchMotionVectorStates.back(), 2u);
 }
 
-TEST_F(FfxMvCorrectionTest, MissingCameraRecordsPassTheEnginesVectorsThroughACopyWithoutACorrection) {
+TEST_F(FfxMvCorrectionTest, MissingCameraRecordsKeepTheEnginesVectorsWithoutDispatchingPass) {
     m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
     m_bridge.GetCameraRecords().Clear();
     m_ffx.SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_EQ(m_pass->recordCount, 1);
-    EXPECT_TRUE(m_pass->corrections.empty());
-    EXPECT_EQ(m_pass->lastInputs.correction, nullptr);
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(s_dispatchMotionVectorStates.back(), 2u);
 }
 
 TEST_F(FfxMvCorrectionTest, AZeroMotionVectorScalePassesTheEnginesVectorsThrough) {
@@ -859,8 +869,33 @@ TEST_F(FfxMvCorrectionTest, AZeroMotionVectorScalePassesTheEnginesVectorsThrough
     auto desc = MakeDesc();
     desc.motionVectorScale = {0.0f, 0.0f};
     Dispatch(m_context, desc);
+    EXPECT_EQ(m_pass, nullptr);
+    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+}
+
+TEST_F(FfxMvCorrectionTest, NoOpFramePollsPendingSelfChecksWithoutDispatchingPass) {
+    SetUpSdpWithRecords();
+    m_ffx.SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
-    EXPECT_TRUE(m_pass->corrections.empty());
+    ASSERT_EQ(m_pass->recordCount, 1);
+    ASSERT_EQ(m_pass->pollCount, 1);
+
+    MvSelfCheckReport report;
+    report.eye = 0;
+    report.evalIndex = 7;
+    m_pass->pendingReports.push_back(report);
+
+    m_bridge.GetCameraRecords().Clear();
+    Dispatch(m_context, desc);
+
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(m_pass->pollCount, 2);
+    EXPECT_TRUE(m_pass->pendingReports.empty());
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(s_dispatchMotionVectorStates.back(), 2u);
 }
 
 TEST_F(FfxMvCorrectionTest, ConventionsThePassCannotHonourKeepTheEnginesVectorsAndSkipThePass) {
@@ -1083,6 +1118,8 @@ TEST_F(FfxMvCorrectionTest, NoSelfCheckWhileDiagnosticsAreNotArmed) {
 
 TEST_F(FfxMvCorrectionTest, ChainedUpscaleDispatchDescriptorInPNextIsIntercepted) {
     SetUpSdpWithRecords();
+    m_bridge.GetCameraRecords().AdvanceFrame();
+    ASSERT_TRUE(m_bridge.GetCameraRecords().Report(FfxCamera(1, 10.064)));
     m_ffx.SetMvFixEnabled(true);
     m_bridge.SetSubPassIndex(1);
     m_ffx.TriggerDiscontinuityFlush();

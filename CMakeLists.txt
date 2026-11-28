@@ -125,6 +125,8 @@ set(CORE_SOURCES
     src/ngx/ngx_interceptor.cpp
     src/ngx/mv_pass.h
     src/ngx/mv_pass.cpp
+    src/ngx/upscaler_mv_helper.h
+    src/ngx/upscaler_mv_helper.cpp
     src/ngx/mv_reprojection.h
     src/ngx/mv_reprojection.cpp
     src/ngx/near_estimator.h
