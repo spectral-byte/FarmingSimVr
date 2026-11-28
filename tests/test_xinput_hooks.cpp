@@ -6,6 +6,9 @@
 #include "luau/vr_bridge.h"
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -320,4 +323,96 @@ TEST_F(XInputHooksTest, PartialHookInstallFailureRollsBackAndPreservesRealXInput
     EXPECT_EQ(XInputGetState(99, nullptr), static_cast<DWORD>(ERROR_BAD_ARGUMENTS));
 
     s_blockingDetour.Uninstall();
+}
+
+TEST_F(XInputHooksTest, ConfigureDisableWaitsForInFlightEvaluateProbeBeforeUninstallingHooks) {
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = bridge;
+    InjectorRuntime runtime(std::move(deps));
+    auto& pad = bridge->GetVirtualGamepad();
+
+    double fakeNowMs = 0.0;
+    pad.SetClockForTesting([&] { return fakeNowMs; });
+    pad.Configure(false, true);
+    pad.Configure(true, true);
+    ASSERT_TRUE(pad.AreHooksInstalled());
+
+    std::mutex gateMutex;
+    std::condition_variable gateCv;
+    bool probeEntered = false;
+    bool allowProbeExit = false;
+    std::atomic<bool> blockFirstProbe{true};
+    pad.SetRealPadProbeForTesting([&](DWORD) {
+        if (blockFirstProbe.exchange(false)) {
+            std::unique_lock<std::mutex> lock(gateMutex);
+            probeEntered = true;
+            gateCv.notify_all();
+            gateCv.wait_for(lock, std::chrono::seconds(5), [&] { return allowProbeExit; });
+        }
+        return false;
+    });
+
+    fakeNowMs = 5000.0;
+    std::thread prober([&] {
+        (void)pad.GetStatus();
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(gateMutex);
+        ASSERT_TRUE(gateCv.wait_for(lock, std::chrono::seconds(5), [&] { return probeEntered; }));
+    }
+
+    std::atomic<bool> configureDone{false};
+    std::thread disabler([&] {
+        pad.Configure(false, true);
+        configureDone.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_FALSE(configureDone.load());
+    EXPECT_TRUE(pad.AreHooksInstalled());
+
+    {
+        std::lock_guard<std::mutex> lock(gateMutex);
+        allowProbeExit = true;
+        gateCv.notify_all();
+    }
+
+    prober.join();
+    disabler.join();
+    EXPECT_TRUE(configureDone.load());
+    EXPECT_FALSE(pad.AreHooksInstalled());
+}
+
+TEST_F(XInputHooksTest, ConcurrentEvaluateRealTrampolineProbesAndConfigureTogglesCompleteSafely) {
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = bridge;
+    auto runtime = std::make_unique<InjectorRuntime>(std::move(deps));
+    auto& pad = bridge->GetVirtualGamepad();
+
+    std::atomic<double> fakeNowMs{0.0};
+    pad.SetClockForTesting([&] {
+        double current = fakeNowMs.load();
+        while (!fakeNowMs.compare_exchange_weak(current, current + 2000.0)) {}
+        return current + 2000.0;
+    });
+    pad.Configure(false, true);
+    pad.Configure(true, true);
+    ASSERT_TRUE(pad.AreHooksInstalled());
+
+    std::atomic<bool> stop{false};
+    std::thread prober([&] {
+        while (!stop.load()) {
+            (void)pad.GetStatus();
+        }
+    });
+
+    for (int i = 0; i < 25; ++i) {
+        pad.Configure(false, true);
+        pad.Configure(true, true);
+    }
+    runtime.reset();
+    stop.store(true);
+    prober.join();
+    EXPECT_FALSE(pad.AreHooksInstalled());
 }

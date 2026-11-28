@@ -32,6 +32,7 @@ void D3D12EyeCopy::SetDeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* q
 
 bool D3D12EyeCopy::WaitForFenceValue(uint64_t fenceValue) {
     if (!m_fence || fenceValue == 0) return true;
+    if (fenceValue == UINT64_MAX) return false;
     const UINT64 completed = m_fence->GetCompletedValue();
     if (completed == UINT64_MAX) return false;
     if (completed >= fenceValue) return true;
@@ -43,38 +44,53 @@ bool D3D12EyeCopy::WaitForFenceValue(uint64_t fenceValue) {
 }
 
 void D3D12EyeCopy::Release() {
-    const bool fenceWaited = WaitForFenceValue(m_currentFenceValue);
-    m_fence.Reset();
+    const bool fenceWaited = !m_signalFailed && WaitForFenceValue(m_currentFenceValue);
+    m_signalFailed = false;
     m_currentFenceValue = 0;
     m_clearFenceValue = 0;
-    m_clearCommandList.Reset();
-    m_clearAllocator.Reset();
-    m_clearRtvHeap.Reset();
-    for (uint32_t r = 0; r < kRingSize; ++r) {
-        m_copyFenceValues[r] = 0;
-        m_copyCommandLists[r].Reset();
-        m_copyAllocators[r].Reset();
-        m_timestampPending[r] = false;
-        m_copySubmitNs[r] = 0;
+    if (fenceWaited) {
+        m_fence.Reset();
+        m_clearCommandList.Reset();
+        m_clearAllocator.Reset();
+        m_clearRtvHeap.Reset();
+        for (uint32_t r = 0; r < kRingSize; ++r) {
+            m_copyFenceValues[r] = 0;
+            m_copyCommandLists[r].Reset();
+            m_copyAllocators[r].Reset();
+            m_timestampPending[r] = false;
+            m_copySubmitNs[r] = 0;
+        }
+        if (m_timestampReadback && m_timestampReadbackMapped) {
+            const D3D12_RANGE written{0, 0};
+            m_timestampReadback->Unmap(0, &written);
+        }
+        m_timestampReadbackMapped = nullptr;
+        m_timestampHeap.Reset();
+        m_timestampReadback.Reset();
+        m_fenceEvent.Close();
+    } else {
+        m_fence.Detach();
+        m_clearCommandList.Detach();
+        m_clearAllocator.Detach();
+        m_clearRtvHeap.Detach();
+        for (uint32_t r = 0; r < kRingSize; ++r) {
+            m_copyFenceValues[r] = 0;
+            m_copyCommandLists[r].Detach();
+            m_copyAllocators[r].Detach();
+            m_timestampPending[r] = false;
+            m_copySubmitNs[r] = 0;
+        }
+        m_timestampReadbackMapped = nullptr;
+        m_timestampHeap.Detach();
+        m_timestampReadback.Detach();
+        m_fenceEvent.Release();
     }
-    if (m_timestampReadback && m_timestampReadbackMapped) {
-        const D3D12_RANGE written{0, 0};
-        m_timestampReadback->Unmap(0, &written);
-    }
-    m_timestampReadbackMapped = nullptr;
-    m_timestampHeap.Reset();
-    m_timestampReadback.Reset();
     m_timestampsFailed = false;
     m_gpuTimestampFrequency = 0;
     m_gpuCalibrationTicks = 0;
     m_gpuCalibrationCpuNs = 0;
     m_copiesSinceCalibration = 0;
     m_ringIndex = 0;
-    if (fenceWaited) {
-        m_fenceEvent.Close();
-    } else {
-        m_fenceEvent.Release();
-    }
 }
 
 bool D3D12EyeCopy::EnsureFence() {
@@ -282,6 +298,8 @@ void D3D12EyeCopy::Copy(ID3D12Resource* backBuffer, ID3D12Resource* destTexture,
 
     const uint64_t nextFence = m_currentFenceValue + 1;
     if (FAILED(m_queue->Signal(m_fence.Get(), nextFence))) {
+        m_copyFenceValues[ringSlot] = UINT64_MAX;
+        m_signalFailed = true;
         return;
     }
     m_currentFenceValue = nextFence;
@@ -351,6 +369,8 @@ bool D3D12EyeCopy::ClearToBlack(ID3D12Resource* backBuffer) {
     m_queue->ExecuteCommandLists(1, lists);
     const uint64_t nextFence = m_currentFenceValue + 1;
     if (FAILED(m_queue->Signal(m_fence.Get(), nextFence))) {
+        m_clearFenceValue = UINT64_MAX;
+        m_signalFailed = true;
         return false;
     }
     m_currentFenceValue = nextFence;

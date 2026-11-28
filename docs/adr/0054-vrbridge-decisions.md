@@ -46,8 +46,8 @@ This record holds the non-obvious decisions behind VRBridge and the Luau interce
 - **`VRBridge::Lua_GetPanelHitAlongRay`**: VRBridge.getPanelHitAlongRay(hand, ox, oy, oz, dx, dy, dz [, outTable]) -> { hit, u, v, distance }: the same for a ray the caller gives, in the space the hand poses of getHandState are in. The Pointer Ray starts at the index fingertip and runs along the finger, which only the Companion Mod knows. The direction need not be a unit vector. A miss when an argument is missing, the direction has no length, or the hand is not tracked.
 - **`VRBridge::Lua_SetMenuDistance`, `self->SetMenuDistance(lua_isnumber(L, 1) ? static_cast<float>(lua_tonumber(L,...`**: Anything that is not a number is the default (lua_tonumber would make it 0, which clamps to the nearest distance)
 - **`VRBridge::Lua_Index`, `if (const char* key = StringArgument(L, 2)) {`**: A key that is not a string (a number, say) is not converted to one: that would allocate. It reads nil.
-- **`VRBridge::Lua_SetDlssMvFix`, `lua_pushboolean(L, self->m_ngxInterceptor->SetMvFixEnabled(enabled) == enable...`**: True when the request took effect; turning the pass on after it disabled itself for the session reads false.
-- **`VRBridge::Lua_DlssDiag`, `if (FidelityFxInterceptor* ffx = self->m_ngxInterceptor->GetFidelityFxInterce...`**: FSR3 dispatches are traced through the same command.
+- **`VRBridge::Lua_SetDlssMvFix`, `self->SetMvFixEnabled(enabled)`**: True when the request took effect on the active upscaler backend; turning the pass on after it disabled itself for the session reads false.
+- **`VRBridge::Lua_DlssDiag`, `self->ResolveFidelityFxInterceptor()`**: FSR3 dispatches are traced through the same command, even when NGX is absent.
 
 ### `src/luau/vr_bridge.h`
 

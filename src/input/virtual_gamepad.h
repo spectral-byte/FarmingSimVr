@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/detour.h"
+#include "core/in_flight_gate.h"
 #include "openxr/openxr_types.h"
 #include <windows.h>
 #include <xinput.h>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -104,12 +106,15 @@ private:
     void ApplyRightStickChordLocked(const HandState& right, XINPUT_GAMEPAD& pad, bool stickClickSuppressed);
     void ResetRightStickChordLocked();
 
-    void InstallHooksLocked();
-    void RollBackHooksLocked();
-    void UninstallHooksLocked();
+    void InstallHooks(std::unique_lock<std::mutex>& lock);
+    void RollBackHooks(std::unique_lock<std::mutex>& lock);
+    void UninstallHooks(std::unique_lock<std::mutex>& lock);
 
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::mutex m_mutex;
+    std::condition_variable m_hooksCv;
+    InFlightCallGate m_trampolineGate;
+    bool m_hooksStopping = false;
     bool m_enabled = true;
     bool m_live = true;
     bool m_owned = false;

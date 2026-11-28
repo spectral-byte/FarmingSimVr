@@ -47,6 +47,7 @@ private:
     uint64_t m_copyFenceValues[kRingSize]{};
     uint64_t m_currentFenceValue = 0;
     uint32_t m_ringIndex = 0;
+    bool m_signalFailed = false;
     ScopedEventHandle m_fenceEvent;
     bool EnsureFence();
     bool WaitForFenceValue(uint64_t fenceValue);

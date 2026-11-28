@@ -7,17 +7,18 @@ This record holds the non-obvious decisions behind the OpenXR session and its li
 
 ### `src/openxr/d3d12_eye_copy.cpp`
 
+- **`D3D12EyeCopy::~D3D12EyeCopy`**: On process termination (`IsProcessTerminating()`), detaches all D3D12 COM handles and releases `m_fenceEvent` without closing or invoking `IUnknown::Release()` into tearing-down driver DLLs.
 - **`D3D12EyeCopy::SetDeviceAndQueue`**: Releases any prior device/queue resources via `Release()` whenever `device` or `queue` changes, so old allocators, fences, and mapped readback buffers are torn down before switching devices.
-- **`D3D12EyeCopy::WaitForFenceValue`**: Checks `GetCompletedValue() == UINT64_MAX` (device removed), `SetEventOnCompletion` failure, and a finite `kFenceWaitTimeoutMs` wait so `Copy`, `ClearToBlack`, and `Release` never reuse an in-flight allocator or hang indefinitely.
+- **`D3D12EyeCopy::WaitForFenceValue`**: Rejects faulted `UINT64_MAX` fence targets, checks `GetCompletedValue() == UINT64_MAX` (device removed), `SetEventOnCompletion` failure, and a finite `kFenceWaitTimeoutMs` wait so `Copy`, `ClearToBlack`, and `Release` never reuse an in-flight allocator or hang indefinitely.
 - **`D3D12EyeCopy::EnsureTimestamps`, `LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU e...`**: The trace still has its CPU timings; only the GPU eye copy lines are missing. Keeps `m_timestampReadback` persistently mapped (`m_timestampReadbackMapped`) until `Release()` rather than mapping and unmapping per copy.
 - **`D3D12EyeCopy::ReportTimestamps`, `if (m_copiesSinceCalibration++ % 64 == 0) {`**: The GPU and CPU clocks drift apart slowly; recalibrating every few dozen copies keeps the lag exact.
-- **`D3D12EyeCopy::Release`**: Resets `m_timestampsFailed`, `m_gpuTimestampFrequency`, `m_gpuCalibrationTicks`, `m_gpuCalibrationCpuNs`, `m_copiesSinceCalibration`, and unmaps `m_timestampReadback` so a new session or device recalibrates cleanly.
+- **`D3D12EyeCopy::Release`**: Waits on `m_currentFenceValue` (skipped if `m_signalFailed`). When the wait succeeds, unmaps `m_timestampReadback`, resets all D3D12 COM objects, and closes `m_fenceEvent`. When `!fenceWaited` (wait timed out/failed, device removed, or an earlier `Signal` failed), detaches all potentially in-flight COM objects and releases `m_fenceEvent` without closing an armed handle so GPU work in flight cannot hit UAF. Always resets `m_signalFailed`, `m_timestampsFailed`, `m_timestampReadbackMapped`, calibration fields, and ring state so a new session or device starts cleanly.
 - **`D3D12EyeCopy::Copy`, `if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, ...`**: A new list is created open. Close it so every use starts from a closed list that can be reset.
 - **`D3D12EyeCopy::Copy`, `if (!(curCommandList && curAllocator && destTexture)) {`**: A copy with no destination texture records nothing: the slot's list stays closed, nothing is executed and its fence value is not advanced.
 - **`D3D12EyeCopy::Copy`, `ReportTimestamps(ringSlot);`**: The slot's earlier copy has run, so its timestamps are written.
-- **`D3D12EyeCopy::Copy`, `curAllocator->Reset();`**: The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset. Advance `m_currentFenceValue` and `m_copyFenceValues[ringSlot]` only when `m_queue->Signal` succeeds.
+- **`D3D12EyeCopy::Copy`, `curAllocator->Reset();`**: The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset. If `m_queue->Signal` fails after `ExecuteCommandLists`, mark `m_copyFenceValues[ringSlot] = UINT64_MAX` and `m_signalFailed = true` so that unfenced allocator is never reused and `Release()` detaches in-flight objects.
 - **`D3D12EyeCopy::Copy`, `barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;`**: OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be returned to RENDER_TARGET before release.
-- **`D3D12EyeCopy::ClearToBlack`, `barrier`**: The game hands the back buffer to Present in the PRESENT state (as Copy assumes); it goes back to that state after the clear.
+- **`D3D12EyeCopy::ClearToBlack`, `barrier`**: The game hands the back buffer to Present in the PRESENT state (as Copy assumes); it goes back to that state after the clear. If `m_queue->Signal` fails after `ExecuteCommandLists`, mark `m_clearFenceValue = UINT64_MAX` and `m_signalFailed = true` so the unfenced clear allocator is never reused.
 
 ### `src/openxr/d3d12_eye_copy.h`
 
@@ -43,7 +44,9 @@ This record holds the non-obvious decisions behind the OpenXR session and its li
 ### `src/openxr/openxr_cursor_overlay.cpp`
 
 - **`OpenXrCursorOverlay::ComputeCursorQuadPose`, `Vector3 localOffset(`**: Hotspot offset: tip of cursor is top-left corner of cursor quad Center of cursor quad is offset by (+cursorWidth/2, -cursorHeight/2) Forward offset of 2mm (+Z in local quad space, towards player) eliminates z-fighting
-- **`OpenXrCursorOverlay::UploadTexture`, `barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;`**: OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be returned to RENDER_TARGET before release.
+- **`OpenXrCursorOverlay::CreateSwapchain`, `XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT`**: The arrow cursor image is uploaded once and never redrawn, so the swapchain is allocated as a single static image (`XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT`). Because OpenXR forbids acquiring a static swapchain image more than once, any upload failure after `xrAcquireSwapchainImage` succeeds destroys the cursor swapchain (preserving `m_lastXrResult`) so a later retry recreates a fresh swapchain instead of hitting `XR_ERROR_CALL_ORDER_INVALID`.
+- **`UploadPixelsToResource`, `barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;`**: OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be returned to RENDER_TARGET before release. Treats `GetCompletedValue() == UINT64_MAX` (device removed) as failure, detaches in-flight GPU objects (`uploadBuffer`, `cmdAlloc`, `cmdList`, `fence`) on post-`ExecuteCommandLists` failures/timeouts, and releases an armed `hEvent` without closing it on wait timeout/failure.
+- **`OpenXrCursorOverlay::PrepareCompositionLayer`, `if (!UploadTexture(device, queue, dispatch))`**: Returns `false` if texture upload fails so an unuploaded cursor swapchain layer is never submitted.
 
 ### `src/openxr/openxr_dispatch.h`
 

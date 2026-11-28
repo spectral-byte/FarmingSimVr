@@ -26,60 +26,67 @@ TrackedNgxParamRegistry& NgxParamRegistry() {
     return *registry;
 }
 
+enum class KnownNgxKeyType {
+    Float,
+    Int,
+    Uint,
+    D3D12Resource
+};
+
 struct KnownNgxKey {
     const char* name;
-    NgxParamType type;
+    KnownNgxKeyType type;
 };
 
 constexpr KnownNgxKey kKnownNgxKeys[] = {
-    {NVSDK_NGX_Parameter_Width, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_Height, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_OutWidth, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_OutHeight, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_PerfQualityValue, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_RTXValue, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_Reset, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_CreationNodeMask, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_VisibilityNodeMask, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_Color, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_Output, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_Depth, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_MotionVectors, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_Jitter_Offset_X, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_Jitter_Offset_Y, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_MV_Scale_X, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_MV_Scale_Y, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_MV_Offset_X, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_MV_Offset_Y, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_Sharpness, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_InWidth, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_InHeight, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Width, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Height, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_ExposureTexture, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_PreExposure, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_DLSS_Exposure_Texture, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_DLSS_Pre_Exposure, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_DLSS_Exposure, NgxParamType::Float},
-    {NVSDK_NGX_Parameter_TonemapperType, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, NgxParamType::D3D12Resource},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_Resource_Width, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_Resource_Height, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, NgxParamType::Int},
-    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, NgxParamType::Uint},
-    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, NgxParamType::Uint}
+    {NVSDK_NGX_Parameter_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_OutWidth, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_OutHeight, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_PerfQualityValue, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_RTXValue, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_Reset, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_CreationNodeMask, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_VisibilityNodeMask, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_Color, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Output, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Depth, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_MotionVectors, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_Jitter_Offset_X, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_Jitter_Offset_Y, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Scale_X, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Scale_Y, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Offset_X, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_MV_Offset_Y, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_Sharpness, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_InWidth, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_InHeight, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Optimal_Render_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_ExposureTexture, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_PreExposure, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Exposure_Texture, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_DLSS_Pre_Exposure, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_DLSS_Exposure, KnownNgxKeyType::Float},
+    {NVSDK_NGX_Parameter_TonemapperType, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, KnownNgxKeyType::D3D12Resource},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_Resource_Width, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_Resource_Height, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, KnownNgxKeyType::Int},
+    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, KnownNgxKeyType::Uint},
+    {NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, KnownNgxKeyType::Uint}
 };
 
 bool IsDataOrImageResourceLoad(DWORD dwFlags, HMODULE hMod) {
@@ -187,7 +194,7 @@ void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
     m_params.clear();
     for (const auto& key : kKnownNgxKeys) {
         switch (key.type) {
-            case NgxParamType::Float: {
+            case KnownNgxKeyType::Float: {
                 float fVal = 0.0f;
                 if (NVSDK_NGX_SUCCEED(source->Get(key.name, &fVal))) {
                     Set(key.name, fVal);
@@ -199,19 +206,7 @@ void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
                 }
                 break;
             }
-            case NgxParamType::Double: {
-                double dVal = 0.0;
-                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &dVal))) {
-                    Set(key.name, dVal);
-                    break;
-                }
-                float fVal = 0.0f;
-                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &fVal))) {
-                    Set(key.name, fVal);
-                }
-                break;
-            }
-            case NgxParamType::Int: {
+            case KnownNgxKeyType::Int: {
                 int iVal = 0;
                 if (NVSDK_NGX_SUCCEED(source->Get(key.name, &iVal))) {
                     Set(key.name, iVal);
@@ -223,7 +218,7 @@ void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
                 }
                 break;
             }
-            case NgxParamType::Uint: {
+            case KnownNgxKeyType::Uint: {
                 unsigned long long ullVal = 0;
                 if (NVSDK_NGX_SUCCEED(source->Get(key.name, &ullVal))) {
                     if (ullVal > (std::numeric_limits<unsigned int>::max)()) {
@@ -239,14 +234,7 @@ void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
                 }
                 break;
             }
-            case NgxParamType::Ull: {
-                unsigned long long ullVal = 0;
-                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &ullVal))) {
-                    Set(key.name, ullVal);
-                }
-                break;
-            }
-            case NgxParamType::D3D12Resource: {
+            case KnownNgxKeyType::D3D12Resource: {
                 ID3D12Resource* res12 = nullptr;
                 if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res12))) {
                     Set(key.name, res12);
@@ -257,25 +245,6 @@ void NgxParameterImpl::CopyFrom(const NVSDK_NGX_Parameter* source) {
                     Set(key.name, res11);
                     break;
                 }
-                void* pVal = nullptr;
-                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
-                    Set(key.name, pVal);
-                }
-                break;
-            }
-            case NgxParamType::D3D11Resource: {
-                ID3D11Resource* res11 = nullptr;
-                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &res11))) {
-                    Set(key.name, res11);
-                    break;
-                }
-                void* pVal = nullptr;
-                if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
-                    Set(key.name, pVal);
-                }
-                break;
-            }
-            case NgxParamType::VoidPtr: {
                 void* pVal = nullptr;
                 if (NVSDK_NGX_SUCCEED(source->Get(key.name, &pVal))) {
                     Set(key.name, pVal);
@@ -1534,18 +1503,21 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter
     return NVSDK_NGX_Result_Success;
 }
 
+template <typename NamePtr>
+void NgxInterceptor::DispatchLoadedModule(HMODULE hMod, NamePtr lpLibFileName, DWORD dwFlags) {
+    if (!hMod || IsDataOrImageResourceLoad(dwFlags, hMod)) return;
+    if (MatchesNgxName(lpLibFileName)) {
+        AttachModule(hMod);
+    } else {
+        NotifyModuleLoaded(hMod, lpLibFileName);
+    }
+}
+
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryW)>(interceptor->m_detourLoadLibraryW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryW(lpLibFileName);
-
-    if (interceptor && hMod && !IsDataOrImageResourceLoad(0, hMod)) {
-        if (MatchesNgxName(lpLibFileName)) {
-            interceptor->AttachModule(hMod);
-        } else {
-            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-        }
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, 0);
     return hMod;
 }
 
@@ -1553,14 +1525,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryExW)>(interceptor->m_detourLoadLibraryExW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-
-    if (interceptor && hMod && !IsDataOrImageResourceLoad(dwFlags, hMod)) {
-        if (MatchesNgxName(lpLibFileName)) {
-            interceptor->AttachModule(hMod);
-        } else {
-            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-        }
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, dwFlags);
     return hMod;
 }
 
@@ -1568,14 +1533,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryA)>(interceptor->m_detourLoadLibraryA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryA(lpLibFileName);
-
-    if (interceptor && hMod && !IsDataOrImageResourceLoad(0, hMod)) {
-        if (MatchesNgxName(lpLibFileName)) {
-            interceptor->AttachModule(hMod);
-        } else {
-            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-        }
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, 0);
     return hMod;
 }
 
@@ -1583,14 +1541,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HA
     NgxInterceptor* interceptor = LoadHookHost();
     auto orig = interceptor ? Original<decltype(&LoadLibraryExA)>(interceptor->m_detourLoadLibraryExA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExA(lpLibFileName, hFile, dwFlags);
-
-    if (interceptor && hMod && !IsDataOrImageResourceLoad(dwFlags, hMod)) {
-        if (MatchesNgxName(lpLibFileName)) {
-            interceptor->AttachModule(hMod);
-        } else {
-            interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
-        }
-    }
+    if (interceptor) interceptor->DispatchLoadedModule(hMod, lpLibFileName, dwFlags);
     return hMod;
 }
 

@@ -198,6 +198,8 @@ private:
 
     void NotifyModuleLoaded(HMODULE hMod, LPCWSTR name);
     void NotifyModuleLoaded(HMODULE hMod, LPCSTR name);
+    template <typename NamePtr>
+    void DispatchLoadedModule(HMODULE hMod, NamePtr lpLibFileName, DWORD dwFlags);
 
     mutable std::recursive_mutex m_mutex;
     class FidelityFxInterceptor* m_fidelityFx = nullptr;

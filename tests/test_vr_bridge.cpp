@@ -1662,21 +1662,23 @@ TEST_F(VrBridgeTest, HandshakeAndSetRenderingModeParseIntegersAndStringsConsiste
         assert(VRBridge.handshake(1.5).renderingMode == "SequentialDualPass")
 
         assert(VRBridge.handshake(0).renderingMode == "AFR")
-        assert(VRBridge.setRenderingMode("bogus") == false)
+        assert(select("#", VRBridge.setRenderingMode()) == 0)
         assert(VRBridge.getRenderingMode() == "AFR")
-        assert(VRBridge.setRenderingMode(2) == false)
+        assert(select("#", VRBridge.setRenderingMode("bogus")) == 0)
         assert(VRBridge.getRenderingMode() == "AFR")
-        assert(VRBridge.setRenderingMode(-1) == false)
+        assert(select("#", VRBridge.setRenderingMode(2)) == 0)
         assert(VRBridge.getRenderingMode() == "AFR")
-        assert(VRBridge.setRenderingMode(1.5) == false)
+        assert(select("#", VRBridge.setRenderingMode(-1)) == 0)
+        assert(VRBridge.getRenderingMode() == "AFR")
+        assert(select("#", VRBridge.setRenderingMode(1.5)) == 0)
         assert(VRBridge.getRenderingMode() == "AFR")
 
-        assert(VRBridge.setRenderingMode(1) == true)
+        assert(select("#", VRBridge.setRenderingMode(1)) == 0)
         assert(VRBridge.getRenderingMode() == "SequentialDualPass")
-        assert(VRBridge.setRenderingMode("bogus") == false)
+        assert(select("#", VRBridge.setRenderingMode("bogus")) == 0)
         assert(VRBridge.getRenderingMode() == "SequentialDualPass")
 
-        assert(VRBridge.setRenderingMode("0") == true)
+        assert(select("#", VRBridge.setRenderingMode("0")) == 0)
         assert(VRBridge.getRenderingMode() == "AFR")
         assert(VRBridge.handshake("1").renderingMode == "SequentialDualPass")
         assert(VRBridge.handshake("0").renderingMode == "AFR")
@@ -1686,6 +1688,21 @@ TEST_F(VrBridgeTest, HandshakeAndSetRenderingModeParseIntegersAndStringsConsiste
         const char* err = lua_tostring(L, -1);
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
+
+    fs25vr::FakeTrackedHeadset headset;
+    ASSERT_TRUE(headset.manager->IsActive());
+    fs25vr::VRBridge activeBridge(headset.manager, nullptr);
+    activeBridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    lua_State* activeState = luaL_newstate();
+    luaL_openlibs(activeState);
+    ASSERT_TRUE(activeBridge.Inject(activeState));
+    EXPECT_EQ(RunLuauString(activeState, R"luau(
+        assert(select("#", VRBridge.setRenderingMode("bogus")) == 0)
+        assert(select("#", VRBridge.setRenderingMode(2)) == 0)
+    )luau"), 0);
+    EXPECT_EQ(activeBridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_FALSE(activeBridge.GetPendingRenderingMode().has_value());
+    lua_close(activeState);
 }
 
 TEST_F(VrBridgeTest, CrossThreadAtomicFlagsAndOverridesAreReadableConcurrently) {
