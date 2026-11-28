@@ -254,6 +254,26 @@ TEST(CompanionSettingsTest, AnythingButAFiniteNumberInTheElementIsNoValue) {
                                                    "menuDistance").has_value()) << "no file";
 }
 
+TEST(CompanionSettingsTest, HandlesEmptyAndOversizedFilesWithinMaxBytesCap) {
+    {
+        TempSettingsFile empty("");
+        EXPECT_FALSE(fs25vr::ReadCompanionSettingFloat(empty.Path(), "menuDistance").has_value());
+    }
+    constexpr size_t kCap = 1u << 20;
+    {
+        std::string large = EngineSettingsXml("    <menuDistance>2.750000</menuDistance>\r\n");
+        large.append(kCap + 512, ' ');
+        TempSettingsFile file(large);
+        EXPECT_EQ(fs25vr::ReadCompanionSettingFloat(file.Path(), "menuDistance"), 2.75f);
+    }
+    {
+        std::string beyondCap(kCap + 64, ' ');
+        beyondCap += EngineSettingsXml("    <menuDistance>2.750000</menuDistance>\r\n");
+        TempSettingsFile file(beyondCap);
+        EXPECT_FALSE(fs25vr::ReadCompanionSettingFloat(file.Path(), "menuDistance").has_value());
+    }
+}
+
 TEST(CompanionSettingsTest, TheDefaultFileIsTheCompanionModsSettingsUnderTheGamesMyGamesFolder) {
     const std::filesystem::path path = fs25vr::DefaultCompanionSettingsPath();
     ASSERT_FALSE(path.empty());

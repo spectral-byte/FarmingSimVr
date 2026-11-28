@@ -1,21 +1,12 @@
+#include "proxy/version_exports.h"
 #include <windows.h>
 #include <winver.h>
 
 namespace {
 
-HMODULE SystemVersionDll() {
-    static const HMODULE module = [] {
-        wchar_t path[MAX_PATH];
-        const UINT length = GetSystemDirectoryW(path, MAX_PATH);
-        if (length == 0 || length >= MAX_PATH || wcscat_s(path, L"\\version.dll") != 0) return HMODULE{};
-        return LoadLibraryW(path);
-    }();
-    return module;
-}
-
 template <typename Fn>
 Fn SystemVersionFunction(const char* name) {
-    const HMODULE module = SystemVersionDll();
+    const HMODULE module = fs25vr::SystemVersionDll();
     return module ? reinterpret_cast<Fn>(GetProcAddress(module, name)) : nullptr;
 }
 

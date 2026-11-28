@@ -107,6 +107,8 @@ set(CORE_SOURCES
     src/openxr/openxr_types.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
+    src/proxy/system_version.cpp
+    src/proxy/version_exports.h
     src/proxy/dxgi_export_hooks.h
     src/proxy/dxgi_export_hooks.cpp
     src/proxy/desktop_cursor_port.h

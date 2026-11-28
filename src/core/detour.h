@@ -18,15 +18,15 @@ public:
     bool Install(void* targetFunction, void* detourFunction);
     bool Uninstall();
 
-    void* GetOriginal() const { return m_original; }
+    void* GetOriginal() const { return m_original.load(std::memory_order_acquire); }
     void* GetTarget() const { return m_target; }
     void* GetDetour() const { return m_detour; }
-    bool IsInstalled() const { return m_installed; }
+    bool IsInstalled() const { return m_installed.load(std::memory_order_acquire); }
 
 private:
     void* m_target = nullptr;
     void* m_detour = nullptr;
-    void* m_original = nullptr;
+    std::atomic<void*> m_original{nullptr};
     std::atomic<bool> m_installed{false};
 };
 
