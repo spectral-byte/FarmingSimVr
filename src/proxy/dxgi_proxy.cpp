@@ -230,7 +230,17 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
 }
 
 DxgiProxy::~DxgiProxy() {
-    if (IsProcessTerminating()) return;
+    if (IsProcessTerminating()) {
+        m_d3d12Device.Detach();
+        m_d3d12Queue.Detach();
+        m_cachedSwapChain = nullptr;
+        m_cachedSwapChain3.Detach();
+        for (auto& buf : m_cachedBackBuffers) {
+            buf.Detach();
+        }
+        m_cachedBackBuffers.clear();
+        return;
+    }
     DetachAll();
 }
 

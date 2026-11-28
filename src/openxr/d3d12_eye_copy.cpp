@@ -1,10 +1,26 @@
 #include "d3d12_eye_copy.h"
+#include "core/dll_lifecycle.h"
 #include "core/logger.h"
 #include "core/perf_trace.h"
 #include <algorithm>
 #include <utility>
 
 namespace fs25vr {
+
+D3D12EyeCopy::~D3D12EyeCopy() {
+    if (!IsProcessTerminating()) return;
+    m_fence.Detach();
+    m_clearCommandList.Detach();
+    m_clearAllocator.Detach();
+    m_clearRtvHeap.Detach();
+    for (uint32_t r = 0; r < kRingSize; ++r) {
+        m_copyCommandLists[r].Detach();
+        m_copyAllocators[r].Detach();
+    }
+    m_timestampHeap.Detach();
+    m_timestampReadback.Detach();
+    m_fenceEvent.Release();
+}
 
 void D3D12EyeCopy::SetDeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
     if (m_device != device || m_queue != queue) {

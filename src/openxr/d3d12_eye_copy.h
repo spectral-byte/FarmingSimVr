@@ -11,6 +11,7 @@ namespace fs25vr {
 
 class D3D12EyeCopy {
 public:
+    ~D3D12EyeCopy();
     static constexpr uint32_t kRingSize = 4;
     static constexpr DWORD kFenceWaitTimeoutMs = 5000;
 

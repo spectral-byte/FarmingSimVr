@@ -23,7 +23,7 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 
 - **`kDocumentsFolderId`**: FOLDERID_Documents, spelled out so the Injector needs neither knownfolders.h's definition (uuid.lib) nor shell32 at load time.
 - **`KnownDocumentsFolder`**: SHGetKnownFolderPath and CoTaskMemFree are looked up when they are needed, so the Injector, which the game loads early as its version.dll, keeps shell32 and ole32 out of its import table. Both are loaded in the game process anyway.
-- **`ReadCompanionSettingFloat`, `kMaxBytes`**: The file holds a few dozen settings; anything this large is not one the Companion Mod wrote.
+- **`ReadCompanionSettingFloat`, `kMaxBytes`**: The file holds a few dozen settings; anything this large is not one the Companion Mod wrote. The read buffer is sized to the actual file length capped at `kMaxBytes`.
 
 ### `src/core/companion_settings.h`
 
@@ -48,7 +48,7 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 - **`AddDumpOutcome`**: How the line ends: the dump's file name, or why there is no dump. The line is written before the dump, so that the log is complete whatever the dump does to the process; a dump that then fails or takes too long is told in a line of its own.
 - **`PassOn`**: Passes the crash on to the next filter of the list that this thread has not been passed on to: see g_filters. With none left, Windows continues its own handling.
 - **`RememberFilterFoundOnTop`**: Puts what SetUnhandledExceptionFilter found on top in front of the list, or empties the list when it found none: whoever removed the reporter removed the chain with it, and a filter that has been taken away may sit in a module that is gone. The crash then goes to Windows' own handling.
-- **`ReportDumpFailure`**: A dump that was announced in the crash line and then did not come: the line that follows says so. Runs on the helper thread, which knows what went wrong, or on the crashing thread when the helper never finished.
+- **`ReportDumpFailure`**: A dump that was announced in the crash line and then did not come: the line that follows says so. Runs on the helper thread, which knows what went wrong, or on the crashing thread when the helper never finished, using its own static `CrashText` buffer so a helper timeout cannot race with `DumpHelper`'s `g_crashText`.
 - **`ReportDumpFailure`, `if (!log || g_failureReported.exchange(true)) return;`**: Once: a helper that finishes after the crashing thread gave up on it would tell its failure over the other's line.
 - **`WriteTheDump`, `DeleteFileW(g_dumpPath);`**: Not a dump anyone could open: better no file than a misleading one.
 - **`DumpHelper`**: The helper thread. It waits from the first DXGI factory call until a crash wakes it, then does the work the crashing thread has no stack for: the crash line first, flushed, so that the log is complete whatever the dump does to the process; then the dump. Win32 calls only: it runs without the C runtime's per-thread state, and it must not touch the heap before a crash asks for it. It is ended with TerminateThread when the Injector unloads, since its code goes with the Injector (RemoveCrashReporter).
@@ -57,7 +57,7 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 - **`CrashFilter`, `ReportCrash`**: Before the first DXGI factory call. The state cannot be Ready here, but it may say why there is no helper.
 - **`PrepareTheDump`, `LogWarn("Injector: A crash will leave no dump: the path " + std::filesystem::...`**: Not NoDumpReason: the warning names the path, which the crash line has no room for.
 - **`PrepareTheDump`, `systemDirectory`**: By the full path of the system directory, and with that directory alone for the library's own dependencies: a dbghelp.dll or dbgcore.dll that sits next to the game's exe must never be the one that runs.
-- **`PrepareTheDump`, `LoadLibraryExW((std::wstring(systemDirectory, length) + L"\\version.dll").c_s...`**: Writing the dump reads each module's version resource through version.dll's functions. In the game that name is the Injector itself, which loads the system's version.dll on first use: load it now, since the crash must not load a library. Kept loaded, as the Injector's own stubs keep it.
+- **`PrepareTheDump`, `SystemVersionDll();`**: Writing the dump reads each module's version resource through version.dll's functions. In the game that name is the Injector itself, whose stubs look up `SystemVersionDll()` on first use: prime `SystemVersionDll()` directly now, so the crash does not call `LoadLibraryExW`. Kept loaded, as the Injector's own stubs keep it.
 - **`PrepareCrashDump`, `g_dumpRequested = CreateEventW(nullptr, TRUE, FALSE, nullptr);`**: The helper thread is started whether or not a dump can be written: it also writes the crash line, which the crashing thread may have no stack for.
 - **`PrepareCrashDump`, `Logger::Instance().Flush();`**: The C runtime allocates the log file's buffer at the first write to it. Make that write now, so that the crash line does not have to allocate while the process is crashing (and the lines still buffered reach the file).
 - **`RemoveCrashReporter`, `top`**: The only way to look at the top filter is to replace it: put the filter that was here before the reporter in its place, and the one that was on top back if it was not the reporter.
@@ -88,9 +88,9 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 - **`ResolveThunks`, `if (IsHooked(function)) return function;`**: A target we already hooked starts with our own patch jmp; following it would hook the detour itself. Stop here so MinHook reports the target as taken.
 - **`FunctionDetour::~FunctionDetour`, `if (IsProcessTerminating()) return;`**: At termination the patch stays and the trampoline is never freed (see IsProcessTerminating).
 - **`FunctionDetour::Install`, `LogWarn("FunctionDetour: Removing a stale hook left by a failed uninstall.");`**: A previous Uninstall could not remove its hook, so MinHook still holds a stale one for this target that nothing owns. Drop it and retry.
-- **`FunctionDetour::Install`, `m_target = targetFunction;`**: Publish the trampoline before the patch goes live: a thread entering the detour the moment other threads resume must already see GetOriginal().
+- **`FunctionDetour::Install`, `m_original.store(original, std::memory_order_release);`**: Publish the atomic trampoline and `m_installed` before the patch goes live: a thread entering the detour the moment other threads resume must already see GetOriginal() and IsInstalled().
 - **`FunctionDetour::Install`, `status = MH_EnableHook(targetFunction);`**: MinHook suspends all other threads while patching the target.
-- **`FunctionDetour::Uninstall`, `LogError(std::string("FunctionDetour: MH_DisableHook failed: ") + MH_StatusTo...`**: The patch is still live, so callers still need the trampoline: stay installed.
+- **`FunctionDetour::Uninstall`, `LogError(std::string("FunctionDetour: MH_DisableHook failed: ") + MH_StatusTo...`**: The patch is still live, so callers still need the trampoline: stay installed. Once disabled, `m_installed` and `m_original` are cleared before `MH_RemoveHook` frees the trampoline.
 - **`FunctionDetour::Uninstall`, `SetHookState(m_target, HookState::Orphaned);`**: The hook is disabled but MinHook still holds it; let a later Install reclaim it.
 
 ### `src/core/detour.h`
@@ -101,14 +101,14 @@ This record holds the non-obvious decisions behind the Injector outside VR: star
 ### `src/core/dll_lifecycle.cpp`
 
 - **`OnProcessAttach`, `LogInfo("Farming Simulator 25 VR Injector " + std::string(kInjectorVersion) +...`**: The first line of fs25_vr.log: it names the version, so a log alone says which Injector the player runs.
-- **`OnProcessDetach`, `s_processTerminating = true;`**: Set before returning: the CRT runs our static destructors right after DllMain.
+- **`OnProcessDetach`, `s_processTerminating = true;`**: Set before returning (and before any logging/flushing): the CRT runs our static destructors right after DllMain, and other killed threads may already hold `Logger::m_mutex`.
 - **`OnProcessDetach`, `NgxInterceptor::DetachLiveHooks();`**: FreeLibrary: safe to unwind our own hooks. Unwind whichever interceptor owns the live detours, not the newest runtime's, so no hook is left pointing into the unloaded DLL.
 
 ### `src/core/dll_lifecycle.h`
 
 - **`OnProcessAttach`**: Work performed from DllMain. Must stay loader-lock safe: no LoadLibrary, no hook installation. NGX module-load hooks are installed lazily on the first DXGI factory call instead. The one exception is StartInjector (injector_startup.h), which DllMain calls next to hook the system's DXGI factory exports.
-- **`OnProcessDetach`**: lpReserved is non-null when the process is terminating. In that case other threads are already gone, so hooks and trampolines are left alone and only the log is flushed.
-- **`IsProcessTerminating`**: True once OnProcessDetach has seen process termination. The CRT still runs static destructors after DllMain returns, so every destructor that removes hooks or takes locks checks this and returns early: a killed thread may own the lock or be executing inside a patched prologue.
+- **`OnProcessDetach`**: lpReserved is non-null when the process is terminating. In that case other threads are already gone (and may hold `Logger::m_mutex`), so `s_processTerminating` is set first and hooks, trampolines, and logger locking/flushing are skipped.
+- **`IsProcessTerminating`**: True once OnProcessDetach has seen process termination. The CRT still runs static destructors after DllMain returns, so every destructor and logger path that removes hooks, calls `FreeLibrary`, invokes COM `IUnknown::Release()`, or takes locks checks this and returns or detaches early: a killed thread may own the lock, be executing inside a patched prologue, or leave driver COM state torn down.
 
 ### `src/core/injector_runtime.cpp`
 

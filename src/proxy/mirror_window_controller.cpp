@@ -212,13 +212,17 @@ void MirrorWindowController::RestoreTitle() {
 }
 
 void MirrorWindowController::DetachAll() {
-    StopHoldingMouse("controller detached");
-    m_gameClip.reset();
-    m_gameClipOrigin.reset();
-    m_lastMouseRelease.reset();
-    m_hasHeldMouse = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mouseClipMutex);
+        StopHoldingMouse("controller detached");
+        m_gameClip.reset();
+        m_gameClipOrigin.reset();
+        m_lastMouseRelease.reset();
+        m_hasHeldMouse = false;
+    }
     RestoreTitle();
     DetachWindowSubclass();
+    UninstallDetours();
     m_inSizeMove = false;
     m_windowClampDirty = true;
     m_lastEnforcedWidth = 0;
@@ -539,6 +543,7 @@ bool MirrorWindowController::GetGamePicture(RECT& outPicture) const {
 }
 
 void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state) {
+    std::lock_guard<std::mutex> lock(m_mouseClipMutex);
     if (state != MouseConfinementState::Holding) {
         if (m_hasHeldMouse || state == MouseConfinementState::TurnedOffByCommand) m_lastMouseRelease = state;
         if (!m_holdingMouse) return;
@@ -603,6 +608,7 @@ void MirrorWindowController::StopHoldingMouse(const char* reason) {
 }
 
 bool MirrorWindowController::HandleGameClipCursor(const RECT* lpRect) {
+    std::lock_guard<std::mutex> lock(m_mouseClipMutex);
     const RECT* clip = lpRect;
     RECT physClip{};
     if (lpRect && IsActive() && m_gameHwnd && ConstrainVirtualClipRectToPhysical(m_gameHwnd, lpRect, physClip)) {
@@ -707,7 +713,7 @@ LRESULT CALLBACK MirrorWindowController::MirrorWindowSubclassProc(
             LRESULT lres = DefSubclassProc(hWnd, uMsg, wParam, lParam);
             if (controller && controller->IsActive() && controller->m_targetRenderWidth > 0 && controller->m_targetRenderHeight > 0) {
                 auto* wp = reinterpret_cast<WINDOWPOS*>(lParam);
-                if (wp && !(wp->flags & SWP_NOSIZE)) {
+                if (wp && !(wp->flags & SWP_NOSIZE) && !IsIconic(hWnd)) {
                     LPARAM targetLParam = MAKELPARAM(
                         static_cast<WORD>(controller->m_targetRenderWidth),
                         static_cast<WORD>(controller->m_targetRenderHeight)
